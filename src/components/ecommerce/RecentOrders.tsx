@@ -1,3 +1,4 @@
+import { useEffect, useState } from "react";
 import {
   Table,
   TableBody,
@@ -7,202 +8,307 @@ import {
 } from "../ui/table";
 import Badge from "../ui/badge/Badge";
 
-// Define the TypeScript interface for the table rows
-interface Product {
-  id: number; // Unique identifier for each product
-  name: string; // Product name
-  variants: string; // Number of variants (e.g., "1 Variant", "2 Variants")
-  category: string; // Category of the product
-  price: string; // Price of the product (as a string with currency symbol)
-  // status: string; // Status of the product
-  image: string; // URL or path to the product image
-  status: "Delivered" | "Pending" | "Canceled"; // Status of the product
+const API_BASE = "https://v2.jkt48connect.com/api/jkt48connect";
+const API_KEY = "JKTCONNECT";
+
+interface OrderItem {
+  id: string;
+  title: string;
+  type: string;
+  amount: number;
+  status: "success" | "pending" | "failed" | "expired";
+  payment_method: string;
+  created_at: string;
+  show_date?: string;
 }
 
-// Define the table data using the interface
-const tableData: Product[] = [
-  {
-    id: 1,
-    name: "MacBook Pro 13”",
-    variants: "2 Variants",
-    category: "Laptop",
-    price: "$2399.00",
-    status: "Delivered",
-    image: "/images/product/product-01.jpg", // Replace with actual image URL
-  },
-  {
-    id: 2,
-    name: "Apple Watch Ultra",
-    variants: "1 Variant",
-    category: "Watch",
-    price: "$879.00",
-    status: "Pending",
-    image: "/images/product/product-02.jpg", // Replace with actual image URL
-  },
-  {
-    id: 3,
-    name: "iPhone 15 Pro Max",
-    variants: "2 Variants",
-    category: "SmartPhone",
-    price: "$1869.00",
-    status: "Delivered",
-    image: "/images/product/product-03.jpg", // Replace with actual image URL
-  },
-  {
-    id: 4,
-    name: "iPad Pro 3rd Gen",
-    variants: "2 Variants",
-    category: "Electronics",
-    price: "$1699.00",
-    status: "Canceled",
-    image: "/images/product/product-04.jpg", // Replace with actual image URL
-  },
-  {
-    id: 5,
-    name: "AirPods Pro 2nd Gen",
-    variants: "1 Variant",
-    category: "Accessories",
-    price: "$240.00",
-    status: "Delivered",
-    image: "/images/product/product-05.jpg", // Replace with actual image URL
-  },
-];
+interface OrderResponse {
+  status: boolean;
+  data: OrderItem[];
+}
+
+const getSession = () => {
+  try {
+    const d =
+      JSON.parse(sessionStorage.getItem("userLogin") || "null") ||
+      JSON.parse(localStorage.getItem("userLogin") || "null");
+    if (d && d.isLoggedIn && d.token) return d;
+    return null;
+  } catch {
+    return null;
+  }
+};
+
+const formatDate = (dateStr: string) => {
+  if (!dateStr) return "-";
+  return new Date(dateStr).toLocaleDateString("id-ID", {
+    day: "numeric",
+    month: "short",
+    year: "numeric",
+  });
+};
+
+const formatPrice = (amount: number) => {
+  return new Intl.NumberFormat("id-ID", {
+    style: "currency",
+    currency: "IDR",
+    minimumFractionDigits: 0,
+  }).format(amount);
+};
+
+const getStatusColor = (status: string) => {
+  switch (status) {
+    case "success":
+      return "success";
+    case "pending":
+      return "warning";
+    case "failed":
+    case "expired":
+      return "error";
+    default:
+      return "warning";
+  }
+};
+
+const getStatusLabel = (status: string) => {
+  switch (status) {
+    case "success":
+      return "Berhasil";
+    case "pending":
+      return "Pending";
+    case "failed":
+      return "Gagal";
+    case "expired":
+      return "Expired";
+    default:
+      return status;
+  }
+};
+
+const getTypeIcon = (type: string) => {
+  switch (type?.toLowerCase()) {
+    case "show":
+    case "theater":
+      return "🎭";
+    case "membership":
+      return "⭐";
+    case "event":
+      return "🎪";
+    default:
+      return "🎫";
+  }
+};
 
 export default function RecentOrders() {
+  const [orders, setOrders] = useState<OrderItem[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    const fetchOrders = async () => {
+      const session = getSession();
+      if (!session) {
+        setError("Silakan login untuk melihat riwayat order");
+        setLoading(false);
+        return;
+      }
+
+      const uid = session.user?.user_id;
+      const token = session.token;
+
+      if (!uid || !token) {
+        setError("Sesi tidak valid");
+        setLoading(false);
+        return;
+      }
+
+      try {
+        const res = await fetch(
+          `${API_BASE}/orders/${uid}?apikey=${API_KEY}`,
+          {
+            headers: { Authorization: `Bearer ${token}` },
+          }
+        );
+        const data: OrderResponse = await res.json();
+
+        if (data.status && Array.isArray(data.data)) {
+          // Ambil 5 order terbaru
+          setOrders(data.data.slice(0, 5));
+        } else {
+          setOrders([]);
+        }
+      } catch (err) {
+        setError("Gagal memuat riwayat order");
+        console.error("Failed to fetch orders:", err);
+      } finally {
+        setLoading(false);
+      }
+    };
+
+    fetchOrders();
+  }, []);
+
   return (
     <div className="overflow-hidden rounded-2xl border border-gray-200 bg-white px-4 pb-3 pt-4 dark:border-gray-800 dark:bg-white/[0.03] sm:px-6">
+      {/* Header */}
       <div className="flex flex-col gap-2 mb-4 sm:flex-row sm:items-center sm:justify-between">
         <div>
           <h3 className="text-lg font-semibold text-gray-800 dark:text-white/90">
-            Recent Orders
+            Riwayat Order
           </h3>
+          <p className="text-sm text-gray-500 dark:text-gray-400 mt-0.5">
+            5 transaksi terbaru
+          </p>
         </div>
 
         <div className="flex items-center gap-3">
-          <button className="inline-flex items-center gap-2 rounded-lg border border-gray-300 bg-white px-4 py-2.5 text-theme-sm font-medium text-gray-700 shadow-theme-xs hover:bg-gray-50 hover:text-gray-800 dark:border-gray-700 dark:bg-gray-800 dark:text-gray-400 dark:hover:bg-white/[0.03] dark:hover:text-gray-200">
+          <button
+            onClick={() => window.location.reload()}
+            className="inline-flex items-center gap-2 rounded-lg border border-gray-300 bg-white px-4 py-2.5 text-theme-sm font-medium text-gray-700 shadow-theme-xs hover:bg-gray-50 hover:text-gray-800 dark:border-gray-700 dark:bg-gray-800 dark:text-gray-400 dark:hover:bg-white/[0.03] dark:hover:text-gray-200"
+          >
             <svg
-              className="stroke-current fill-white dark:fill-gray-800"
-              width="20"
-              height="20"
-              viewBox="0 0 20 20"
+              className="stroke-current"
+              width="16"
+              height="16"
+              viewBox="0 0 24 24"
               fill="none"
               xmlns="http://www.w3.org/2000/svg"
             >
               <path
-                d="M2.29004 5.90393H17.7067"
-                stroke=""
-                strokeWidth="1.5"
+                d="M23 4v6h-6M1 20v-6h6"
+                strokeWidth="2"
                 strokeLinecap="round"
                 strokeLinejoin="round"
               />
               <path
-                d="M17.7075 14.0961H2.29085"
-                stroke=""
-                strokeWidth="1.5"
+                d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"
+                strokeWidth="2"
                 strokeLinecap="round"
                 strokeLinejoin="round"
-              />
-              <path
-                d="M12.0826 3.33331C13.5024 3.33331 14.6534 4.48431 14.6534 5.90414C14.6534 7.32398 13.5024 8.47498 12.0826 8.47498C10.6627 8.47498 9.51172 7.32398 9.51172 5.90415C9.51172 4.48432 10.6627 3.33331 12.0826 3.33331Z"
-                fill=""
-                stroke=""
-                strokeWidth="1.5"
-              />
-              <path
-                d="M7.91745 11.525C6.49762 11.525 5.34662 12.676 5.34662 14.0959C5.34661 15.5157 6.49762 16.6667 7.91745 16.6667C9.33728 16.6667 10.4883 15.5157 10.4883 14.0959C10.4883 12.676 9.33728 11.525 7.91745 11.525Z"
-                fill=""
-                stroke=""
-                strokeWidth="1.5"
               />
             </svg>
-            Filter
-          </button>
-          <button className="inline-flex items-center gap-2 rounded-lg border border-gray-300 bg-white px-4 py-2.5 text-theme-sm font-medium text-gray-700 shadow-theme-xs hover:bg-gray-50 hover:text-gray-800 dark:border-gray-700 dark:bg-gray-800 dark:text-gray-400 dark:hover:bg-white/[0.03] dark:hover:text-gray-200">
-            See all
+            Refresh
           </button>
         </div>
       </div>
-      <div className="max-w-full overflow-x-auto">
-        <Table>
-          {/* Table Header */}
-          <TableHeader className="border-gray-100 dark:border-gray-800 border-y">
-            <TableRow>
-              <TableCell
-                isHeader
-                className="py-3 font-medium text-gray-500 text-start text-theme-xs dark:text-gray-400"
-              >
-                Products
-              </TableCell>
-              <TableCell
-                isHeader
-                className="py-3 font-medium text-gray-500 text-start text-theme-xs dark:text-gray-400"
-              >
-                Category
-              </TableCell>
-              <TableCell
-                isHeader
-                className="py-3 font-medium text-gray-500 text-start text-theme-xs dark:text-gray-400"
-              >
-                Price
-              </TableCell>
-              <TableCell
-                isHeader
-                className="py-3 font-medium text-gray-500 text-start text-theme-xs dark:text-gray-400"
-              >
-                Status
-              </TableCell>
-            </TableRow>
-          </TableHeader>
 
-          {/* Table Body */}
-
-          <TableBody className="divide-y divide-gray-100 dark:divide-gray-800">
-            {tableData.map((product) => (
-              <TableRow key={product.id} className="">
-                <TableCell className="py-3">
-                  <div className="flex items-center gap-3">
-                    <div className="h-[50px] w-[50px] overflow-hidden rounded-md">
-                      <img
-                        src={product.image}
-                        className="h-[50px] w-[50px]"
-                        alt={product.name}
-                      />
-                    </div>
-                    <div>
-                      <p className="font-medium text-gray-800 text-theme-sm dark:text-white/90">
-                        {product.name}
-                      </p>
-                      <span className="text-gray-500 text-theme-xs dark:text-gray-400">
-                        {product.variants}
-                      </span>
-                    </div>
-                  </div>
+      {/* Content */}
+      {loading ? (
+        // Skeleton Loading
+        <div className="space-y-3">
+          {[1, 2, 3, 4, 5].map((i) => (
+            <div
+              key={i}
+              className="flex items-center gap-3 py-3 animate-pulse"
+            >
+              <div className="h-10 w-10 rounded-lg bg-gray-200 dark:bg-gray-700 flex-shrink-0" />
+              <div className="flex-1 space-y-2">
+                <div className="h-3.5 w-40 bg-gray-200 dark:bg-gray-700 rounded" />
+                <div className="h-3 w-24 bg-gray-200 dark:bg-gray-700 rounded" />
+              </div>
+              <div className="h-3.5 w-20 bg-gray-200 dark:bg-gray-700 rounded" />
+              <div className="h-6 w-16 bg-gray-200 dark:bg-gray-700 rounded-full" />
+            </div>
+          ))}
+        </div>
+      ) : error ? (
+        // Error State
+        <div className="flex flex-col items-center justify-center py-10 gap-3">
+          <div className="text-4xl">🔒</div>
+          <p className="text-sm font-medium text-gray-500 dark:text-gray-400">
+            {error}
+          </p>
+        </div>
+      ) : orders.length === 0 ? (
+        // Empty State
+        <div className="flex flex-col items-center justify-center py-10 gap-3">
+          <div className="text-4xl">🎫</div>
+          <p className="text-sm font-medium text-gray-500 dark:text-gray-400">
+            Belum ada riwayat order
+          </p>
+          <p className="text-xs text-gray-400 dark:text-gray-500">
+            Order tiket show atau membership untuk memulai
+          </p>
+        </div>
+      ) : (
+        // Table
+        <div className="max-w-full overflow-x-auto">
+          <Table>
+            <TableHeader className="border-gray-100 dark:border-gray-800 border-y">
+              <TableRow>
+                <TableCell
+                  isHeader
+                  className="py-3 font-medium text-gray-500 text-start text-theme-xs dark:text-gray-400"
+                >
+                  Item
                 </TableCell>
-                <TableCell className="py-3 text-gray-500 text-theme-sm dark:text-gray-400">
-                  {product.price}
+                <TableCell
+                  isHeader
+                  className="py-3 font-medium text-gray-500 text-start text-theme-xs dark:text-gray-400"
+                >
+                  Tanggal
                 </TableCell>
-                <TableCell className="py-3 text-gray-500 text-theme-sm dark:text-gray-400">
-                  {product.category}
+                <TableCell
+                  isHeader
+                  className="py-3 font-medium text-gray-500 text-start text-theme-xs dark:text-gray-400"
+                >
+                  Total
                 </TableCell>
-                <TableCell className="py-3 text-gray-500 text-theme-sm dark:text-gray-400">
-                  <Badge
-                    size="sm"
-                    color={
-                      product.status === "Delivered"
-                        ? "success"
-                        : product.status === "Pending"
-                        ? "warning"
-                        : "error"
-                    }
-                  >
-                    {product.status}
-                  </Badge>
+                <TableCell
+                  isHeader
+                  className="py-3 font-medium text-gray-500 text-start text-theme-xs dark:text-gray-400"
+                >
+                  Status
                 </TableCell>
               </TableRow>
-            ))}
-          </TableBody>
-        </Table>
-      </div>
+            </TableHeader>
+
+            <TableBody className="divide-y divide-gray-100 dark:divide-gray-800">
+              {orders.map((order) => (
+                <TableRow key={order.id}>
+                  {/* Item */}
+                  <TableCell className="py-3">
+                    <div className="flex items-center gap-3">
+                      <div className="h-10 w-10 rounded-lg bg-gray-100 dark:bg-gray-800 flex items-center justify-center text-xl flex-shrink-0">
+                        {getTypeIcon(order.type)}
+                      </div>
+                      <div>
+                        <p className="font-medium text-gray-800 text-theme-sm dark:text-white/90 line-clamp-1 max-w-[160px]">
+                          {order.title || "Order"}
+                        </p>
+                        <span className="text-gray-500 text-theme-xs dark:text-gray-400 capitalize">
+                          {order.type || "Tiket"} ·{" "}
+                          {order.payment_method || "QRIS"}
+                        </span>
+                      </div>
+                    </div>
+                  </TableCell>
+
+                  {/* Tanggal */}
+                  <TableCell className="py-3 text-gray-500 text-theme-sm dark:text-gray-400">
+                    {formatDate(order.created_at)}
+                  </TableCell>
+
+                  {/* Total */}
+                  <TableCell className="py-3 text-gray-800 text-theme-sm dark:text-white/90 font-medium">
+                    {formatPrice(order.amount)}
+                  </TableCell>
+
+                  {/* Status */}
+                  <TableCell className="py-3">
+                    <Badge
+                      size="sm"
+                      color={getStatusColor(order.status) as any}
+                    >
+                      {getStatusLabel(order.status)}
+                    </Badge>
+                  </TableCell>
+                </TableRow>
+              ))}
+            </TableBody>
+          </Table>
+        </div>
+      )}
     </div>
   );
 }
