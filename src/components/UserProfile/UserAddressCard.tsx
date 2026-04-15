@@ -6,12 +6,43 @@ import Button from "../ui/button/Button";
 const API_BASE = 'https://v2.jkt48connect.com/api/jkt48connect';
 const API_KEY  = 'JKTCONNECT';
 
-const formatDate = (s) => {
+interface Order {
+  order_id: string;
+  plan_name: string;
+  final_amount: number | string;
+  status: string;
+  created_at: string;
+  paid_at?: string;
+  membership_expired_at?: string;
+}
+
+interface Session {
+  isLoggedIn: boolean;
+  token: string;
+  user?: {
+    user_id: string;
+  };
+}
+
+interface StatusStyle {
+  color: string;
+  bg: string;
+  border: string;
+}
+
+interface ApiResponse {
+  status: boolean;
+  data?: {
+    orders?: Order[];
+  };
+}
+
+const formatDate = (s: string): string => {
   if (!s) return '—';
   return new Date(s).toLocaleDateString('id-ID', { year: 'numeric', month: 'long', day: 'numeric' });
 };
 
-const formatRelative = (s) => {
+const formatRelative = (s: string): string => {
   if (!s) return '—';
   const diff = Date.now() - new Date(s).getTime();
   const mins = Math.floor(diff / 60000);
@@ -24,16 +55,16 @@ const formatRelative = (s) => {
   return formatDate(s);
 };
 
-const getOrderStatusColor = (status) => {
-  if (status === 'paid')    return { color: '#16a34a', bg: 'rgba(22,163,74,0.1)', border: 'rgba(22,163,74,0.3)' };
-  if (status === 'pending') return { color: '#d97706', bg: 'rgba(217,119,6,0.1)', border: 'rgba(217,119,6,0.3)' };
+const getOrderStatusColor = (status: string): StatusStyle => {
+  if (status === 'paid')    return { color: '#16a34a', bg: 'rgba(22,163,74,0.1)',    border: 'rgba(22,163,74,0.3)' };
+  if (status === 'pending') return { color: '#d97706', bg: 'rgba(217,119,6,0.1)',    border: 'rgba(217,119,6,0.3)' };
   if (status === 'failed' || status === 'expired') return { color: '#dc2626', bg: 'rgba(220,38,38,0.1)', border: 'rgba(220,38,38,0.3)' };
   return { color: '#6b7280', bg: 'rgba(107,114,128,0.1)', border: 'rgba(107,114,128,0.3)' };
 };
 
-const getSession = () => {
+const getSession = (): Session | null => {
   try {
-    const d = JSON.parse(sessionStorage.getItem('userLogin') || 'null');
+    const d = JSON.parse(sessionStorage.getItem('userLogin') || 'null') as Session | null;
     if (d && d.isLoggedIn && d.token) return d;
     return null;
   } catch { return null; }
@@ -42,12 +73,12 @@ const getSession = () => {
 export default function UserOrdersCard() {
   const { isOpen, openModal, closeModal } = useModal();
 
-  const [orders,  setOrders]  = useState([]);
-  const [loading, setLoading] = useState(true);
-  const [error,   setError]   = useState(null);
+  const [orders,  setOrders]  = useState<Order[]>([]);
+  const [loading, setLoading] = useState<boolean>(true);
+  const [error,   setError]   = useState<string | null>(null);
 
   useEffect(() => {
-    const fetchOrders = async () => {
+    const fetchOrders = async (): Promise<void> => {
       const session = getSession();
       if (!session) {
         setError('Sesi tidak ditemukan.');
@@ -62,12 +93,13 @@ export default function UserOrdersCard() {
         return;
       }
       try {
-        const res  = await fetch(`${API_BASE}/order/list/${uid}?limit=10&apikey=${API_KEY}`, {
+        const res        = await fetch(`${API_BASE}/order/list/${uid}?limit=10&apikey=${API_KEY}`, {
           headers: { Authorization: `Bearer ${token}` },
         });
-        const data = await res.json();
+        const data       = await res.json() as ApiResponse;
         if (data.status) {
-          setOrders(data.data?.orders || []);
+          const fetched: Order[] = data.data?.orders ?? [];
+          setOrders(fetched);
         } else {
           setError('Gagal memuat data order.');
         }
@@ -99,7 +131,7 @@ export default function UserOrdersCard() {
               {!loading && !error && orders.length === 0 && (
                 <p className="text-sm text-gray-500 dark:text-gray-400">Belum ada order.</p>
               )}
-              {!loading && !error && orders.slice(0, 4).map((order) => {
+              {!loading && !error && orders.slice(0, 4).map((order: Order) => {
                 const statusStyle = getOrderStatusColor(order.status);
                 return (
                   <div key={order.order_id}>
@@ -175,7 +207,7 @@ export default function UserOrdersCard() {
             )}
             {!loading && !error && orders.length > 0 && (
               <div className="grid grid-cols-1 gap-x-6 gap-y-5 lg:grid-cols-2">
-                {orders.map((order) => {
+                {orders.map((order: Order) => {
                   const statusStyle = getOrderStatusColor(order.status);
                   return (
                     <div
