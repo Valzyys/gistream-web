@@ -9,12 +9,23 @@ import Button from "../ui/button/Button";
 const API_BASE = "https://v2.jkt48connect.com/api/jkt48connect";
 const API_KEY = "JKTCONNECT";
 
+interface Toast {
+  show: boolean;
+  message: string;
+  type: "success" | "error" | "";
+}
+
+interface FormData {
+  login: string;
+  password: string;
+}
+
 export default function SignInForm() {
   const [showPassword, setShowPassword] = useState(false);
   const [isChecked, setIsChecked] = useState(false);
   const [loading, setLoading] = useState(false);
-  const [formData, setFormData] = useState({ login: "", password: "" });
-  const [toast, setToast] = useState({ show: false, message: "", type: "" });
+  const [formData, setFormData] = useState<FormData>({ login: "", password: "" });
+  const [toast, setToast] = useState<Toast>({ show: false, message: "", type: "" });
   const navigate = useNavigate();
 
   useEffect(() => {
@@ -28,17 +39,17 @@ export default function SignInForm() {
     }
   }, [navigate]);
 
-  const showToast = (message, type = "success") => {
+  const showToast = (message: string, type: "success" | "error" = "success") => {
     setToast({ show: true, message, type });
     setTimeout(() => setToast({ show: false, message: "", type: "" }), 3000);
   };
 
-  const handleInputChange = (e) => {
+  const handleInputChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const { name, value } = e.target;
     setFormData((prev) => ({ ...prev, [name]: value }));
   };
 
-  const handleLogin = async (e) => {
+  const handleLogin = async (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault();
 
     if (!formData.login.trim()) {
@@ -90,11 +101,13 @@ export default function SignInForm() {
             : "";
         showToast((data.message || "Sign in failed. Please try again.") + attemptsMsg, "error");
       }
-    } catch (error) {
-      if (error.name === "TypeError" && error.message.includes("fetch")) {
+    } catch (error: unknown) {
+      if (error instanceof TypeError && error.message.includes("fetch")) {
         showToast("Unable to connect to server. Check your internet connection.", "error");
-      } else {
+      } else if (error instanceof Error) {
         showToast("An error occurred: " + error.message, "error");
+      } else {
+        showToast("An unexpected error occurred.", "error");
       }
     } finally {
       setLoading(false);
@@ -151,7 +164,6 @@ export default function SignInForm() {
                     onChange={handleInputChange}
                     placeholder="username / email@example.com"
                     disabled={loading}
-                    autoComplete="username"
                   />
                 </div>
 
@@ -167,7 +179,6 @@ export default function SignInForm() {
                       onChange={handleInputChange}
                       placeholder="Enter your password"
                       disabled={loading}
-                      autoComplete="current-password"
                     />
                     <span
                       onClick={() => setShowPassword(!showPassword)}
