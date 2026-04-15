@@ -30,10 +30,21 @@ interface EditForm {
   avatar: string;
 }
 
+// ── Fix: cek sessionStorage DAN localStorage ──────────────────────────────────
 const getSession = () => {
   try {
-    const d = JSON.parse(sessionStorage.getItem("userLogin") || "null");
-    if (d && d.isLoggedIn && d.token) return d;
+    const fromSession = JSON.parse(
+      sessionStorage.getItem("userLogin") || "null"
+    );
+    if (fromSession && fromSession.isLoggedIn && fromSession.token)
+      return fromSession;
+
+    const fromLocal = JSON.parse(
+      localStorage.getItem("userLogin") || "null"
+    );
+    if (fromLocal && fromLocal.isLoggedIn && fromLocal.token)
+      return fromLocal;
+
     return null;
   } catch {
     return null;
@@ -61,7 +72,10 @@ export default function UserInfoCard() {
     avatar: "",
   });
 
-  const showToast = (message: string, type: "success" | "error" = "success") => {
+  const showToast = (
+    message: string,
+    type: "success" | "error" = "success"
+  ) => {
     setToast({ show: true, message, type });
     setTimeout(() => setToast({ show: false, message: "", type: "" }), 3000);
   };
@@ -69,15 +83,22 @@ export default function UserInfoCard() {
   useEffect(() => {
     const fetchProfile = async () => {
       const session = getSession();
-      if (!session) return;
+      if (!session) {
+        setLoading(false);
+        return;
+      }
       const uid = session.user?.user_id;
       const token = session.token;
-      if (!uid || !token) return;
+      if (!uid || !token) {
+        setLoading(false);
+        return;
+      }
 
       try {
-        const res = await fetch(`${API_BASE}/profile/${uid}?apikey=${API_KEY}`, {
-          headers: { Authorization: `Bearer ${token}` },
-        });
+        const res = await fetch(
+          `${API_BASE}/profile/${uid}?apikey=${API_KEY}`,
+          { headers: { Authorization: `Bearer ${token}` } }
+        );
         const data = await res.json();
         if (data.status) {
           setProfile(data.data);
@@ -103,19 +124,22 @@ export default function UserInfoCard() {
 
     setSaving(true);
     try {
-      const res = await fetch(`${API_BASE}/profile/update?apikey=${API_KEY}`, {
-        method: "PUT",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${session.token}`,
-        },
-        body: JSON.stringify({
-          user_id: profile.user_id,
-          full_name: form.full_name || undefined,
-          phone: form.phone || undefined,
-          avatar: form.avatar || undefined,
-        }),
-      });
+      const res = await fetch(
+        `${API_BASE}/profile/update?apikey=${API_KEY}`,
+        {
+          method: "PUT",
+          headers: {
+            "Content-Type": "application/json",
+            Authorization: `Bearer ${session.token}`,
+          },
+          body: JSON.stringify({
+            user_id: profile.user_id,
+            full_name: form.full_name || undefined,
+            phone: form.phone || undefined,
+            avatar: form.avatar || undefined,
+          }),
+        }
+      );
 
       const data = await res.json();
       if (data.status) {
@@ -178,7 +202,9 @@ export default function UserInfoCard() {
                 <p className="mb-2 text-xs leading-normal text-gray-500 dark:text-gray-400">
                   Username
                 </p>
-                {loading ? <SkeletonRow /> : (
+                {loading ? (
+                  <SkeletonRow />
+                ) : (
                   <p className="text-sm font-medium text-gray-800 dark:text-white/90">
                     @{profile?.username || "—"}
                   </p>
@@ -189,7 +215,9 @@ export default function UserInfoCard() {
                 <p className="mb-2 text-xs leading-normal text-gray-500 dark:text-gray-400">
                   Full Name
                 </p>
-                {loading ? <SkeletonRow /> : (
+                {loading ? (
+                  <SkeletonRow />
+                ) : (
                   <p className="text-sm font-medium text-gray-800 dark:text-white/90">
                     {profile?.full_name || "—"}
                   </p>
@@ -200,7 +228,9 @@ export default function UserInfoCard() {
                 <p className="mb-2 text-xs leading-normal text-gray-500 dark:text-gray-400">
                   Email Address
                 </p>
-                {loading ? <SkeletonRow /> : (
+                {loading ? (
+                  <SkeletonRow />
+                ) : (
                   <p className="text-sm font-medium text-gray-800 dark:text-white/90">
                     {profile?.email || "—"}
                   </p>
@@ -211,7 +241,9 @@ export default function UserInfoCard() {
                 <p className="mb-2 text-xs leading-normal text-gray-500 dark:text-gray-400">
                   Phone
                 </p>
-                {loading ? <SkeletonRow /> : (
+                {loading ? (
+                  <SkeletonRow />
+                ) : (
                   <p className="text-sm font-medium text-gray-800 dark:text-white/90">
                     {profile?.phone || "—"}
                   </p>
@@ -222,7 +254,9 @@ export default function UserInfoCard() {
                 <p className="mb-2 text-xs leading-normal text-gray-500 dark:text-gray-400">
                   Membership
                 </p>
-                {loading ? <SkeletonRow /> : (
+                {loading ? (
+                  <SkeletonRow />
+                ) : (
                   <p className="text-sm font-medium text-gray-800 dark:text-white/90 capitalize">
                     {profile?.membership_type === "free"
                       ? "Free Account"
@@ -235,30 +269,41 @@ export default function UserInfoCard() {
                 <p className="mb-2 text-xs leading-normal text-gray-500 dark:text-gray-400">
                   Member Since
                 </p>
-                {loading ? <SkeletonRow /> : (
+                {loading ? (
+                  <SkeletonRow />
+                ) : (
                   <p className="text-sm font-medium text-gray-800 dark:text-white/90">
                     {formatDate(profile?.created_at ?? null)}
                   </p>
                 )}
               </div>
 
-              {profile?.membership_expired_at && profile.membership_type !== "free" && (
-                <div>
-                  <p className="mb-2 text-xs leading-normal text-gray-500 dark:text-gray-400">
-                    Membership Expires
-                  </p>
-                  <p className="text-sm font-medium text-gray-800 dark:text-white/90">
-                    {formatDate(profile.membership_expired_at)}
-                  </p>
-                </div>
-              )}
+              {profile?.membership_expired_at &&
+                profile.membership_type !== "free" && (
+                  <div>
+                    <p className="mb-2 text-xs leading-normal text-gray-500 dark:text-gray-400">
+                      Membership Expires
+                    </p>
+                    <p className="text-sm font-medium text-gray-800 dark:text-white/90">
+                      {formatDate(profile.membership_expired_at)}
+                    </p>
+                  </div>
+                )}
 
               <div>
                 <p className="mb-2 text-xs leading-normal text-gray-500 dark:text-gray-400">
                   Account Status
                 </p>
-                {loading ? <SkeletonRow /> : (
-                  <p className={`text-sm font-medium ${profile?.is_active ? "text-success-500" : "text-error-500"}`}>
+                {loading ? (
+                  <SkeletonRow />
+                ) : (
+                  <p
+                    className={`text-sm font-medium ${
+                      profile?.is_active
+                        ? "text-success-500"
+                        : "text-error-500"
+                    }`}
+                  >
                     {profile?.is_active ? "Active" : "Inactive"}
                     {profile?.is_verified && " · Verified"}
                   </p>
@@ -283,8 +328,20 @@ export default function UserInfoCard() {
             disabled={loading}
             className="flex w-full items-center justify-center gap-2 rounded-full border border-gray-300 bg-white px-4 py-3 text-sm font-medium text-gray-700 shadow-theme-xs hover:bg-gray-50 hover:text-gray-800 dark:border-gray-700 dark:bg-gray-800 dark:text-gray-400 dark:hover:bg-white/[0.03] dark:hover:text-gray-200 lg:inline-flex lg:w-auto disabled:opacity-50"
           >
-            <svg className="fill-current" width="18" height="18" viewBox="0 0 18 18" fill="none" xmlns="http://www.w3.org/2000/svg">
-              <path fillRule="evenodd" clipRule="evenodd" d="M15.0911 2.78206C14.2125 1.90338 12.7878 1.90338 11.9092 2.78206L4.57524 10.116C4.26682 10.4244 4.0547 10.8158 3.96468 11.2426L3.31231 14.3352C3.25997 14.5833 3.33653 14.841 3.51583 15.0203C3.69512 15.1996 3.95286 15.2761 4.20096 15.2238L7.29355 14.5714C7.72031 14.4814 8.11172 14.2693 8.42013 13.9609L15.7541 6.62695C16.6327 5.74827 16.6327 4.32365 15.7541 3.44497L15.0911 2.78206ZM12.9698 3.84272C13.2627 3.54982 13.7376 3.54982 14.0305 3.84272L14.6934 4.50563C14.9863 4.79852 14.9863 5.2734 14.6934 5.56629L14.044 6.21573L12.3204 4.49215L12.9698 3.84272ZM11.2597 5.55281L5.6359 11.1766C5.53309 11.2794 5.46238 11.4099 5.43238 11.5522L5.01758 13.5185L6.98394 13.1037C7.1262 13.0737 7.25666 13.003 7.35947 12.9002L12.9833 7.27639L11.2597 5.55281Z" fill="" />
+            <svg
+              className="fill-current"
+              width="18"
+              height="18"
+              viewBox="0 0 18 18"
+              fill="none"
+              xmlns="http://www.w3.org/2000/svg"
+            >
+              <path
+                fillRule="evenodd"
+                clipRule="evenodd"
+                d="M15.0911 2.78206C14.2125 1.90338 12.7878 1.90338 11.9092 2.78206L4.57524 10.116C4.26682 10.4244 4.0547 10.8158 3.96468 11.2426L3.31231 14.3352C3.25997 14.5833 3.33653 14.841 3.51583 15.0203C3.69512 15.1996 3.95286 15.2761 4.20096 15.2238L7.29355 14.5714C7.72031 14.4814 8.11172 14.2693 8.42013 13.9609L15.7541 6.62695C16.6327 5.74827 16.6327 4.32365 15.7541 3.44497L15.0911 2.78206ZM12.9698 3.84272C13.2627 3.54982 13.7376 3.54982 14.0305 3.84272L14.6934 4.50563C14.9863 4.79852 14.9863 5.2734 14.6934 5.56629L14.044 6.21573L12.3204 4.49215L12.9698 3.84272ZM11.2597 5.55281L5.6359 11.1766C5.53309 11.2794 5.46238 11.4099 5.43238 11.5522L5.01758 13.5185L6.98394 13.1037C7.1262 13.0737 7.25666 13.003 7.35947 12.9002L12.9833 7.27639L11.2597 5.55281Z"
+                fill=""
+              />
             </svg>
             Edit
           </button>
@@ -302,7 +359,10 @@ export default function UserInfoCard() {
             </p>
           </div>
 
-          <form className="flex flex-col" onSubmit={(e) => e.preventDefault()}>
+                    <form
+            className="flex flex-col"
+            onSubmit={(e) => e.preventDefault()}
+          >
             <div className="custom-scrollbar h-[450px] overflow-y-auto px-2 pb-3">
               <div>
                 <h5 className="mb-5 text-lg font-medium text-gray-800 dark:text-white/90 lg:mb-6">
@@ -311,13 +371,25 @@ export default function UserInfoCard() {
                 <div className="grid grid-cols-1 gap-x-6 gap-y-5 lg:grid-cols-2">
                   <div>
                     <Label>Username</Label>
-                    <Input type="text" value={profile?.username || ""} disabled />
-                    <p className="mt-1 text-xs text-gray-400">Cannot be changed</p>
+                    <Input
+                      type="text"
+                      value={profile?.username || ""}
+                      disabled
+                    />
+                    <p className="mt-1 text-xs text-gray-400">
+                      Cannot be changed
+                    </p>
                   </div>
                   <div>
                     <Label>Email Address</Label>
-                    <Input type="text" value={profile?.email || ""} disabled />
-                    <p className="mt-1 text-xs text-gray-400">Cannot be changed here</p>
+                    <Input
+                      type="text"
+                      value={profile?.email || ""}
+                      disabled
+                    />
+                    <p className="mt-1 text-xs text-gray-400">
+                      Cannot be changed here
+                    </p>
                   </div>
                 </div>
               </div>
@@ -365,7 +437,8 @@ export default function UserInfoCard() {
                           alt="preview"
                           className="w-10 h-10 rounded-full object-cover border border-gray-200 dark:border-gray-700"
                           onError={(e) => {
-                            (e.target as HTMLImageElement).style.display = "none";
+                            (e.target as HTMLImageElement).style.display =
+                              "none";
                           }}
                         />
                         <p className="text-xs text-gray-400">Avatar preview</p>
