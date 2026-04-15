@@ -83,7 +83,7 @@ export default function DemographicCard() {
             IP Whitelist Stats
           </h3>
           <p className="mt-1 text-gray-500 text-theme-sm dark:text-gray-400">
-            Distribusi IP per API key
+            Distribusi IP per pengguna
           </p>
         </div>
         <div className="relative inline-block">
@@ -169,9 +169,9 @@ export default function DemographicCard() {
                     className="text-[9px] font-medium truncate w-full text-center"
                     style={{ color }}
                   >
-                    {s.api_key.length > 8
-                      ? s.api_key.slice(0, 8) + "…"
-                      : s.api_key}
+                    {s.owner.length > 8
+                      ? s.owner.slice(0, 8) + "…"
+                      : s.owner}
                   </span>
                 </div>
               );
