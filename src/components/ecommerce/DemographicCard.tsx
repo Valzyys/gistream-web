@@ -1,6 +1,3 @@
-// CountryMap.tsx — tidak perlu diubah, tetap sama
-
-// DemographicCard.tsx
 import { useEffect, useState } from "react";
 import { Dropdown } from "../ui/dropdown/Dropdown";
 import { DropdownItem } from "../ui/dropdown/DropdownItem";
@@ -44,12 +41,14 @@ const TYPE_LABELS: Record<string, string> = {
   free: "Free",
 };
 
-const formatNumber = (n: number): string =>
-  n.toLocaleString("id-ID");
+const formatNumber = (n: number): string => n.toLocaleString("id-ID");
 
 export default function DemographicCard() {
   const [stats, setStats] = useState<IpWhitelistStat[]>([]);
-  const [summary, setSummary] = useState<{ totalIPs: number; activeIPs: number } | null>(null);
+  const [summary, setSummary] = useState<{
+    totalIPs: number;
+    activeIPs: number;
+  } | null>(null);
   const [loading, setLoading] = useState(true);
   const [isOpen, setIsOpen] = useState(false);
 
@@ -73,11 +72,7 @@ export default function DemographicCard() {
     fetchStats();
   }, []);
 
-  // Hitung total IP untuk persentase
-  const totalIpCount = stats.reduce(
-    (sum, s) => sum + Number(s.ip_count),
-    0
-  );
+  const totalIpCount = stats.reduce((sum, s) => sum + Number(s.ip_count), 0);
 
   return (
     <div className="rounded-2xl border border-gray-200 bg-white p-5 dark:border-gray-800 dark:bg-white/[0.03] sm:p-6">
@@ -92,7 +87,10 @@ export default function DemographicCard() {
           </p>
         </div>
         <div className="relative inline-block">
-          <button className="dropdown-toggle" onClick={() => setIsOpen(!isOpen)}>
+          <button
+            className="dropdown-toggle"
+            onClick={() => setIsOpen(!isOpen)}
+          >
             <MoreDotIcon className="text-gray-400 hover:text-gray-700 dark:hover:text-gray-300 size-6" />
           </button>
           <Dropdown
@@ -101,7 +99,10 @@ export default function DemographicCard() {
             className="w-40 p-2"
           >
             <DropdownItem
-              onItemClick={() => { setIsOpen(false); fetchStats(); }}
+              onItemClick={() => {
+                setIsOpen(false);
+                fetchStats();
+              }}
               className="flex w-full font-normal text-left text-gray-500 rounded-lg hover:bg-gray-100 hover:text-gray-700 dark:text-gray-400 dark:hover:bg-white/5 dark:hover:text-gray-300"
             >
               Refresh
@@ -115,14 +116,18 @@ export default function DemographicCard() {
         <div className="flex gap-3 mt-4">
           <div className="flex items-center gap-2 rounded-lg border border-gray-100 bg-gray-50 px-3 py-2 dark:border-gray-800 dark:bg-gray-800/50">
             <span className="h-2 w-2 rounded-full bg-[#465FFF]" />
-            <span className="text-xs text-gray-500 dark:text-gray-400">Total IP</span>
+            <span className="text-xs text-gray-500 dark:text-gray-400">
+              Total IP
+            </span>
             <span className="text-xs font-semibold text-gray-800 dark:text-white/90">
               {formatNumber(summary.totalIPs)}
             </span>
           </div>
           <div className="flex items-center gap-2 rounded-lg border border-gray-100 bg-gray-50 px-3 py-2 dark:border-gray-800 dark:bg-gray-800/50">
             <span className="h-2 w-2 rounded-full bg-green-500" />
-            <span className="text-xs text-gray-500 dark:text-gray-400">Active IP</span>
+            <span className="text-xs text-gray-500 dark:text-gray-400">
+              Active IP
+            </span>
             <span className="text-xs font-semibold text-gray-800 dark:text-white/90">
               {formatNumber(summary.activeIPs)}
             </span>
@@ -201,18 +206,14 @@ export default function DemographicCard() {
                 ? Math.round((Number(s.ip_count) / totalIpCount) * 100)
                 : 0;
             const color = TYPE_COLORS[s.type] ?? "#465FFF";
-            const activeRate =
-              Number(s.ip_count) > 0
-                ? Math.round(
-                    (Number(s.active_ip_count) / Number(s.ip_count)) * 100
-                  )
-                : 0;
 
             return (
-              <div key={s.api_key} className="flex items-center justify-between">
+              <div
+                key={s.api_key}
+                className="flex items-center justify-between"
+              >
                 {/* Left: Icon + Info */}
                 <div className="flex items-center gap-3">
-                  {/* Avatar */}
                   <div
                     className="flex h-8 w-8 items-center justify-center rounded-lg flex-shrink-0"
                     style={{
@@ -220,10 +221,7 @@ export default function DemographicCard() {
                       border: `1px solid ${color}30`,
                     }}
                   >
-                    <span
-                      className="text-xs font-bold"
-                      style={{ color }}
-                    >
+                    <span className="text-xs font-bold" style={{ color }}>
                       {s.owner.slice(0, 1).toUpperCase()}
                     </span>
                   </div>
@@ -244,7 +242,15 @@ export default function DemographicCard() {
                         {TYPE_LABELS[s.type] ?? s.type}
                       </span>
                       <span className="text-[10px] text-gray-400 dark:text-gray-500">
-                        {s.active_ip_count}/{s.ip_count} aktif
+                        {s.active_ip_count}/{s.ip_count} aktif (
+                        {Number(s.ip_count) > 0
+                          ? Math.round(
+                              (Number(s.active_ip_count) /
+                                Number(s.ip_count)) *
+                                100
+                            )
+                          : 0}
+                        %)
                       </span>
                     </div>
                   </div>
