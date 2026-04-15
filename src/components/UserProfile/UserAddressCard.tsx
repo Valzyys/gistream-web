@@ -3,8 +3,8 @@ import { useModal } from "../../hooks/useModal";
 import { Modal } from "../ui/modal";
 import Button from "../ui/button/Button";
 
-const API_BASE = 'https://v2.jkt48connect.com/api/jkt48connect';
-const API_KEY  = 'JKTCONNECT';
+const API_BASE = "https://v2.jkt48connect.com/api/jkt48connect";
+const API_KEY = "JKTCONNECT";
 
 interface Order {
   order_id: string;
@@ -38,15 +38,19 @@ interface ApiResponse {
 }
 
 const formatDate = (s: string): string => {
-  if (!s) return '—';
-  return new Date(s).toLocaleDateString('id-ID', { year: 'numeric', month: 'long', day: 'numeric' });
+  if (!s) return "—";
+  return new Date(s).toLocaleDateString("id-ID", {
+    year: "numeric",
+    month: "long",
+    day: "numeric",
+  });
 };
 
 const formatRelative = (s: string): string => {
-  if (!s) return '—';
+  if (!s) return "—";
   const diff = Date.now() - new Date(s).getTime();
   const mins = Math.floor(diff / 60000);
-  if (mins < 1) return 'Baru saja';
+  if (mins < 1) return "Baru saja";
   if (mins < 60) return `${mins} menit lalu`;
   const hrs = Math.floor(mins / 60);
   if (hrs < 24) return `${hrs} jam lalu`;
@@ -56,55 +60,88 @@ const formatRelative = (s: string): string => {
 };
 
 const getOrderStatusColor = (status: string): StatusStyle => {
-  if (status === 'paid')    return { color: '#16a34a', bg: 'rgba(22,163,74,0.1)',    border: 'rgba(22,163,74,0.3)' };
-  if (status === 'pending') return { color: '#d97706', bg: 'rgba(217,119,6,0.1)',    border: 'rgba(217,119,6,0.3)' };
-  if (status === 'failed' || status === 'expired') return { color: '#dc2626', bg: 'rgba(220,38,38,0.1)', border: 'rgba(220,38,38,0.3)' };
-  return { color: '#6b7280', bg: 'rgba(107,114,128,0.1)', border: 'rgba(107,114,128,0.3)' };
+  if (status === "paid")
+    return {
+      color: "#16a34a",
+      bg: "rgba(22,163,74,0.1)",
+      border: "rgba(22,163,74,0.3)",
+    };
+  if (status === "pending")
+    return {
+      color: "#d97706",
+      bg: "rgba(217,119,6,0.1)",
+      border: "rgba(217,119,6,0.3)",
+    };
+  if (status === "failed" || status === "expired")
+    return {
+      color: "#dc2626",
+      bg: "rgba(220,38,38,0.1)",
+      border: "rgba(220,38,38,0.3)",
+    };
+  return {
+    color: "#6b7280",
+    bg: "rgba(107,114,128,0.1)",
+    border: "rgba(107,114,128,0.3)",
+  };
 };
 
+// ── Fix: cek sessionStorage DAN localStorage ──────────────────────────────────
 const getSession = (): Session | null => {
   try {
-    const d = JSON.parse(sessionStorage.getItem('userLogin') || 'null') as Session | null;
-    if (d && d.isLoggedIn && d.token) return d;
+    const fromSession = JSON.parse(
+      sessionStorage.getItem("userLogin") || "null"
+    ) as Session | null;
+    if (fromSession && fromSession.isLoggedIn && fromSession.token)
+      return fromSession;
+
+    const fromLocal = JSON.parse(
+      localStorage.getItem("userLogin") || "null"
+    ) as Session | null;
+    if (fromLocal && fromLocal.isLoggedIn && fromLocal.token)
+      return fromLocal;
+
     return null;
-  } catch { return null; }
+  } catch {
+    return null;
+  }
 };
 
 export default function UserOrdersCard() {
   const { isOpen, openModal, closeModal } = useModal();
 
-  const [orders,  setOrders]  = useState<Order[]>([]);
+  const [orders, setOrders] = useState<Order[]>([]);
   const [loading, setLoading] = useState<boolean>(true);
-  const [error,   setError]   = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
     const fetchOrders = async (): Promise<void> => {
       const session = getSession();
       if (!session) {
-        setError('Sesi tidak ditemukan.');
+        setError("Sesi tidak ditemukan.");
         setLoading(false);
         return;
       }
-      const uid   = session.user?.user_id;
+      const uid = session.user?.user_id;
       const token = session.token;
       if (!uid || !token) {
-        setError('Data sesi tidak valid.');
+        setError("Data sesi tidak valid.");
         setLoading(false);
         return;
       }
       try {
-        const res        = await fetch(`${API_BASE}/order/list/${uid}?limit=10&apikey=${API_KEY}`, {
-          headers: { Authorization: `Bearer ${token}` },
-        });
-        const data       = await res.json() as ApiResponse;
+        const res = await fetch(
+          `${API_BASE}/order/list/${uid}?limit=10&apikey=${API_KEY}`,
+          { headers: { Authorization: `Bearer ${token}` } }
+        );
+        const data = (await res.json()) as ApiResponse;
         if (data.status) {
           const fetched: Order[] = data.data?.orders ?? [];
           setOrders(fetched);
         } else {
-          setError('Gagal memuat data order.');
+          setError("Gagal memuat data order.");
         }
       } catch {
-        setError('Terjadi kesalahan jaringan.');
+        setError("Terjadi kesalahan jaringan.");
       } finally {
         setLoading(false);
       }
@@ -123,40 +160,48 @@ export default function UserOrdersCard() {
 
             <div className="grid grid-cols-1 gap-4 lg:grid-cols-2 lg:gap-7 2xl:gap-x-32">
               {loading && (
-                <p className="text-sm text-gray-500 dark:text-gray-400">Memuat...</p>
+                <p className="text-sm text-gray-500 dark:text-gray-400">
+                  Memuat...
+                </p>
               )}
               {error && !loading && (
-                <p className="text-sm text-red-500 dark:text-red-400">{error}</p>
+                <p className="text-sm text-red-500 dark:text-red-400">
+                  {error}
+                </p>
               )}
               {!loading && !error && orders.length === 0 && (
-                <p className="text-sm text-gray-500 dark:text-gray-400">Belum ada order.</p>
+                <p className="text-sm text-gray-500 dark:text-gray-400">
+                  Belum ada order.
+                </p>
               )}
-              {!loading && !error && orders.slice(0, 4).map((order: Order) => {
-                const statusStyle = getOrderStatusColor(order.status);
-                return (
-                  <div key={order.order_id}>
-                    <p className="mb-2 text-xs leading-normal text-gray-500 dark:text-gray-400">
-                      {order.plan_name}
-                    </p>
-                    <p className="text-sm font-medium text-gray-800 dark:text-white/90">
-                      Rp{Number(order.final_amount).toLocaleString('id-ID')}
-                    </p>
-                    <span
-                      className="mt-1 inline-block text-[10px] font-semibold px-2 py-0.5 rounded-full"
-                      style={{
-                        color:           statusStyle.color,
-                        backgroundColor: statusStyle.bg,
-                        border:          `1px solid ${statusStyle.border}`,
-                      }}
-                    >
-                      {order.status.toUpperCase()}
-                    </span>
-                    <p className="mt-1 text-xs text-gray-400 dark:text-gray-500">
-                      {formatRelative(order.created_at)}
-                    </p>
-                  </div>
-                );
-              })}
+              {!loading &&
+                !error &&
+                orders.slice(0, 4).map((order: Order) => {
+                  const statusStyle = getOrderStatusColor(order.status);
+                  return (
+                    <div key={order.order_id}>
+                      <p className="mb-2 text-xs leading-normal text-gray-500 dark:text-gray-400">
+                        {order.plan_name}
+                      </p>
+                      <p className="text-sm font-medium text-gray-800 dark:text-white/90">
+                        Rp{Number(order.final_amount).toLocaleString("id-ID")}
+                      </p>
+                      <span
+                        className="mt-1 inline-block text-[10px] font-semibold px-2 py-0.5 rounded-full"
+                        style={{
+                          color: statusStyle.color,
+                          backgroundColor: statusStyle.bg,
+                          border: `1px solid ${statusStyle.border}`,
+                        }}
+                      >
+                        {order.status.toUpperCase()}
+                      </span>
+                      <p className="mt-1 text-xs text-gray-400 dark:text-gray-500">
+                        {formatRelative(order.created_at)}
+                      </p>
+                    </div>
+                  );
+                })}
             </div>
           </div>
 
@@ -197,13 +242,19 @@ export default function UserOrdersCard() {
 
           <div className="px-2 overflow-y-auto custom-scrollbar">
             {loading && (
-              <p className="text-sm text-gray-500 dark:text-gray-400 text-center py-6">Memuat...</p>
+              <p className="text-sm text-gray-500 dark:text-gray-400 text-center py-6">
+                Memuat...
+              </p>
             )}
             {error && !loading && (
-              <p className="text-sm text-red-500 dark:text-red-400 text-center py-6">{error}</p>
+              <p className="text-sm text-red-500 dark:text-red-400 text-center py-6">
+                {error}
+              </p>
             )}
             {!loading && !error && orders.length === 0 && (
-              <p className="text-sm text-gray-500 dark:text-gray-400 text-center py-6">Belum ada order.</p>
+              <p className="text-sm text-gray-500 dark:text-gray-400 text-center py-6">
+                Belum ada order.
+              </p>
             )}
             {!loading && !error && orders.length > 0 && (
               <div className="grid grid-cols-1 gap-x-6 gap-y-5 lg:grid-cols-2">
@@ -225,19 +276,21 @@ export default function UserOrdersCard() {
                       </p>
                       {order.membership_expired_at && (
                         <p className="mb-2 text-xs text-gray-400 dark:text-gray-500">
-                          Berlaku hingga: {formatDate(order.membership_expired_at)}
+                          Berlaku hingga:{" "}
+                          {formatDate(order.membership_expired_at)}
                         </p>
                       )}
                       <div className="flex items-center justify-between mt-2">
                         <p className="text-sm font-semibold text-gray-800 dark:text-white/90">
-                          Rp{Number(order.final_amount).toLocaleString('id-ID')}
+                          Rp
+                          {Number(order.final_amount).toLocaleString("id-ID")}
                         </p>
                         <span
                           className="text-[10px] font-semibold px-2.5 py-1 rounded-full"
                           style={{
-                            color:           statusStyle.color,
+                            color: statusStyle.color,
                             backgroundColor: statusStyle.bg,
-                            border:          `1px solid ${statusStyle.border}`,
+                            border: `1px solid ${statusStyle.border}`,
                           }}
                         >
                           {order.status.toUpperCase()}
