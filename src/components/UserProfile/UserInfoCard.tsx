@@ -1,93 +1,294 @@
+import { useState, useEffect } from "react";
 import { useModal } from "../../hooks/useModal";
 import { Modal } from "../ui/modal";
 import Button from "../ui/button/Button";
 import Input from "../form/input/InputField";
 import Label from "../form/Label";
 
+const API_BASE = "https://v2.jkt48connect.com/api/jkt48connect";
+const API_KEY = "JKTCONNECT";
+
+interface UserProfile {
+  user_id: string;
+  username: string;
+  full_name: string | null;
+  email: string;
+  phone: string | null;
+  avatar: string | null;
+  membership_type: string;
+  membership_expired_at: string | null;
+  is_verified: boolean;
+  is_active: boolean;
+  referral_code: string | null;
+  created_at: string;
+  last_login: string | null;
+}
+
+interface EditForm {
+  full_name: string;
+  phone: string;
+  avatar: string;
+}
+
+const getSession = () => {
+  try {
+    const d = JSON.parse(sessionStorage.getItem("userLogin") || "null");
+    if (d && d.isLoggedIn && d.token) return d;
+    return null;
+  } catch {
+    return null;
+  }
+};
+
+const formatDate = (s: string | null) => {
+  if (!s) return "—";
+  return new Date(s).toLocaleDateString("id-ID", {
+    year: "numeric",
+    month: "long",
+    day: "numeric",
+  });
+};
+
 export default function UserInfoCard() {
   const { isOpen, openModal, closeModal } = useModal();
-  const handleSave = () => {
-    // Handle save logic here
-    console.log("Saving changes...");
-    closeModal();
+  const [profile, setProfile] = useState<UserProfile | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+  const [toast, setToast] = useState({ show: false, message: "", type: "" });
+  const [form, setForm] = useState<EditForm>({
+    full_name: "",
+    phone: "",
+    avatar: "",
+  });
+
+  const showToast = (message: string, type: "success" | "error" = "success") => {
+    setToast({ show: true, message, type });
+    setTimeout(() => setToast({ show: false, message: "", type: "" }), 3000);
   };
+
+  useEffect(() => {
+    const fetchProfile = async () => {
+      const session = getSession();
+      if (!session) return;
+      const uid = session.user?.user_id;
+      const token = session.token;
+      if (!uid || !token) return;
+
+      try {
+        const res = await fetch(`${API_BASE}/profile/${uid}?apikey=${API_KEY}`, {
+          headers: { Authorization: `Bearer ${token}` },
+        });
+        const data = await res.json();
+        if (data.status) {
+          setProfile(data.data);
+          setForm({
+            full_name: data.data.full_name || "",
+            phone: data.data.phone || "",
+            avatar: data.data.avatar || "",
+          });
+        }
+      } catch (err) {
+        console.error("Failed to fetch profile:", err);
+      } finally {
+        setLoading(false);
+      }
+    };
+
+    fetchProfile();
+  }, []);
+
+  const handleSave = async () => {
+    const session = getSession();
+    if (!session || !profile) return;
+
+    setSaving(true);
+    try {
+      const res = await fetch(`${API_BASE}/profile/update?apikey=${API_KEY}`, {
+        method: "PUT",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${session.token}`,
+        },
+        body: JSON.stringify({
+          user_id: profile.user_id,
+          full_name: form.full_name || undefined,
+          phone: form.phone || undefined,
+          avatar: form.avatar || undefined,
+        }),
+      });
+
+      const data = await res.json();
+      if (data.status) {
+        setProfile((prev) =>
+          prev
+            ? {
+                ...prev,
+                full_name: data.data.full_name,
+                phone: data.data.phone,
+                avatar: data.data.avatar,
+              }
+            : prev
+        );
+        showToast("Profile updated successfully!", "success");
+        closeModal();
+      } else {
+        showToast(data.message || "Failed to update profile", "error");
+      }
+    } catch {
+      showToast("Connection error. Please try again.", "error");
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const handleInputChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const { name, value } = e.target;
+    setForm((prev) => ({ ...prev, [name]: value }));
+  };
+
+  const SkeletonRow = () => (
+    <div className="h-4 w-32 bg-gray-200 dark:bg-gray-700 rounded animate-pulse" />
+  );
+
   return (
-    <div className="p-5 border border-gray-200 rounded-2xl dark:border-gray-800 lg:p-6">
-      <div className="flex flex-col gap-6 lg:flex-row lg:items-start lg:justify-between">
-        <div>
-          <h4 className="text-lg font-semibold text-gray-800 dark:text-white/90 lg:mb-6">
-            Personal Information
-          </h4>
+    <>
+      {/* Toast */}
+      {toast.show && (
+        <div
+          className={`fixed top-6 right-6 z-50 flex items-center gap-3 px-4 py-3 rounded-xl shadow-lg text-sm font-medium ${
+            toast.type === "success"
+              ? "bg-success-50 text-success-700 border border-success-200"
+              : "bg-error-50 text-error-700 border border-error-200"
+          }`}
+        >
+          <span>{toast.type === "success" ? "✅" : "❌"}</span>
+          <span>{toast.message}</span>
+        </div>
+      )}
 
-          <div className="grid grid-cols-1 gap-4 lg:grid-cols-2 lg:gap-7 2xl:gap-x-32">
-            <div>
-              <p className="mb-2 text-xs leading-normal text-gray-500 dark:text-gray-400">
-                First Name
-              </p>
-              <p className="text-sm font-medium text-gray-800 dark:text-white/90">
-                Musharof
-              </p>
-            </div>
+      <div className="p-5 border border-gray-200 rounded-2xl dark:border-gray-800 lg:p-6">
+        <div className="flex flex-col gap-6 lg:flex-row lg:items-start lg:justify-between">
+          <div>
+            <h4 className="text-lg font-semibold text-gray-800 dark:text-white/90 lg:mb-6">
+              Personal Information
+            </h4>
 
-            <div>
-              <p className="mb-2 text-xs leading-normal text-gray-500 dark:text-gray-400">
-                Last Name
-              </p>
-              <p className="text-sm font-medium text-gray-800 dark:text-white/90">
-                Chowdhury
-              </p>
-            </div>
+            <div className="grid grid-cols-1 gap-4 lg:grid-cols-2 lg:gap-7 2xl:gap-x-32">
+              <div>
+                <p className="mb-2 text-xs leading-normal text-gray-500 dark:text-gray-400">
+                  Username
+                </p>
+                {loading ? <SkeletonRow /> : (
+                  <p className="text-sm font-medium text-gray-800 dark:text-white/90">
+                    @{profile?.username || "—"}
+                  </p>
+                )}
+              </div>
 
-            <div>
-              <p className="mb-2 text-xs leading-normal text-gray-500 dark:text-gray-400">
-                Email address
-              </p>
-              <p className="text-sm font-medium text-gray-800 dark:text-white/90">
-                randomuser@pimjo.com
-              </p>
-            </div>
+              <div>
+                <p className="mb-2 text-xs leading-normal text-gray-500 dark:text-gray-400">
+                  Full Name
+                </p>
+                {loading ? <SkeletonRow /> : (
+                  <p className="text-sm font-medium text-gray-800 dark:text-white/90">
+                    {profile?.full_name || "—"}
+                  </p>
+                )}
+              </div>
 
-            <div>
-              <p className="mb-2 text-xs leading-normal text-gray-500 dark:text-gray-400">
-                Phone
-              </p>
-              <p className="text-sm font-medium text-gray-800 dark:text-white/90">
-                +09 363 398 46
-              </p>
-            </div>
+              <div>
+                <p className="mb-2 text-xs leading-normal text-gray-500 dark:text-gray-400">
+                  Email Address
+                </p>
+                {loading ? <SkeletonRow /> : (
+                  <p className="text-sm font-medium text-gray-800 dark:text-white/90">
+                    {profile?.email || "—"}
+                  </p>
+                )}
+              </div>
 
-            <div>
-              <p className="mb-2 text-xs leading-normal text-gray-500 dark:text-gray-400">
-                Bio
-              </p>
-              <p className="text-sm font-medium text-gray-800 dark:text-white/90">
-                Team Manager
-              </p>
+              <div>
+                <p className="mb-2 text-xs leading-normal text-gray-500 dark:text-gray-400">
+                  Phone
+                </p>
+                {loading ? <SkeletonRow /> : (
+                  <p className="text-sm font-medium text-gray-800 dark:text-white/90">
+                    {profile?.phone || "—"}
+                  </p>
+                )}
+              </div>
+
+              <div>
+                <p className="mb-2 text-xs leading-normal text-gray-500 dark:text-gray-400">
+                  Membership
+                </p>
+                {loading ? <SkeletonRow /> : (
+                  <p className="text-sm font-medium text-gray-800 dark:text-white/90 capitalize">
+                    {profile?.membership_type === "free"
+                      ? "Free Account"
+                      : `${profile?.membership_type} Member`}
+                  </p>
+                )}
+              </div>
+
+              <div>
+                <p className="mb-2 text-xs leading-normal text-gray-500 dark:text-gray-400">
+                  Member Since
+                </p>
+                {loading ? <SkeletonRow /> : (
+                  <p className="text-sm font-medium text-gray-800 dark:text-white/90">
+                    {formatDate(profile?.created_at ?? null)}
+                  </p>
+                )}
+              </div>
+
+              {profile?.membership_expired_at && profile.membership_type !== "free" && (
+                <div>
+                  <p className="mb-2 text-xs leading-normal text-gray-500 dark:text-gray-400">
+                    Membership Expires
+                  </p>
+                  <p className="text-sm font-medium text-gray-800 dark:text-white/90">
+                    {formatDate(profile.membership_expired_at)}
+                  </p>
+                </div>
+              )}
+
+              <div>
+                <p className="mb-2 text-xs leading-normal text-gray-500 dark:text-gray-400">
+                  Account Status
+                </p>
+                {loading ? <SkeletonRow /> : (
+                  <p className={`text-sm font-medium ${profile?.is_active ? "text-success-500" : "text-error-500"}`}>
+                    {profile?.is_active ? "Active" : "Inactive"}
+                    {profile?.is_verified && " · Verified"}
+                  </p>
+                )}
+              </div>
+
+              {profile?.referral_code && (
+                <div className="col-span-2 lg:col-span-1">
+                  <p className="mb-2 text-xs leading-normal text-gray-500 dark:text-gray-400">
+                    Referral Code
+                  </p>
+                  <p className="text-sm font-medium font-mono text-gray-800 dark:text-white/90">
+                    {profile.referral_code}
+                  </p>
+                </div>
+              )}
             </div>
           </div>
-        </div>
 
-        <button
-          onClick={openModal}
-          className="flex w-full items-center justify-center gap-2 rounded-full border border-gray-300 bg-white px-4 py-3 text-sm font-medium text-gray-700 shadow-theme-xs hover:bg-gray-50 hover:text-gray-800 dark:border-gray-700 dark:bg-gray-800 dark:text-gray-400 dark:hover:bg-white/[0.03] dark:hover:text-gray-200 lg:inline-flex lg:w-auto"
-        >
-          <svg
-            className="fill-current"
-            width="18"
-            height="18"
-            viewBox="0 0 18 18"
-            fill="none"
-            xmlns="http://www.w3.org/2000/svg"
+          <button
+            onClick={openModal}
+            disabled={loading}
+            className="flex w-full items-center justify-center gap-2 rounded-full border border-gray-300 bg-white px-4 py-3 text-sm font-medium text-gray-700 shadow-theme-xs hover:bg-gray-50 hover:text-gray-800 dark:border-gray-700 dark:bg-gray-800 dark:text-gray-400 dark:hover:bg-white/[0.03] dark:hover:text-gray-200 lg:inline-flex lg:w-auto disabled:opacity-50"
           >
-            <path
-              fillRule="evenodd"
-              clipRule="evenodd"
-              d="M15.0911 2.78206C14.2125 1.90338 12.7878 1.90338 11.9092 2.78206L4.57524 10.116C4.26682 10.4244 4.0547 10.8158 3.96468 11.2426L3.31231 14.3352C3.25997 14.5833 3.33653 14.841 3.51583 15.0203C3.69512 15.1996 3.95286 15.2761 4.20096 15.2238L7.29355 14.5714C7.72031 14.4814 8.11172 14.2693 8.42013 13.9609L15.7541 6.62695C16.6327 5.74827 16.6327 4.32365 15.7541 3.44497L15.0911 2.78206ZM12.9698 3.84272C13.2627 3.54982 13.7376 3.54982 14.0305 3.84272L14.6934 4.50563C14.9863 4.79852 14.9863 5.2734 14.6934 5.56629L14.044 6.21573L12.3204 4.49215L12.9698 3.84272ZM11.2597 5.55281L5.6359 11.1766C5.53309 11.2794 5.46238 11.4099 5.43238 11.5522L5.01758 13.5185L6.98394 13.1037C7.1262 13.0737 7.25666 13.003 7.35947 12.9002L12.9833 7.27639L11.2597 5.55281Z"
-              fill=""
-            />
-          </svg>
-          Edit
-        </button>
+            <svg className="fill-current" width="18" height="18" viewBox="0 0 18 18" fill="none" xmlns="http://www.w3.org/2000/svg">
+              <path fillRule="evenodd" clipRule="evenodd" d="M15.0911 2.78206C14.2125 1.90338 12.7878 1.90338 11.9092 2.78206L4.57524 10.116C4.26682 10.4244 4.0547 10.8158 3.96468 11.2426L3.31231 14.3352C3.25997 14.5833 3.33653 14.841 3.51583 15.0203C3.69512 15.1996 3.95286 15.2761 4.20096 15.2238L7.29355 14.5714C7.72031 14.4814 8.11172 14.2693 8.42013 13.9609L15.7541 6.62695C16.6327 5.74827 16.6327 4.32365 15.7541 3.44497L15.0911 2.78206ZM12.9698 3.84272C13.2627 3.54982 13.7376 3.54982 14.0305 3.84272L14.6934 4.50563C14.9863 4.79852 14.9863 5.2734 14.6934 5.56629L14.044 6.21573L12.3204 4.49215L12.9698 3.84272ZM11.2597 5.55281L5.6359 11.1766C5.53309 11.2794 5.46238 11.4099 5.43238 11.5522L5.01758 13.5185L6.98394 13.1037C7.1262 13.0737 7.25666 13.003 7.35947 12.9002L12.9833 7.27639L11.2597 5.55281Z" fill="" />
+            </svg>
+            Edit
+          </button>
+        </div>
       </div>
 
       <Modal isOpen={isOpen} onClose={closeModal} className="max-w-[700px] m-4">
@@ -100,85 +301,92 @@ export default function UserInfoCard() {
               Update your details to keep your profile up-to-date.
             </p>
           </div>
-          <form className="flex flex-col">
+
+          <form className="flex flex-col" onSubmit={(e) => e.preventDefault()}>
             <div className="custom-scrollbar h-[450px] overflow-y-auto px-2 pb-3">
               <div>
                 <h5 className="mb-5 text-lg font-medium text-gray-800 dark:text-white/90 lg:mb-6">
-                  Social Links
+                  Account Information
                 </h5>
-
                 <div className="grid grid-cols-1 gap-x-6 gap-y-5 lg:grid-cols-2">
                   <div>
-                    <Label>Facebook</Label>
-                    <Input
-                      type="text"
-                      value="https://www.facebook.com/PimjoHQ"
-                    />
+                    <Label>Username</Label>
+                    <Input type="text" value={profile?.username || ""} disabled />
+                    <p className="mt-1 text-xs text-gray-400">Cannot be changed</p>
                   </div>
-
                   <div>
-                    <Label>X.com</Label>
-                    <Input type="text" value="https://x.com/PimjoHQ" />
-                  </div>
-
-                  <div>
-                    <Label>Linkedin</Label>
-                    <Input
-                      type="text"
-                      value="https://www.linkedin.com/company/pimjo"
-                    />
-                  </div>
-
-                  <div>
-                    <Label>Instagram</Label>
-                    <Input type="text" value="https://instagram.com/PimjoHQ" />
+                    <Label>Email Address</Label>
+                    <Input type="text" value={profile?.email || ""} disabled />
+                    <p className="mt-1 text-xs text-gray-400">Cannot be changed here</p>
                   </div>
                 </div>
               </div>
+
               <div className="mt-7">
                 <h5 className="mb-5 text-lg font-medium text-gray-800 dark:text-white/90 lg:mb-6">
                   Personal Information
                 </h5>
-
                 <div className="grid grid-cols-1 gap-x-6 gap-y-5 lg:grid-cols-2">
-                  <div className="col-span-2 lg:col-span-1">
-                    <Label>First Name</Label>
-                    <Input type="text" value="Musharof" />
-                  </div>
-
-                  <div className="col-span-2 lg:col-span-1">
-                    <Label>Last Name</Label>
-                    <Input type="text" value="Chowdhury" />
-                  </div>
-
-                  <div className="col-span-2 lg:col-span-1">
-                    <Label>Email Address</Label>
-                    <Input type="text" value="randomuser@pimjo.com" />
+                  <div className="col-span-2">
+                    <Label>Full Name</Label>
+                    <Input
+                      type="text"
+                      name="full_name"
+                      value={form.full_name}
+                      onChange={handleInputChange}
+                      placeholder="Enter your full name"
+                    />
                   </div>
 
                   <div className="col-span-2 lg:col-span-1">
                     <Label>Phone</Label>
-                    <Input type="text" value="+09 363 398 46" />
+                    <Input
+                      type="text"
+                      name="phone"
+                      value={form.phone}
+                      onChange={handleInputChange}
+                      placeholder="+62 812 3456 7890"
+                    />
                   </div>
 
                   <div className="col-span-2">
-                    <Label>Bio</Label>
-                    <Input type="text" value="Team Manager" />
+                    <Label>Avatar URL</Label>
+                    <Input
+                      type="text"
+                      name="avatar"
+                      value={form.avatar}
+                      onChange={handleInputChange}
+                      placeholder="https://example.com/avatar.jpg"
+                    />
+                    {form.avatar && (
+                      <div className="mt-2 flex items-center gap-3">
+                        <img
+                          src={form.avatar}
+                          alt="preview"
+                          className="w-10 h-10 rounded-full object-cover border border-gray-200 dark:border-gray-700"
+                          onError={(e) => {
+                            (e.target as HTMLImageElement).style.display = "none";
+                          }}
+                        />
+                        <p className="text-xs text-gray-400">Avatar preview</p>
+                      </div>
+                    )}
                   </div>
                 </div>
               </div>
             </div>
+
             <div className="flex items-center gap-3 px-2 mt-6 lg:justify-end">
               <Button size="sm" variant="outline" onClick={closeModal}>
-                Close
+                Cancel
               </Button>
-              <Button size="sm" onClick={handleSave}>
-                Save Changes
+              <Button size="sm" onClick={handleSave} disabled={saving}>
+                {saving ? "Saving..." : "Save Changes"}
               </Button>
             </div>
           </form>
         </div>
       </Modal>
-    </div>
+    </>
   );
 }
