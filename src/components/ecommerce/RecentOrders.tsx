@@ -93,44 +93,50 @@ export default function RecentOrders() {
   const [orders, setOrders] = useState<Order[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [total, setTotal] = useState(0);
+
+  const fetchOrders = async (): Promise<void> => {
+    setLoading(true);
+    setError(null);
+
+    const session = getSession();
+    if (!session) {
+      setError("Silakan login untuk melihat riwayat order");
+      setLoading(false);
+      return;
+    }
+
+    const uid = session.user?.user_id;
+    const token = session.token;
+
+    if (!uid || !token) {
+      setError("Data sesi tidak valid");
+      setLoading(false);
+      return;
+    }
+
+    try {
+      const res = await fetch(
+        `${API_BASE}/order/list/${uid}?limit=100&apikey=${API_KEY}`,
+        { headers: { Authorization: `Bearer ${token}` } }
+      );
+      const data = (await res.json()) as ApiResponse;
+
+      if (data.status) {
+        const fetched = data.data?.orders ?? [];
+        setOrders(fetched);
+        setTotal(fetched.length);
+      } else {
+        setError("Gagal memuat data order");
+      }
+    } catch {
+      setError("Terjadi kesalahan jaringan");
+    } finally {
+      setLoading(false);
+    }
+  };
 
   useEffect(() => {
-    const fetchOrders = async (): Promise<void> => {
-      const session = getSession();
-      if (!session) {
-        setError("Silakan login untuk melihat riwayat order");
-        setLoading(false);
-        return;
-      }
-
-      const uid = session.user?.user_id;
-      const token = session.token;
-
-      if (!uid || !token) {
-        setError("Data sesi tidak valid");
-        setLoading(false);
-        return;
-      }
-
-      try {
-        const res = await fetch(
-          `${API_BASE}/order/list/${uid}?limit=10&apikey=${API_KEY}`,
-          { headers: { Authorization: `Bearer ${token}` } }
-        );
-        const data = (await res.json()) as ApiResponse;
-
-        if (data.status) {
-          setOrders(data.data?.orders ?? []);
-        } else {
-          setError("Gagal memuat data order");
-        }
-      } catch {
-        setError("Terjadi kesalahan jaringan");
-      } finally {
-        setLoading(false);
-      }
-    };
-
     fetchOrders();
   }, []);
 
@@ -143,19 +149,13 @@ export default function RecentOrders() {
             Riwayat Order
           </h3>
           <p className="text-sm text-gray-500 dark:text-gray-400 mt-0.5">
-            10 transaksi terbaru
+            {loading ? "Memuat..." : `${total} transaksi`}
           </p>
         </div>
 
         <div className="flex items-center gap-3">
           <button
-            onClick={() => {
-              setLoading(true);
-              setError(null);
-              // re-trigger useEffect
-              setOrders([]);
-              setTimeout(() => window.location.reload(), 100);
-            }}
+            onClick={fetchOrders}
             className="inline-flex items-center gap-2 rounded-lg border border-gray-300 bg-white px-4 py-2.5 text-theme-sm font-medium text-gray-700 shadow-theme-xs hover:bg-gray-50 hover:text-gray-800 dark:border-gray-700 dark:bg-gray-800 dark:text-gray-400 dark:hover:bg-white/[0.03] dark:hover:text-gray-200"
           >
             <svg
