@@ -1,61 +1,130 @@
+import { useEffect, useState } from "react";
 import { useModal } from "../../hooks/useModal";
 import { Modal } from "../ui/modal";
 import Button from "../ui/button/Button";
-import Input from "../form/input/InputField";
-import Label from "../form/Label";
 
-export default function UserAddressCard() {
+const API_BASE = 'https://v2.jkt48connect.com/api/jkt48connect';
+const API_KEY  = 'JKTCONNECT';
+
+const formatDate = (s) => {
+  if (!s) return '—';
+  return new Date(s).toLocaleDateString('id-ID', { year: 'numeric', month: 'long', day: 'numeric' });
+};
+
+const formatRelative = (s) => {
+  if (!s) return '—';
+  const diff = Date.now() - new Date(s).getTime();
+  const mins = Math.floor(diff / 60000);
+  if (mins < 1) return 'Baru saja';
+  if (mins < 60) return `${mins} menit lalu`;
+  const hrs = Math.floor(mins / 60);
+  if (hrs < 24) return `${hrs} jam lalu`;
+  const days = Math.floor(hrs / 24);
+  if (days < 7) return `${days} hari lalu`;
+  return formatDate(s);
+};
+
+const getOrderStatusColor = (status) => {
+  if (status === 'paid')    return { color: '#16a34a', bg: 'rgba(22,163,74,0.1)', border: 'rgba(22,163,74,0.3)' };
+  if (status === 'pending') return { color: '#d97706', bg: 'rgba(217,119,6,0.1)', border: 'rgba(217,119,6,0.3)' };
+  if (status === 'failed' || status === 'expired') return { color: '#dc2626', bg: 'rgba(220,38,38,0.1)', border: 'rgba(220,38,38,0.3)' };
+  return { color: '#6b7280', bg: 'rgba(107,114,128,0.1)', border: 'rgba(107,114,128,0.3)' };
+};
+
+const getSession = () => {
+  try {
+    const d = JSON.parse(sessionStorage.getItem('userLogin') || 'null');
+    if (d && d.isLoggedIn && d.token) return d;
+    return null;
+  } catch { return null; }
+};
+
+export default function UserOrdersCard() {
   const { isOpen, openModal, closeModal } = useModal();
-  const handleSave = () => {
-    // Handle save logic here
-    console.log("Saving changes...");
-    closeModal();
-  };
+
+  const [orders,  setOrders]  = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [error,   setError]   = useState(null);
+
+  useEffect(() => {
+    const fetchOrders = async () => {
+      const session = getSession();
+      if (!session) {
+        setError('Sesi tidak ditemukan.');
+        setLoading(false);
+        return;
+      }
+      const uid   = session.user?.user_id;
+      const token = session.token;
+      if (!uid || !token) {
+        setError('Data sesi tidak valid.');
+        setLoading(false);
+        return;
+      }
+      try {
+        const res  = await fetch(`${API_BASE}/order/list/${uid}?limit=10&apikey=${API_KEY}`, {
+          headers: { Authorization: `Bearer ${token}` },
+        });
+        const data = await res.json();
+        if (data.status) {
+          setOrders(data.data?.orders || []);
+        } else {
+          setError('Gagal memuat data order.');
+        }
+      } catch {
+        setError('Terjadi kesalahan jaringan.');
+      } finally {
+        setLoading(false);
+      }
+    };
+    fetchOrders();
+  }, []);
+
   return (
     <>
       <div className="p-5 border border-gray-200 rounded-2xl dark:border-gray-800 lg:p-6">
         <div className="flex flex-col gap-6 lg:flex-row lg:items-start lg:justify-between">
           <div>
             <h4 className="text-lg font-semibold text-gray-800 dark:text-white/90 lg:mb-6">
-              Address
+              Riwayat Order
             </h4>
 
             <div className="grid grid-cols-1 gap-4 lg:grid-cols-2 lg:gap-7 2xl:gap-x-32">
-              <div>
-                <p className="mb-2 text-xs leading-normal text-gray-500 dark:text-gray-400">
-                  Country
-                </p>
-                <p className="text-sm font-medium text-gray-800 dark:text-white/90">
-                  United States.
-                </p>
-              </div>
-
-              <div>
-                <p className="mb-2 text-xs leading-normal text-gray-500 dark:text-gray-400">
-                  City/State
-                </p>
-                <p className="text-sm font-medium text-gray-800 dark:text-white/90">
-                  Phoenix, Arizona, United States.
-                </p>
-              </div>
-
-              <div>
-                <p className="mb-2 text-xs leading-normal text-gray-500 dark:text-gray-400">
-                  Postal Code
-                </p>
-                <p className="text-sm font-medium text-gray-800 dark:text-white/90">
-                  ERT 2489
-                </p>
-              </div>
-
-              <div>
-                <p className="mb-2 text-xs leading-normal text-gray-500 dark:text-gray-400">
-                  TAX ID
-                </p>
-                <p className="text-sm font-medium text-gray-800 dark:text-white/90">
-                  AS4568384
-                </p>
-              </div>
+              {loading && (
+                <p className="text-sm text-gray-500 dark:text-gray-400">Memuat...</p>
+              )}
+              {error && !loading && (
+                <p className="text-sm text-red-500 dark:text-red-400">{error}</p>
+              )}
+              {!loading && !error && orders.length === 0 && (
+                <p className="text-sm text-gray-500 dark:text-gray-400">Belum ada order.</p>
+              )}
+              {!loading && !error && orders.slice(0, 4).map((order) => {
+                const statusStyle = getOrderStatusColor(order.status);
+                return (
+                  <div key={order.order_id}>
+                    <p className="mb-2 text-xs leading-normal text-gray-500 dark:text-gray-400">
+                      {order.plan_name}
+                    </p>
+                    <p className="text-sm font-medium text-gray-800 dark:text-white/90">
+                      Rp{Number(order.final_amount).toLocaleString('id-ID')}
+                    </p>
+                    <span
+                      className="mt-1 inline-block text-[10px] font-semibold px-2 py-0.5 rounded-full"
+                      style={{
+                        color:           statusStyle.color,
+                        backgroundColor: statusStyle.bg,
+                        border:          `1px solid ${statusStyle.border}`,
+                      }}
+                    >
+                      {order.status.toUpperCase()}
+                    </span>
+                    <p className="mt-1 text-xs text-gray-400 dark:text-gray-500">
+                      {formatRelative(order.created_at)}
+                    </p>
+                  </div>
+                );
+              })}
             </div>
           </div>
 
@@ -67,64 +136,98 @@ export default function UserAddressCard() {
               className="fill-current"
               width="18"
               height="18"
-              viewBox="0 0 18 18"
+              viewBox="0 0 24 24"
               fill="none"
               xmlns="http://www.w3.org/2000/svg"
             >
               <path
                 fillRule="evenodd"
                 clipRule="evenodd"
-                d="M15.0911 2.78206C14.2125 1.90338 12.7878 1.90338 11.9092 2.78206L4.57524 10.116C4.26682 10.4244 4.0547 10.8158 3.96468 11.2426L3.31231 14.3352C3.25997 14.5833 3.33653 14.841 3.51583 15.0203C3.69512 15.1996 3.95286 15.2761 4.20096 15.2238L7.29355 14.5714C7.72031 14.4814 8.11172 14.2693 8.42013 13.9609L15.7541 6.62695C16.6327 5.74827 16.6327 4.32365 15.7541 3.44497L15.0911 2.78206ZM12.9698 3.84272C13.2627 3.54982 13.7376 3.54982 14.0305 3.84272L14.6934 4.50563C14.9863 4.79852 14.9863 5.2734 14.6934 5.56629L14.044 6.21573L12.3204 4.49215L12.9698 3.84272ZM11.2597 5.55281L5.6359 11.1766C5.53309 11.2794 5.46238 11.4099 5.43238 11.5522L5.01758 13.5185L6.98394 13.1037C7.1262 13.0737 7.25666 13.003 7.35947 12.9002L12.9833 7.27639L11.2597 5.55281Z"
+                d="M3 5a1 1 0 0 1 1-1h16a1 1 0 1 1 0 2H4a1 1 0 0 1-1-1zm0 7a1 1 0 0 1 1-1h16a1 1 0 1 1 0 2H4a1 1 0 0 1-1-1zm0 7a1 1 0 0 1 1-1h10a1 1 0 1 1 0 2H4a1 1 0 0 1-1-1z"
                 fill=""
               />
             </svg>
-            Edit
+            Lihat Semua
           </button>
         </div>
       </div>
+
       <Modal isOpen={isOpen} onClose={closeModal} className="max-w-[700px] m-4">
         <div className="relative w-full p-4 overflow-y-auto bg-white no-scrollbar rounded-3xl dark:bg-gray-900 lg:p-11">
           <div className="px-2 pr-14">
             <h4 className="mb-2 text-2xl font-semibold text-gray-800 dark:text-white/90">
-              Edit Address
+              Riwayat Order
             </h4>
             <p className="mb-6 text-sm text-gray-500 dark:text-gray-400 lg:mb-7">
-              Update your details to keep your profile up-to-date.
+              Daftar seluruh transaksi membership kamu.
             </p>
           </div>
-          <form className="flex flex-col">
-            <div className="px-2 overflow-y-auto custom-scrollbar">
+
+          <div className="px-2 overflow-y-auto custom-scrollbar">
+            {loading && (
+              <p className="text-sm text-gray-500 dark:text-gray-400 text-center py-6">Memuat...</p>
+            )}
+            {error && !loading && (
+              <p className="text-sm text-red-500 dark:text-red-400 text-center py-6">{error}</p>
+            )}
+            {!loading && !error && orders.length === 0 && (
+              <p className="text-sm text-gray-500 dark:text-gray-400 text-center py-6">Belum ada order.</p>
+            )}
+            {!loading && !error && orders.length > 0 && (
               <div className="grid grid-cols-1 gap-x-6 gap-y-5 lg:grid-cols-2">
-                <div>
-                  <Label>Country</Label>
-                  <Input type="text" value="United States" />
-                </div>
-
-                <div>
-                  <Label>City/State</Label>
-                  <Input type="text" value="Arizona, United States." />
-                </div>
-
-                <div>
-                  <Label>Postal Code</Label>
-                  <Input type="text" value="ERT 2489" />
-                </div>
-
-                <div>
-                  <Label>TAX ID</Label>
-                  <Input type="text" value="AS4568384" />
-                </div>
+                {orders.map((order) => {
+                  const statusStyle = getOrderStatusColor(order.status);
+                  return (
+                    <div
+                      key={order.order_id}
+                      className="p-4 border border-gray-100 rounded-xl dark:border-gray-800"
+                    >
+                      <p className="mb-1 text-sm font-medium text-gray-800 dark:text-white/90 truncate">
+                        {order.plan_name}
+                      </p>
+                      <p className="mb-1 text-xs text-gray-400 dark:text-gray-500 font-mono">
+                        #{order.order_id.slice(-10)}
+                      </p>
+                      <p className="mb-2 text-xs text-gray-400 dark:text-gray-500">
+                        {formatRelative(order.created_at)}
+                      </p>
+                      {order.membership_expired_at && (
+                        <p className="mb-2 text-xs text-gray-400 dark:text-gray-500">
+                          Berlaku hingga: {formatDate(order.membership_expired_at)}
+                        </p>
+                      )}
+                      <div className="flex items-center justify-between mt-2">
+                        <p className="text-sm font-semibold text-gray-800 dark:text-white/90">
+                          Rp{Number(order.final_amount).toLocaleString('id-ID')}
+                        </p>
+                        <span
+                          className="text-[10px] font-semibold px-2.5 py-1 rounded-full"
+                          style={{
+                            color:           statusStyle.color,
+                            backgroundColor: statusStyle.bg,
+                            border:          `1px solid ${statusStyle.border}`,
+                          }}
+                        >
+                          {order.status.toUpperCase()}
+                        </span>
+                      </div>
+                      {order.paid_at && (
+                        <p className="mt-1 text-[10px] text-gray-400 dark:text-gray-500">
+                          Dibayar: {formatRelative(order.paid_at)}
+                        </p>
+                      )}
+                    </div>
+                  );
+                })}
               </div>
-            </div>
-            <div className="flex items-center gap-3 px-2 mt-6 lg:justify-end">
-              <Button size="sm" variant="outline" onClick={closeModal}>
-                Close
-              </Button>
-              <Button size="sm" onClick={handleSave}>
-                Save Changes
-              </Button>
-            </div>
-          </form>
+            )}
+          </div>
+
+          <div className="flex items-center gap-3 px-2 mt-6 lg:justify-end">
+            <Button size="sm" variant="outline" onClick={closeModal}>
+              Tutup
+            </Button>
+          </div>
         </div>
       </Modal>
     </>
