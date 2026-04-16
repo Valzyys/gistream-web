@@ -74,8 +74,7 @@ const formatDate = (dateStr: string) =>
     year: "numeric",
   });
 
-const isDefaultImg = (url: string) =>
-  url.includes("jkt48logo.jpg");
+
 
 // ── SVG Icons ─────────────────────────────────────────────────────────────────
 const CalendarIcon = () => (
