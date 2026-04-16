@@ -6,8 +6,8 @@ export default function SignUp() {
   return (
     <>
       <PageMeta
-        title="React.js SignUp Dashboard | TailAdmin - Next.js Admin Dashboard Template"
-        description="This is React.js SignUp Tables Dashboard page for TailAdmin - React.js Tailwind CSS Admin Dashboard Template"
+        title="Daftar Akun | JKT48Connect - GiStream"
+        description="Buat akun JKT48Connect melalui aplikasi GiStream untuk menikmati live show, pembelian tiket, dan membership eksklusif JKT48."
       />
       <AuthLayout>
         <SignUpForm />
