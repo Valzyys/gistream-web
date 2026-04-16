@@ -2,15 +2,38 @@ import { useState } from "react";
 import { ThemeToggleButton } from "../common/ThemeToggleButton";
 import NotificationDropdown from "./NotificationDropdown";
 import UserDropdown from "./UserDropdown";
-import { Link } from "react-router";
+import { Link, useNavigate } from "react-router";
 
-// Define the interface for the props
 interface HeaderProps {
-  onClick?: () => void; // Optional function that takes no arguments and returns void
+  onClick?: () => void;
   onToggle: () => void;
 }
+
+const getSession = () => {
+  try {
+    const fromSession = JSON.parse(
+      sessionStorage.getItem("userLogin") || "null"
+    );
+    if (fromSession && fromSession.isLoggedIn && fromSession.token)
+      return fromSession;
+
+    const fromLocal = JSON.parse(
+      localStorage.getItem("userLogin") || "null"
+    );
+    if (fromLocal && fromLocal.isLoggedIn && fromLocal.token)
+      return fromLocal;
+
+    return null;
+  } catch {
+    return null;
+  }
+};
+
 const Header: React.FC<HeaderProps> = ({ onClick, onToggle }) => {
   const [isApplicationMenuOpen, setApplicationMenuOpen] = useState(false);
+  const session = getSession();
+  const isLoggedIn = !!session;
+  const navigate = useNavigate();
 
   const toggleApplicationMenu = () => {
     setApplicationMenuOpen(!isApplicationMenuOpen);
@@ -20,13 +43,13 @@ const Header: React.FC<HeaderProps> = ({ onClick, onToggle }) => {
     <header className="sticky top-0 flex w-full bg-white border-gray-200 z-99999 dark:border-gray-800 dark:bg-gray-900 lg:border-b">
       <div className="flex flex-col items-center justify-between grow lg:flex-row lg:px-6">
         <div className="flex items-center justify-between w-full gap-2 px-3 py-3 border-b border-gray-200 dark:border-gray-800 sm:gap-4 lg:justify-normal lg:border-b-0 lg:px-0 lg:py-4">
+          {/* Hamburger Mobile */}
           <button
             className="block w-10 h-10 text-gray-500 lg:hidden dark:text-gray-400"
             onClick={onToggle}
           >
-            {/* Hamburger Icon */}
             <svg
-              className={`block`}
+              className="block"
               width="16"
               height="12"
               viewBox="0 0 16 12"
@@ -40,23 +63,9 @@ const Header: React.FC<HeaderProps> = ({ onClick, onToggle }) => {
                 fill="currentColor"
               />
             </svg>
-            <svg
-              className="hidden"
-              width="24"
-              height="24"
-              viewBox="0 0 24 24"
-              fill="none"
-              xmlns="http://www.w3.org/2000/svg"
-            >
-              <path
-                fillRule="evenodd"
-                clipRule="evenodd"
-                d="M6.21967 7.28131C5.92678 6.98841 5.92678 6.51354 6.21967 6.22065C6.51256 5.92775 6.98744 5.92775 7.28033 6.22065L11.999 10.9393L16.7176 6.22078C17.0105 5.92789 17.4854 5.92788 17.7782 6.22078C18.0711 6.51367 18.0711 6.98855 17.7782 7.28144L13.0597 12L17.7782 16.7186C18.0711 17.0115 18.0711 17.4863 17.7782 17.7792C17.4854 18.0721 17.0105 18.0721 16.7176 17.7792L11.999 13.0607L7.28033 17.7794C6.98744 18.0722 6.51256 18.0722 6.21967 17.7794C5.92678 17.4865 5.92678 17.0116 6.21967 16.7187L10.9384 12L6.21967 7.28131Z"
-                fill="currentColor"
-              />
-            </svg>
-            {/* Cross Icon */}
           </button>
+
+          {/* Hamburger Desktop */}
           <button
             onClick={onClick}
             className="items-center justify-center hidden w-10 h-10 text-gray-500 border-gray-200 rounded-lg z-99999 dark:border-gray-800 lg:flex dark:text-gray-400 lg:h-11 lg:w-11 lg:border"
@@ -78,6 +87,7 @@ const Header: React.FC<HeaderProps> = ({ onClick, onToggle }) => {
             </svg>
           </button>
 
+          {/* Logo Mobile */}
           <Link to="/" className="lg:hidden">
             <img
               className="dark:hidden"
@@ -91,6 +101,7 @@ const Header: React.FC<HeaderProps> = ({ onClick, onToggle }) => {
             />
           </Link>
 
+          {/* Dots Menu Mobile */}
           <button
             onClick={toggleApplicationMenu}
             className="flex items-center justify-center w-10 h-10 text-gray-700 rounded-lg z-99999 hover:bg-gray-100 dark:text-gray-400 dark:hover:bg-gray-800 lg:hidden"
@@ -111,6 +122,7 @@ const Header: React.FC<HeaderProps> = ({ onClick, onToggle }) => {
             </svg>
           </button>
 
+          {/* Search Desktop */}
           <div className="hidden lg:block">
             <form action="https://formbold.com/s/unique_form_id" method="POST">
               <div className="relative">
@@ -136,7 +148,6 @@ const Header: React.FC<HeaderProps> = ({ onClick, onToggle }) => {
                   placeholder="Search or type command..."
                   className="dark:bg-dark-900 h-11 w-full rounded-lg border border-gray-200 bg-transparent py-2.5 pl-12 pr-14 text-sm text-gray-800 shadow-theme-xs placeholder:text-gray-400 focus:border-brand-300 focus:outline-hidden focus:ring-3 focus:ring-brand-500/10 dark:border-gray-800 dark:bg-gray-900 dark:bg-white/[0.03] dark:text-white/90 dark:placeholder:text-white/30 dark:focus:border-brand-800 xl:w-[430px]"
                 />
-
                 <button className="absolute right-2.5 top-1/2 inline-flex -translate-y-1/2 items-center gap-0.5 rounded-lg border border-gray-200 bg-gray-50 px-[7px] py-[4.5px] text-xs -tracking-[0.2px] text-gray-500 dark:border-gray-800 dark:bg-white/[0.03] dark:text-gray-400">
                   <span> ⌘ </span>
                   <span> K </span>
@@ -145,20 +156,47 @@ const Header: React.FC<HeaderProps> = ({ onClick, onToggle }) => {
             </form>
           </div>
         </div>
+
+        {/* Right Side */}
         <div
           className={`${
             isApplicationMenuOpen ? "flex" : "hidden"
           } items-center justify-between w-full gap-4 px-5 py-4 lg:flex shadow-theme-md lg:justify-end lg:px-0 lg:shadow-none`}
         >
           <div className="flex items-center gap-2 2xsm:gap-3">
-            {/* <!-- Dark Mode Toggler --> */}
+            {/* Dark Mode Toggle */}
             <ThemeToggleButton />
-            {/* <!-- Dark Mode Toggler --> */}
-            <NotificationDropdown />
-            {/* <!-- Notification Menu Area --> */}
+
+            {/* Notification — hanya tampil jika login */}
+            {isLoggedIn && <NotificationDropdown />}
           </div>
-          {/* <!-- User Area --> */}
-          <UserDropdown />
+
+          {/* User Area */}
+          {isLoggedIn ? (
+            <UserDropdown />
+          ) : (
+            <button
+              onClick={() => navigate("/signin")}
+              className="inline-flex items-center gap-2 rounded-lg bg-brand-500 px-4 py-2.5 text-sm font-medium text-white shadow-theme-xs hover:bg-brand-600 transition-colors dark:bg-brand-500 dark:hover:bg-brand-600"
+            >
+              <svg
+                width="16"
+                height="16"
+                viewBox="0 0 24 24"
+                fill="none"
+                xmlns="http://www.w3.org/2000/svg"
+              >
+                <path
+                  d="M15 3h4a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2h-4M10 17l5-5-5-5M15 12H3"
+                  stroke="currentColor"
+                  strokeWidth="2"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                />
+              </svg>
+              Sign In
+            </button>
+          )}
         </div>
       </div>
     </header>
