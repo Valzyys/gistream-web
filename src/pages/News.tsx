@@ -165,7 +165,10 @@ function NewsCard({ item }: { item: NewsItem }) {
   const navigate = useNavigate();
   const [imgError, setImgError] = useState(false);
   const cs = getCategoryStyle(item.category);
-  const useDefault = imgError || isDefaultImg(item.background_image);
+
+const imgSrc = imgError || !item.background_image
+    ? DEFAULT_IMG
+    : item.background_image;
 
   return (
     <div
@@ -182,10 +185,8 @@ function NewsCard({ item }: { item: NewsItem }) {
       }}
       className="dark:bg-white/[0.03] dark:border-gray-800"
       onMouseEnter={(e) => {
-        (e.currentTarget as HTMLDivElement).style.transform =
-          "translateY(-3px)";
-        (e.currentTarget as HTMLDivElement).style.boxShadow =
-          "0 10px 28px rgba(0,0,0,0.10)";
+        (e.currentTarget as HTMLDivElement).style.transform = "translateY(-3px)";
+        (e.currentTarget as HTMLDivElement).style.boxShadow = "0 10px 28px rgba(0,0,0,0.10)";
       }}
       onMouseLeave={(e) => {
         (e.currentTarget as HTMLDivElement).style.transform = "translateY(0)";
@@ -193,18 +194,16 @@ function NewsCard({ item }: { item: NewsItem }) {
       }}
     >
       {/* ── Thumbnail ── */}
-      <div
-        style={{
-          position: "relative",
-          width: "100%",
-          aspectRatio: "16/9",
-          background: "#f3f4f6",
-          overflow: "hidden",
-          flexShrink: 0,
-        }}
-      >
+      <div style={{
+        position: "relative",
+        width: "100%",
+        aspectRatio: "16/9",
+        background: "#f3f4f6",
+        overflow: "hidden",
+        flexShrink: 0,
+      }}>
         <img
-          src={useDefault ? DEFAULT_IMG : item.background_image}
+          src={imgSrc}
           alt={item.title}
           style={{
             width: "100%",
@@ -214,93 +213,64 @@ function NewsCard({ item }: { item: NewsItem }) {
           }}
           onError={() => setImgError(true)}
         />
-        <div
-          style={{
-            position: "absolute",
-            inset: 0,
-            background:
-              "linear-gradient(to top, rgba(0,0,0,0.55) 0%, transparent 60%)",
-          }}
-        />
+        <div style={{
+          position: "absolute", inset: 0,
+          background: "linear-gradient(to top, rgba(0,0,0,0.55) 0%, transparent 60%)",
+        }} />
 
         {/* Category badge */}
-        <div
-          style={{
-            position: "absolute",
-            top: 10,
-            left: 10,
-            padding: "3px 10px",
-            borderRadius: 999,
-            fontSize: 10,
-            fontWeight: 700,
-            background: cs.bg,
-            color: cs.color,
-            border: `1px solid ${cs.border}`,
-            backdropFilter: "blur(6px)",
-            backgroundColor: "rgba(255,255,255,0.85)",
-          }}
-        >
+        <div style={{
+          position: "absolute", top: 10, left: 10,
+          padding: "3px 10px", borderRadius: 999,
+          fontSize: 10, fontWeight: 700,
+          background: "rgba(255,255,255,0.90)",
+          color: cs.color,
+          border: `1px solid ${cs.border}`,
+          backdropFilter: "blur(6px)",
+        }}>
           {item.category}
         </div>
       </div>
 
       {/* ── Body ── */}
-      <div
-        style={{
-          padding: "12px 14px 14px",
-          display: "flex",
-          flexDirection: "column",
-          gap: 8,
-          flex: 1,
-        }}
-      >
+      <div style={{
+        padding: "12px 14px 14px",
+        display: "flex",
+        flexDirection: "column",
+        gap: 8,
+        flex: 1,
+      }}>
         {/* Title */}
-        <h3
-          style={{
-            margin: 0,
-            fontSize: 13,
-            fontWeight: 700,
-            lineHeight: 1.5,
-            color: "#111827",
-            display: "-webkit-box",
-            WebkitLineClamp: 3,
-            WebkitBoxOrient: "vertical",
-            overflow: "hidden",
-          }}
+        <h3 style={{
+          margin: 0, fontSize: 13, fontWeight: 700,
+          lineHeight: 1.5, color: "#111827",
+          display: "-webkit-box",
+          WebkitLineClamp: 3,
+          WebkitBoxOrient: "vertical",
+          overflow: "hidden",
+        }}
           className="dark:text-white"
         >
           {item.title}
         </h3>
 
         {/* Date + arrow */}
-        <div
-          style={{
-            display: "flex",
-            alignItems: "center",
-            justifyContent: "space-between",
-            marginTop: "auto",
-          }}
-        >
-          <div
-            style={{
-              display: "flex",
-              alignItems: "center",
-              gap: 5,
-              color: "#9ca3af",
-              fontSize: 11,
-            }}
-          >
+        <div style={{
+          display: "flex", alignItems: "center",
+          justifyContent: "space-between",
+          marginTop: "auto",
+        }}>
+          <div style={{
+            display: "flex", alignItems: "center",
+            gap: 5, color: "#9ca3af", fontSize: 11,
+          }}>
             <CalendarIcon />
             <span>{formatDate(item.date)}</span>
           </div>
-          <span
-            style={{
-              display: "flex",
-              alignItems: "center",
-              color: "#465FFF",
-              opacity: 0.7,
-            }}
-          >
+          <span style={{
+            display: "flex", alignItems: "center",
+            color: "#465FFF", opacity: 0.7,
+          }}>
             <ArrowRightIcon />
           </span>
         </div>
