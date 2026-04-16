@@ -249,20 +249,21 @@ function ShowCard({ show }: { show: NormalizedShow }) {
           )}
 
           {/* Price badge (idn) */}
-          {show.source === "idn" && show.price !== undefined && (
-            <span style={{
-              display: "inline-flex", alignItems: "center", gap: 4,
-              fontSize: 10, fontWeight: 700,
-              padding: "3px 9px", borderRadius: 999,
-              background: "rgba(255,215,0,0.12)",
-              color: "#92400e",
-              border: "1px solid rgba(255,215,0,0.3)",
-            }}
-              className="dark:text-yellow-400"
-            >
-              🪙 {show.price} {show.currency?.toUpperCase()}
-            </span>
-          )}
+          {/* Price badge (idn) */}
+{show.source === "idn" && show.price !== undefined && (
+  <span style={{
+    display: "inline-flex", alignItems: "center", gap: 4,
+    fontSize: 10, fontWeight: 700,
+    padding: "3px 9px", borderRadius: 999,
+    background: "rgba(255,215,0,0.12)",
+    color: "#92400e",
+    border: "1px solid rgba(255,215,0,0.3)",
+  }}
+    className="dark:text-yellow-400"
+  >
+    🎟️ Rp 7.000
+  </span>
+)}
         </div>
 
         {/* Birthday members */}
