@@ -23,12 +23,26 @@ interface Session {
   user?: { user_id: string };
 }
 
+// ── Ganti fungsi getSession ────────────────────────────────────────────────
 const getSession = (): Session | null => {
   try {
-    const d = JSON.parse(
+    // Cek sessionStorage dulu, lalu fallback ke localStorage
+    const fromSession = JSON.parse(
       sessionStorage.getItem("userLogin") || "null"
     ) as Session | null;
-    if (d && d.isLoggedIn && d.token) return d;
+
+    if (fromSession && fromSession.isLoggedIn && fromSession.token) {
+      return fromSession;
+    }
+
+    const fromLocal = JSON.parse(
+      localStorage.getItem("userLogin") || "null"
+    ) as Session | null;
+
+    if (fromLocal && fromLocal.isLoggedIn && fromLocal.token) {
+      return fromLocal;
+    }
+
     return null;
   } catch {
     return null;
@@ -72,7 +86,7 @@ export default function NotificationDropdown() {
   const [unreadCount, setUnreadCount] = useState(0);
   const [loading, setLoading] = useState(false);
 
-  // ── FIX: cek session langsung saat init, bukan async ──────────────────
+  // Cek session sinkron saat pertama render
   const [isLoggedIn, setIsLoggedIn] = useState<boolean>(() => {
     return getSession() !== null;
   });
@@ -104,7 +118,6 @@ export default function NotificationDropdown() {
     }
   };
 
-  // ── FIX: cek session di useEffect juga untuk handle perubahan ─────────
   useEffect(() => {
     const session = getSession();
     if (session) {
