@@ -159,15 +159,23 @@ const ArrowRightIcon = () => (
   </svg>
 );
 
-// ── News Card ─────────────────────────────────────────────────────────────────
+// ── Tambahkan fungsi ini di News.tsx (setelah DEFAULT_IMG) ───────────────────
+function proxyImg(url: string): string {
+  if (!url) return DEFAULT_IMG;
+  if (!url.includes("jkt48.com")) return url;
+  return `https://autumn-limit-898f.aslannarnia806.workers.dev/?url=${encodeURIComponent(url)}`;
+}
+
+// ── Update NewsCard — ganti imgSrc ───────────────────────────────────────────
 function NewsCard({ item }: { item: NewsItem }) {
   const navigate = useNavigate();
   const [imgError, setImgError] = useState(false);
   const cs = getCategoryStyle(item.category);
 
-const imgSrc = imgError || !item.background_image
+  // Gunakan proxy untuk gambar dari jkt48.com
+  const imgSrc = imgError || !item.background_image
     ? DEFAULT_IMG
-    : item.background_image;
+    : proxyImg(item.background_image);
 
   return (
     <div
