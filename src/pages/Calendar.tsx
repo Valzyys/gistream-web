@@ -393,9 +393,9 @@ function ShowCard({ show }: { show: NormalizedShow }) {
 
 // ── Filter Tabs ──────────────────────────────────────────────────────────────
 const filterTabs: { key: FilterType; label: string; icon: string }[] = [
-  { key: "all", label: "Semua", icon: "🎭" },
-  { key: "live", label: "Live", icon: "🔴" },
-  { key: "scheduled", label: "Scheduled", icon: "📅" },
+  { key: "all", label: "Semua", icon: "" },
+  { key: "live", label: "Live", icon: "" },
+  { key: "scheduled", label: "Scheduled", icon: "" },
 ];
 
 // ── Main Page ────────────────────────────────────────────────────────────────
