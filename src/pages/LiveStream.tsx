@@ -2,16 +2,19 @@ import { useEffect, useState, useRef, useCallback } from "react";
 import { useParams, useNavigate } from "react-router";
 import Hls from "hls.js";
 import { createClient } from "@supabase/supabase-js";
+import ComponentCard from "../../components/common/ComponentCard";
+import PageBreadcrumb from "../../components/common/PageBreadCrumb";
+import PageMeta from "../../components/common/PageMeta";
 
 const supabaseUrl = import.meta.env.VITE_SUPABASE_URL || "https://mzxfuaoihgzxvokwarao.supabase.co";
 const supabaseKey = import.meta.env.VITE_SUPABASE_ANON_KEY || "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im16eGZ1YW9paGd6eHZva3dhcmFvIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzQ0MDg0NjIsImV4cCI6MjA4OTk4NDQ2Mn0.OFYCkBFXCSfLn-wG94OHHKL5CX8T_BLrbDGPiBdPIog";
 const supabase = createClient(supabaseUrl, supabaseKey);
 
-const API_BASE    = "https://v2.jkt48connect.com/api/jkt48connect";
-const API_KEY     = "JKTCONNECT";
-const PLAY_HOST   = "https://play.jkt48connect.com";
-const IDN_API     = "https://v2.jkt48connect.com/api/jkt48/idnplus?apikey=JKTCONNECT";
-const LIVE_API    = "https://v2.jkt48connect.com/api/jkt48/live?apikey=JKTCONNECT";
+const API_BASE  = "https://v2.jkt48connect.com/api/jkt48connect";
+const API_KEY   = "JKTCONNECT";
+const PLAY_HOST = "https://play.jkt48connect.com";
+const IDN_API   = "https://v2.jkt48connect.com/api/jkt48/idnplus?apikey=JKTCONNECT";
+const LIVE_API  = "https://v2.jkt48connect.com/api/jkt48/live?apikey=JKTCONNECT";
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 const getSession = () => {
@@ -26,7 +29,6 @@ const getSession = () => {
   } catch { return null; }
 };
 
-// Cek apakah param adalah slug IDN Plus (mengandung tanggal)
 const isIdnSlug = (param: string) => {
   if (!param) return false;
   return /\d{4}-\d{2}-\d{2}/.test(param);
@@ -34,15 +36,15 @@ const isIdnSlug = (param: string) => {
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 interface QualityOption {
-  index:       number;
-  name:        string;
-  quality:     string;
-  bandwidth:   number;
+  index:           number;
+  name:            string;
+  quality:         string;
+  bandwidth:       number;
   bandwidth_label: string;
-  resolution:  string;
-  fps:         string;
-  manual_url:  string;
-  playlist_url: string;
+  resolution:      string;
+  fps:             string;
+  manual_url:      string;
+  playlist_url:    string;
 }
 
 interface ChatMessage {
@@ -64,6 +66,7 @@ function HlsPlayer({
   currentQuality,
   qualityMode,
   onModeChange,
+  isIdn,
 }: {
   src:             string;
   title:           string;
@@ -72,6 +75,7 @@ function HlsPlayer({
   currentQuality:  QualityOption | null;
   qualityMode:     "auto" | "manual";
   onModeChange:    (mode: "auto" | "manual") => void;
+  isIdn:           boolean;
 }) {
   const videoRef = useRef<HTMLVideoElement>(null);
   const hlsRef   = useRef<Hls | null>(null);
@@ -129,35 +133,25 @@ function HlsPlayer({
   }, [src]);
 
   return (
-    <div style={{ position: "relative", width: "100%", background: "#000", borderRadius: 8, overflow: "hidden" }}>
-      <video
-        ref={videoRef}
-        controls
-        autoPlay
-        playsInline
-        style={{ width: "100%", aspectRatio: "16/9", display: "block" }}
-        title={title}
-      />
+    <div className="relative w-full bg-black rounded-xl overflow-hidden">
+      {/* IDN Plus: landscape 16:9 | Member: auto-detect dari video */}
+      <div className={isIdn ? "aspect-video" : ""}>
+        <video
+          ref={videoRef}
+          controls
+          autoPlay
+          playsInline
+          className={`w-full ${isIdn ? "h-full" : ""} block`}
+          title={title}
+        />
+      </div>
 
       {/* Quality Button */}
       {qualities.length > 0 && (
-        <div style={{ position: "absolute", bottom: 52, right: 8, zIndex: 20 }}>
+        <div className="absolute bottom-12 right-2 z-20">
           <button
             onClick={() => setShowQualityPanel((p) => !p)}
-            style={{
-              padding:      "5px 10px",
-              borderRadius: 6,
-              border:       "none",
-              background:   "rgba(0,0,0,0.75)",
-              color:        "#fff",
-              fontSize:     11,
-              fontWeight:   700,
-              cursor:       "pointer",
-              backdropFilter: "blur(4px)",
-              display:      "flex",
-              alignItems:   "center",
-              gap:          5,
-            }}
+            className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-md bg-black/75 backdrop-blur-sm text-white text-[11px] font-bold cursor-pointer border-0"
           >
             <svg width="12" height="12" viewBox="0 0 24 24" fill="none"
               stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
@@ -165,77 +159,39 @@ function HlsPlayer({
               <path d="M19.07 4.93a10 10 0 0 1 0 14.14M4.93 4.93a10 10 0 0 0 0 14.14" />
             </svg>
             {qualityMode === "auto" ? `Auto (${currentLevel})` : currentQuality?.name || currentLevel}
-            {bandwidth && <span style={{ opacity: 0.7, fontSize: 10 }}>· {bandwidth}</span>}
+            {bandwidth && <span className="opacity-70 text-[10px]">· {bandwidth}</span>}
           </button>
 
-          {/* Quality Panel */}
           {showQualityPanel && (
-            <div style={{
-              position:       "absolute",
-              bottom:         "calc(100% + 6px)",
-              right:          0,
-              background:     "rgba(15,15,15,0.95)",
-              backdropFilter: "blur(12px)",
-              border:         "1px solid rgba(255,255,255,0.1)",
-              borderRadius:   10,
-              padding:        8,
-              minWidth:       180,
-              boxShadow:      "0 8px 24px rgba(0,0,0,0.5)",
-            }}>
-              <div style={{ fontSize: 10, fontWeight: 700, color: "rgba(255,255,255,0.4)", padding: "4px 8px 8px", textTransform: "uppercase", letterSpacing: "0.05em" }}>
+            <div className="absolute bottom-[calc(100%+6px)] right-0 bg-[rgba(15,15,15,0.95)] backdrop-blur-xl border border-white/10 rounded-xl p-2 min-w-[180px] shadow-2xl">
+              <div className="text-[10px] font-bold text-white/40 px-2 pb-2 uppercase tracking-wide">
                 Kualitas Video
               </div>
-
-              {/* Auto option */}
               <button
                 onClick={() => { onModeChange("auto"); onQualityChange(null); setShowQualityPanel(false); }}
-                style={{
-                  width:        "100%",
-                  padding:      "8px 10px",
-                  borderRadius: 6,
-                  border:       "none",
-                  background:   qualityMode === "auto" ? "rgba(220,31,46,0.2)" : "transparent",
-                  color:        qualityMode === "auto" ? "#DC1F2E" : "rgba(255,255,255,0.8)",
-                  fontSize:     12,
-                  fontWeight:   qualityMode === "auto" ? 700 : 500,
-                  cursor:       "pointer",
-                  textAlign:    "left",
-                  display:      "flex",
-                  alignItems:   "center",
-                  justifyContent: "space-between",
-                  marginBottom: 2,
-                }}
+                className={`w-full px-2.5 py-2 rounded-md border-0 text-[12px] font-${qualityMode === "auto" ? "bold" : "medium"} cursor-pointer text-left flex items-center justify-between mb-0.5 ${
+                  qualityMode === "auto"
+                    ? "bg-brand-500/20 text-brand-500"
+                    : "bg-transparent text-white/80"
+                }`}
               >
                 <span>⚡ Auto</span>
-                {qualityMode === "auto" && <span style={{ fontSize: 10, opacity: 0.7 }}>{currentLevel}</span>}
+                {qualityMode === "auto" && <span className="text-[10px] opacity-70">{currentLevel}</span>}
               </button>
-
-              {/* Manual quality options */}
               {qualities.map((q) => {
                 const isActive = qualityMode === "manual" && currentQuality?.quality === q.quality;
                 return (
                   <button
                     key={q.quality}
                     onClick={() => { onModeChange("manual"); onQualityChange(q); setShowQualityPanel(false); }}
-                    style={{
-                      width:        "100%",
-                      padding:      "8px 10px",
-                      borderRadius: 6,
-                      border:       "none",
-                      background:   isActive ? "rgba(220,31,46,0.2)" : "transparent",
-                      color:        isActive ? "#DC1F2E" : "rgba(255,255,255,0.8)",
-                      fontSize:     12,
-                      fontWeight:   isActive ? 700 : 500,
-                      cursor:       "pointer",
-                      textAlign:    "left",
-                      display:      "flex",
-                      alignItems:   "center",
-                      justifyContent: "space-between",
-                      marginBottom: 2,
-                    }}
+                    className={`w-full px-2.5 py-2 rounded-md border-0 text-[12px] cursor-pointer text-left flex items-center justify-between mb-0.5 ${
+                      isActive
+                        ? "bg-brand-500/20 text-brand-500 font-bold"
+                        : "bg-transparent text-white/80 font-medium"
+                    }`}
                   >
                     <span>{q.name}</span>
-                    <span style={{ fontSize: 10, opacity: 0.6 }}>{q.bandwidth_label}</span>
+                    <span className="text-[10px] opacity-60">{q.bandwidth_label}</span>
                   </button>
                 );
               })}
@@ -268,108 +224,58 @@ function ChatPanel({
   navigate:        (path: string) => void;
 }) {
   return (
-    <div style={{
-      display:       "flex",
-      flexDirection: "column",
-      background:    "#0f0f0f",
-      border:        "1px solid rgba(255,255,255,0.08)",
-      borderRadius:  12,
-      overflow:      "hidden",
-      height:        "100%",
-      minHeight:     400,
-    }}>
+    <div className="flex flex-col h-full min-h-[400px] lg:min-h-0">
       {/* Header */}
-      <div style={{
-        padding:        "12px 16px",
-        borderBottom:   "1px solid rgba(255,255,255,0.08)",
-        display:        "flex",
-        alignItems:     "center",
-        justifyContent: "space-between",
-        background:     "rgba(255,255,255,0.02)",
-      }}>
-        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-          <span style={{
-            width: 8, height: 8, borderRadius: "50%",
-            background: "#DC1F2E", animation: "livePulse 1.5s infinite", display: "inline-block",
-          }} />
-          <span style={{ fontSize: 13, fontWeight: 700, color: "#fff" }}>Live Chat</span>
+      <div className="flex items-center justify-between px-4 py-3 border-b border-gray-200 dark:border-white/[0.08] bg-gray-50 dark:bg-white/[0.02]">
+        <div className="flex items-center gap-2">
+          <span className="inline-block w-2 h-2 rounded-full bg-error-500 animate-pulse" />
+          <span className="text-sm font-bold text-gray-900 dark:text-white">Live Chat</span>
         </div>
-        <span style={{ fontSize: 11, color: "rgba(255,255,255,0.35)" }}>
+        <span className="text-xs text-gray-400 dark:text-white/35">
           {messages.length} pesan
         </span>
       </div>
 
       {/* Messages */}
-      <div style={{
-        flex:          1,
-        overflowY:     "auto",
-        padding:       "12px",
-        display:       "flex",
-        flexDirection: "column",
-        gap:           8,
-      }}>
+      <div className="flex-1 overflow-y-auto p-3 flex flex-col gap-2">
         {messages.length === 0 && (
-          <div style={{
-            flex:           1,
-            display:        "flex",
-            alignItems:     "center",
-            justifyContent: "center",
-            color:          "rgba(255,255,255,0.2)",
-            fontSize:       13,
-            textAlign:      "center",
-            padding:        "32px 0",
-          }}>
+          <div className="flex-1 flex items-center justify-center text-gray-400 dark:text-white/20 text-sm text-center py-8">
             Belum ada pesan.<br />Jadilah yang pertama!
           </div>
         )}
-
         {messages.map((msg, idx) => (
-          <div key={idx} style={{ display: "flex", gap: 8, alignItems: "flex-start" }}>
+          <div key={idx} className="flex gap-2 items-start">
             <img
               src={msg.avatar_url || `https://ui-avatars.com/api/?name=${msg.username}&background=7b1c1c&color=fff`}
               alt={msg.username}
-              style={{ width: 28, height: 28, borderRadius: "50%", objectFit: "cover", flexShrink: 0 }}
+              className="w-7 h-7 rounded-full object-cover flex-shrink-0"
               onError={(e) => { (e.target as HTMLImageElement).src = `https://ui-avatars.com/api/?name=${msg.username}`; }}
             />
-            <div style={{ flex: 1, minWidth: 0 }}>
-              {/* Username row */}
-              <div style={{ display: "flex", alignItems: "center", gap: 4, flexWrap: "wrap", marginBottom: 2 }}>
+            <div className="flex-1 min-w-0">
+              <div className="flex items-center gap-1 flex-wrap mb-0.5">
                 {msg.role && msg.role !== "member" && (
-                  <span style={{
-                    fontSize:     9,
-                    fontWeight:   700,
-                    padding:      "1px 5px",
-                    borderRadius: 4,
-                    background:   msg.role === "admin" ? "rgba(220,31,46,0.25)" : "rgba(70,95,255,0.25)",
-                    color:        msg.role === "admin" ? "#ff6b6b" : "#7b8fff",
-                    textTransform: "uppercase",
-                    letterSpacing: "0.04em",
-                  }}>
+                  <span className={`text-[9px] font-bold px-1.5 py-0.5 rounded uppercase tracking-wide ${
+                    msg.role === "admin"
+                      ? "bg-error-500/25 text-error-400"
+                      : "bg-brand-500/25 text-brand-400"
+                  }`}>
                     {msg.role}
                   </span>
                 )}
-                <span style={{ fontSize: 12, fontWeight: 700, color: "rgba(255,255,255,0.85)" }}>
-                  {msg.username}
-                </span>
+                <span className="text-xs font-bold text-gray-800 dark:text-white/85">{msg.username}</span>
                 {msg.bluetick && (
                   <svg width="13" height="13" viewBox="0 0 24 24" fill="none">
                     <path d="M22.5 12.5c0-1.58-.875-2.95-2.148-3.6.154-.435.238-.905.238-1.4 0-2.21-1.71-3.998-3.918-3.998-.47 0-.92.084-1.336.25C14.818 2.415 13.51 1.5 12 1.5s-2.816.917-3.337 2.25c-.416-.165-.866-.25-1.336-.25-2.21 0-3.918 1.79-3.918 4 0 .495.084.965.238 1.4-1.273.65-2.148 2.02-2.148 3.6 0 1.46.726 2.75 1.83 3.444-.06.315-.09.64-.09.966 0 2.21 1.71 3.998 3.918 3.998.53 0 1.04-.1 1.51-.282.825 1.155 2.15 1.924 3.63 1.924s2.805-.767 3.63-1.924c.47.182.98.282 1.51.282 2.21 0 3.918-1.79 3.918-4 0-.325-.03-.65-.09-.966 1.105-.694 1.83-1.984 1.83-3.444z" fill="#1DA1F2"/>
                     <path d="M10.42 16.273L6.46 12.31l1.41-1.414 2.55 2.548 6.42-6.42 1.414 1.415-7.834 7.834z" fill="white"/>
                   </svg>
                 )}
-                <span style={{ fontSize: 10, color: "rgba(255,255,255,0.2)", marginLeft: "auto" }}>
+                <span className="text-[10px] text-gray-400 dark:text-white/20 ml-auto">
                   {new Date(msg.timestamp).toLocaleTimeString("id-ID", { hour: "2-digit", minute: "2-digit" })}
                 </span>
               </div>
-              {/* Message text */}
-              <div style={{
-                fontSize:   12,
-                lineHeight: 1.5,
-                color:      "rgba(255,255,255,0.7)",
-                wordBreak:  "break-word",
-              }}>
+              <p className="text-xs leading-relaxed text-gray-600 dark:text-white/70 break-words m-0">
                 {msg.text_content}
-              </div>
+              </p>
             </div>
           </div>
         ))}
@@ -377,52 +283,29 @@ function ChatPanel({
       </div>
 
       {/* Input */}
-      <div style={{
-        padding:     "10px 12px",
-        borderTop:   "1px solid rgba(255,255,255,0.08)",
-        background:  "rgba(255,255,255,0.02)",
-      }}>
+      <div className="px-3 py-2.5 border-t border-gray-200 dark:border-white/[0.08] bg-gray-50 dark:bg-white/[0.02]">
         {isChatLoggingIn ? (
-          <div style={{
-            textAlign:  "center",
-            fontSize:   12,
-            color:      "rgba(255,255,255,0.3)",
-            padding:    "8px 0",
-          }}>
+          <div className="text-center text-xs text-gray-400 dark:text-white/30 py-2">
             Memuat info akun...
           </div>
         ) : chatUser ? (
-          <form onSubmit={onSend} style={{ display: "flex", gap: 8 }}>
+          <form onSubmit={onSend} className="flex gap-2">
             <input
               type="text"
               value={chatInput}
               onChange={(e) => setChatInput(e.target.value)}
               placeholder={`Kirim sebagai ${chatUser.username}...`}
               maxLength={200}
-              style={{
-                flex:         1,
-                padding:      "8px 12px",
-                borderRadius: 8,
-                border:       "1px solid rgba(255,255,255,0.1)",
-                background:   "rgba(255,255,255,0.06)",
-                color:        "#fff",
-                fontSize:     12,
-                outline:      "none",
-              }}
+              className="flex-1 px-3 py-2 rounded-lg border border-gray-200 dark:border-white/10 bg-white dark:bg-white/[0.06] text-gray-900 dark:text-white text-xs outline-none focus:ring-2 focus:ring-brand-500/50 placeholder:text-gray-400"
             />
             <button
               type="submit"
               disabled={!chatInput.trim()}
-              style={{
-                padding:      "8px 12px",
-                borderRadius: 8,
-                border:       "none",
-                background:   chatInput.trim() ? "#DC1F2E" : "rgba(255,255,255,0.08)",
-                color:        chatInput.trim() ? "#fff" : "rgba(255,255,255,0.3)",
-                cursor:       chatInput.trim() ? "pointer" : "not-allowed",
-                transition:   "all 0.15s",
-                flexShrink:   0,
-              }}
+              className={`px-3 py-2 rounded-lg border-0 flex-shrink-0 transition-all duration-150 flex items-center justify-center ${
+                chatInput.trim()
+                  ? "bg-brand-500 text-white cursor-pointer hover:bg-brand-600"
+                  : "bg-gray-100 dark:bg-white/[0.08] text-gray-400 dark:text-white/30 cursor-not-allowed"
+              }`}
             >
               <svg width="16" height="16" viewBox="0 0 24 24" fill="none"
                 stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
@@ -432,11 +315,11 @@ function ChatPanel({
             </button>
           </form>
         ) : (
-          <div style={{ textAlign: "center", fontSize: 12, color: "rgba(255,255,255,0.35)", padding: "4px 0" }}>
+          <div className="text-center text-xs text-gray-500 dark:text-white/35 py-1">
             Hanya bisa melihat chat.{" "}
             <span
               onClick={() => navigate("/signin")}
-              style={{ color: "#DC1F2E", cursor: "pointer", fontWeight: 700 }}
+              className="text-brand-500 cursor-pointer font-bold hover:underline"
             >
               Login
             </span>{" "}
@@ -453,23 +336,18 @@ function LiveStream() {
   const { playbackId } = useParams<{ playbackId: string }>();
   const navigate       = useNavigate();
 
-  // ── Mode detection ────────────────────────────────────────────────────────
   const isIdn    = isIdnSlug(playbackId || "");
-  // Member live: url_key seperti "jkt48-official"
   const isMember = !isIdn;
 
-  // ── IDN Plus states ───────────────────────────────────────────────────────
   const [idnShow,          setIdnShow]          = useState<any>(null);
   const [qualities,        setQualities]        = useState<QualityOption[]>([]);
   const [qualityMode,      setQualityMode]      = useState<"auto" | "manual">("auto");
   const [currentQuality,   setCurrentQuality]   = useState<QualityOption | null>(null);
   const [hlsUrl,           setHlsUrl]           = useState("");
 
-  // ── Member live states ────────────────────────────────────────────────────
   const [memberShow,       setMemberShow]       = useState<any>(null);
   const [memberHlsUrl,     setMemberHlsUrl]     = useState("");
 
-  // ── Verification states (IDN only) ───────────────────────────────────────
   const [membershipLoading, setMembershipLoading] = useState(isIdn);
   const [hasMembership,     setHasMembership]     = useState(false);
   const [isVerified,        setIsVerified]        = useState(false);
@@ -479,20 +357,17 @@ function LiveStream() {
   const [verifying,         setVerifying]         = useState(false);
   const [clientIP,          setClientIP]          = useState("");
 
-  // ── Common states ─────────────────────────────────────────────────────────
-  const [loading,          setLoading]          = useState(true);
-  const [error,            setError]            = useState("");
-  const [members,          setMembers]          = useState<any[]>([]);
+  const [loading,  setLoading]  = useState(true);
+  const [error,    setError]    = useState("");
+  const [members,  setMembers]  = useState<any[]>([]);
 
-  // ── Chat states ───────────────────────────────────────────────────────────
-  const [chatMessages,     setChatMessages]     = useState<ChatMessage[]>([]);
-  const [chatInput,        setChatInput]        = useState("");
-  const [chatUser,         setChatUser]         = useState<any>(null);
-  const [isChatLoggingIn,  setIsChatLoggingIn]  = useState(true);
-  const chatEndRef  = useRef<HTMLDivElement>(null);
-  const channelRef  = useRef<any>(null);
+  const [chatMessages,    setChatMessages]    = useState<ChatMessage[]>([]);
+  const [chatInput,       setChatInput]       = useState("");
+  const [chatUser,        setChatUser]        = useState<any>(null);
+  const [isChatLoggingIn, setIsChatLoggingIn] = useState(true);
+  const chatEndRef = useRef<HTMLDivElement>(null);
+  const channelRef = useRef<any>(null);
 
-  // ── Fetch client IP ───────────────────────────────────────────────────────
   const fetchClientIP = async () => {
     try {
       const res  = await fetch("https://api.ipify.org?format=json");
@@ -502,7 +377,6 @@ function LiveStream() {
     } catch { return "unknown"; }
   };
 
-  // ── Check membership ──────────────────────────────────────────────────────
   const checkMembership = useCallback(async () => {
     setMembershipLoading(true);
     const session = getSession();
@@ -524,7 +398,6 @@ function LiveStream() {
     return false;
   }, []);
 
-  // ── Check existing verification ───────────────────────────────────────────
   const checkExistingVerification = async () => {
     const stored = localStorage.getItem("stream_verification");
     if (!stored) { setShowVerification(true); return false; }
@@ -550,7 +423,6 @@ function LiveStream() {
     }
   };
 
-    // ── Verify access ─────────────────────────────────────────────────────────
   const verifyAccess = async () => {
     if (!verifData.email || !verifData.code) {
       setVerifyError("Email dan code wajib diisi"); return;
@@ -558,33 +430,25 @@ function LiveStream() {
     setVerifying(true); setVerifyError("");
     try {
       const ip = clientIP || (await fetchClientIP());
-
       const verifyRes  = await fetch("https://v2.jkt48connect.com/api/codes/verify", {
         method:  "POST",
         headers: { "Content-Type": "application/json" },
         body:    JSON.stringify({ email: verifData.email, code: verifData.code, apikey: "JKTCONNECT" }),
       });
       const verifyData = await verifyRes.json();
-
       if (!verifyData.status) {
         setVerifyError(verifyData.message || "Code tidak valid atau sudah kedaluwarsa");
         setVerifying(false); return;
       }
-
-      const codeData        = verifyData.data;
+      const codeData     = verifyData.data;
       if (!codeData.is_active) {
         setVerifyError("Code ini sudah tidak aktif"); setVerifying(false); return;
       }
-
-      const usageCount      = parseInt(codeData.usage_count) || 0;
-      const usageLimit      = parseInt(codeData.usage_limit)  || 1;
-      const hasUsageLeft    = usageCount < usageLimit;
-
+      const usageCount   = parseInt(codeData.usage_count) || 0;
+      const usageLimit   = parseInt(codeData.usage_limit) || 1;
+      const hasUsageLeft = usageCount < usageLimit;
       if (codeData.is_used && !hasUsageLeft) {
-        // Cek apakah IP sama (izinkan re-use dari IP yang sama)
-        const listRes  = await fetch(
-          `https://v2.jkt48connect.com/api/codes/list?email=${verifData.email}&apikey=JKTCONNECT`
-        );
+        const listRes  = await fetch(`https://v2.jkt48connect.com/api/codes/list?email=${verifData.email}&apikey=JKTCONNECT`);
         const listData = await listRes.json();
         if (listData.status && listData.data?.wotatokens) {
           const userCode = listData.data.wotatokens.find((c: any) => c.code === verifData.code);
@@ -593,29 +457,23 @@ function LiveStream() {
               setVerifyError("Code ini sudah digunakan dari IP address yang berbeda");
               setVerifying(false); return;
             }
-            // IP sama → izinkan
             localStorage.setItem("stream_verification", JSON.stringify({
-              email: verifData.email, code: verifData.code,
-              ip, timestamp: Date.now(), verified: true,
+              email: verifData.email, code: verifData.code, ip, timestamp: Date.now(), verified: true,
             }));
             setIsVerified(true); setShowVerification(false); setVerifying(false); return;
           }
         }
         setVerifyError("Code sudah tidak dapat digunakan"); setVerifying(false); return;
       }
-
-      // Gunakan code
       const useRes  = await fetch("https://v2.jkt48connect.com/api/codes/use", {
         method:  "POST",
         headers: { "Content-Type": "application/json" },
         body:    JSON.stringify({ email: verifData.email, code: verifData.code, apikey: "JKTCONNECT" }),
       });
       const useData = await useRes.json();
-
       if (useData.status) {
         localStorage.setItem("stream_verification", JSON.stringify({
-          email: verifData.email, code: verifData.code,
-          ip, timestamp: Date.now(), verified: true,
+          email: verifData.email, code: verifData.code, ip, timestamp: Date.now(), verified: true,
         }));
         setIsVerified(true); setShowVerification(false); setVerifying(false);
       } else {
@@ -628,112 +486,69 @@ function LiveStream() {
     }
   };
 
-  // ── Load IDN Plus stream ──────────────────────────────────────────────────
   const loadIdnStream = useCallback(async () => {
     setLoading(true); setError("");
     try {
-      // 1. Fetch IDN Plus API → cari show yang live & slug cocok
       const idnRes  = await fetch(IDN_API);
       const idnData = await idnRes.json();
-
       if (!idnData || idnData.status !== 200 || !Array.isArray(idnData.data)) {
         setError("Gagal mengambil data IDN Plus"); setLoading(false); return;
       }
-
-      // Cari berdasarkan slug
-      const show = idnData.data.find(
-        (s: any) => s.slug === playbackId && s.status === "live"
-      );
-
+      const show = idnData.data.find((s: any) => s.slug === playbackId && s.status === "live");
       if (!show) {
         setError("Show tidak ditemukan atau sudah berakhir"); setLoading(false); return;
       }
-
       setIdnShow(show);
-
       const showId = show.showId;
       const slug   = show.slug;
-
-      // 2. Fetch qualities dari play.jkt48connect.com
-      const qualRes  = await fetch(
-        `${PLAY_HOST}/live/idn/${slug}/qualities.json?showId=${showId}`
-      );
+      const qualRes  = await fetch(`${PLAY_HOST}/live/idn/${slug}/qualities.json?showId=${showId}`);
       const qualData = await qualRes.json();
-
-      if (qualData.success && Array.isArray(qualData.qualities)) {
-        setQualities(qualData.qualities);
-      }
-
-      // 3. Set HLS URL (auto = master.m3u8)
-      const autoUrl = `${PLAY_HOST}/live/idn/${slug}/master.m3u8?showId=${showId}`;
-      setHlsUrl(autoUrl);
-
-      // 4. Fetch members dari theater API (nearest show)
+      if (qualData.success && Array.isArray(qualData.qualities)) setQualities(qualData.qualities);
+      setHlsUrl(`${PLAY_HOST}/live/idn/${slug}/master.m3u8?showId=${showId}`);
       try {
-        const theaterRes  = await fetch(
-          `https://v2.jkt48connect.com/api/jkt48/theater?apikey=${API_KEY}`
-        );
+        const theaterRes  = await fetch(`https://v2.jkt48connect.com/api/jkt48/theater?apikey=${API_KEY}`);
         const theaterData = await theaterRes.json();
         if (theaterData.theater?.length > 0) {
-          const now     = Date.now();
-          let nearest   = theaterData.theater[0];
-          let minDiff   = Math.abs(new Date(nearest.date).getTime() - now);
+          const now   = Date.now();
+          let nearest = theaterData.theater[0];
+          let minDiff = Math.abs(new Date(nearest.date).getTime() - now);
           theaterData.theater.forEach((s: any) => {
             const diff = Math.abs(new Date(s.date).getTime() - now);
             if (diff < minDiff) { minDiff = diff; nearest = s; }
           });
-          const detailRes  = await fetch(
-            `https://v2.jkt48connect.com/api/jkt48/theater/${nearest.id}?apikey=${API_KEY}`
-          );
+          const detailRes  = await fetch(`https://v2.jkt48connect.com/api/jkt48/theater/${nearest.id}?apikey=${API_KEY}`);
           const detailData = await detailRes.json();
           if (detailData.shows?.[0]?.members) setMembers(detailData.shows[0].members);
         }
       } catch {}
-
       setLoading(false);
     } catch (e) {
-      console.error("loadIdnStream error:", e);
-      setError("Terjadi kesalahan saat memuat stream.");
-      setLoading(false);
+      setError("Terjadi kesalahan saat memuat stream."); setLoading(false);
     }
   }, [playbackId]);
 
-  // ── Load Member live stream ───────────────────────────────────────────────
   const loadMemberStream = useCallback(async () => {
     setLoading(true); setError("");
     try {
       const res  = await fetch(LIVE_API);
       const data = await res.json();
-
       if (!Array.isArray(data)) {
         setError("Gagal mengambil data live member"); setLoading(false); return;
       }
-
-      // Cari berdasarkan url_key
       const show = data.find((s: any) => s.url_key === playbackId);
-
       if (!show) {
         setError("Member tidak sedang live saat ini"); setLoading(false); return;
       }
-
       setMemberShow(show);
-
-      // Ambil URL stream pertama
       const streamUrl = show.streaming_url_list?.[0]?.url || null;
-      if (!streamUrl) {
-        setError("URL stream tidak tersedia"); setLoading(false); return;
-      }
-
+      if (!streamUrl) { setError("URL stream tidak tersedia"); setLoading(false); return; }
       setMemberHlsUrl(streamUrl);
       setLoading(false);
-    } catch (e) {
-      console.error("loadMemberStream error:", e);
-      setError("Terjadi kesalahan saat memuat stream member.");
-      setLoading(false);
+    } catch {
+      setError("Terjadi kesalahan saat memuat stream member."); setLoading(false);
     }
   }, [playbackId]);
 
-  // ── Handle quality change ─────────────────────────────────────────────────
   const handleQualityChange = (q: QualityOption | null) => {
     setCurrentQuality(q);
     if (!q || !idnShow) return;
@@ -743,13 +558,11 @@ function LiveStream() {
   const handleModeChange = (mode: "auto" | "manual") => {
     setQualityMode(mode);
     if (mode === "auto" && idnShow) {
-      const autoUrl = `${PLAY_HOST}/live/idn/${idnShow.slug}/master.m3u8?showId=${idnShow.showId}`;
-      setHlsUrl(autoUrl);
+      setHlsUrl(`${PLAY_HOST}/live/idn/${idnShow.slug}/master.m3u8?showId=${idnShow.showId}`);
       setCurrentQuality(null);
     }
   };
 
-  // ── Init chat ─────────────────────────────────────────────────────────────
   const initChat = useCallback(async () => {
     setIsChatLoggingIn(true);
     let userData: any = null;
@@ -759,10 +572,9 @@ function LiveStream() {
         const parsed = JSON.parse(rawData);
         if (parsed?.isLoggedIn && parsed?.token && parsed?.user?.user_id) {
           try {
-            const res         = await fetch(
-              `${API_BASE}/profile/${parsed.user.user_id}?apikey=${API_KEY}`,
-              { headers: { Authorization: `Bearer ${parsed.token}` } }
-            );
+            const res         = await fetch(`${API_BASE}/profile/${parsed.user.user_id}?apikey=${API_KEY}`, {
+              headers: { Authorization: `Bearer ${parsed.token}` },
+            });
             const profileData = await res.json();
             userData = profileData.status && profileData.data ? profileData.data : parsed.user;
           } catch { userData = parsed.user; }
@@ -771,7 +583,6 @@ function LiveStream() {
         }
       }
     } catch {}
-
     if (userData && (userData.username || userData.full_name)) {
       const username   = userData.username || userData.full_name;
       const email      = userData.email || `${username.replace(/\s+/g, "").toLowerCase()}@jkt48connect.local`;
@@ -799,7 +610,6 @@ function LiveStream() {
     setIsChatLoggingIn(false);
   }, []);
 
-  // ── Handle send message ───────────────────────────────────────────────────
   const handleSendMessage = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!chatInput.trim() || !chatUser) return;
@@ -817,26 +627,20 @@ function LiveStream() {
     await channelRef.current?.send({ type: "broadcast", event: "pesan_baru", payload });
   };
 
-  // ── Effects ───────────────────────────────────────────────────────────────
   useEffect(() => {
-    // Setup realtime chat
     const channel = supabase.channel(`chat-${playbackId}`, {
       config: { broadcast: { ack: true } },
     });
     channel
       .on("broadcast", { event: "pesan_baru" }, ({ payload }: { payload: ChatMessage }) => {
         setChatMessages((prev) => {
-          const exists = prev.some(
-            (m) => m.timestamp === payload.timestamp && m.username === payload.username
-          );
+          const exists = prev.some((m) => m.timestamp === payload.timestamp && m.username === payload.username);
           return exists ? prev : [...prev, payload];
         });
       })
       .subscribe();
     channelRef.current = channel;
-
     initChat();
-
     return () => { supabase.removeChannel(channel); };
   }, [playbackId, initChat]);
 
@@ -846,10 +650,8 @@ function LiveStream() {
 
   useEffect(() => {
     if (isMember) {
-      // Member live: langsung load tanpa verifikasi
       loadMemberStream();
     } else {
-      // IDN Plus: cek membership / verifikasi dulu
       const init = async () => {
         await fetchClientIP();
         const hasMember = await checkMembership();
@@ -858,11 +660,8 @@ function LiveStream() {
           await loadIdnStream();
         } else {
           const verified = await checkExistingVerification();
-          if (verified) {
-            await loadIdnStream();
-          } else {
-            setLoading(false);
-          }
+          if (verified) await loadIdnStream();
+          else setLoading(false);
         }
       };
       init();
@@ -870,12 +669,9 @@ function LiveStream() {
   }, [isMember]); // eslint-disable-line
 
   useEffect(() => {
-    if (isIdn && isVerified && !idnShow) {
-      loadIdnStream();
-    }
+    if (isIdn && isVerified && !idnShow) loadIdnStream();
   }, [isVerified]); // eslint-disable-line
 
-  // ── Logout / reset verif ──────────────────────────────────────────────────
   const handleLogout = () => {
     localStorage.removeItem("stream_verification");
     setIsVerified(false); setShowVerification(true);
@@ -883,764 +679,419 @@ function LiveStream() {
     setVerifData({ email: "", code: "" });
   };
 
-  // ─────────────────────────────────────────────────────────────────────────
-  // ── RENDER ────────────────────────────────────────────────────────────────
-  // ─────────────────────────────────────────────────────────────────────────
-
-  // Loading membership check
-  if (isIdn && membershipLoading) {
-    return (
-      <div style={styles.fullCenter}>
-        <div style={styles.spinner} />
-        <p style={styles.loadingText}>Memeriksa akses...</p>
-      </div>
-    );
-  }
-
-   // Verification page (IDN only)
-  if (isIdn && showVerification && !isVerified) {
-    return (
-      <div style={{
-        minHeight:      "100vh",
-        background:     "#0a0a0a",
-        display:        "flex",
-        alignItems:     "center",
-        justifyContent: "center",
-        padding:        16,
-      }}>
-        <div style={{
-          background:   "#111",
-          border:       "1px solid rgba(255,255,255,0.08)",
-          borderRadius: 16,
-          padding:      "32px 28px",
-          width:        "100%",
-          maxWidth:     420,
-          boxShadow:    "0 24px 64px rgba(0,0,0,0.6)",
-        }}>
-          {/* Logo */}
-          <div style={{ textAlign: "center", marginBottom: 24 }}>
-            <div style={{
-              display:        "inline-flex",
-              alignItems:     "center",
-              justifyContent: "center",
-              width:          52,
-              height:         52,
-              borderRadius:   14,
-              background:     "rgba(220,31,46,0.12)",
-              border:         "1px solid rgba(220,31,46,0.25)",
-              marginBottom:   12,
-            }}>
-              <svg width="26" height="26" viewBox="0 0 24 24" fill="none"
-                stroke="#DC1F2E" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                <rect x="3" y="11" width="18" height="11" rx="2" ry="2" />
-                <path d="M7 11V7a5 5 0 0 1 10 0v4" />
-              </svg>
-            </div>
-            <h2 style={{ margin: 0, fontSize: 20, fontWeight: 800, color: "#fff" }}>
-              Verifikasi Akses
-            </h2>
-            <p style={{ margin: "6px 0 0", fontSize: 13, color: "rgba(255,255,255,0.4)" }}>
-              Masukkan email dan kode untuk mengakses live stream
-            </p>
-          </div>
-
-          {/* Form */}
-          <form onSubmit={(e) => { e.preventDefault(); verifyAccess(); }}
-            style={{ display: "flex", flexDirection: "column", gap: 14 }}>
-
-            {/* Email */}
-            <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
-              <label style={{ fontSize: 12, fontWeight: 600, color: "rgba(255,255,255,0.5)" }}>
-                Email
-              </label>
-              <input
-                type="email"
-                value={verifData.email}
-                onChange={(e) => { setVerifData((p) => ({ ...p, email: e.target.value })); setVerifyError(""); }}
-                placeholder="email@example.com"
-                required
-                style={{
-                  padding:      "10px 14px",
-                  borderRadius: 8,
-                  border:       "1px solid rgba(255,255,255,0.1)",
-                  background:   "rgba(255,255,255,0.05)",
-                  color:        "#fff",
-                  fontSize:     13,
-                  outline:      "none",
-                }}
-              />
-            </div>
-
-            {/* Code */}
-            <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
-              <label style={{ fontSize: 12, fontWeight: 600, color: "rgba(255,255,255,0.5)" }}>
-                Verification Code
-              </label>
-              <input
-                type="text"
-                value={verifData.code}
-                onChange={(e) => { setVerifData((p) => ({ ...p, code: e.target.value })); setVerifyError(""); }}
-                placeholder="Masukkan kode verifikasi"
-                required
-                style={{
-                  padding:      "10px 14px",
-                  borderRadius: 8,
-                  border:       "1px solid rgba(255,255,255,0.1)",
-                  background:   "rgba(255,255,255,0.05)",
-                  color:        "#fff",
-                  fontSize:     13,
-                  outline:      "none",
-                  letterSpacing: "0.05em",
-                }}
-              />
-            </div>
-
-            {/* Error */}
-            {verifyError && (
-              <div style={{
-                padding:      "10px 14px",
-                borderRadius: 8,
-                background:   "rgba(220,31,46,0.12)",
-                border:       "1px solid rgba(220,31,46,0.3)",
-                fontSize:     12,
-                color:        "#ff6b6b",
-                display:      "flex",
-                alignItems:   "center",
-                gap:          8,
-              }}>
-                <svg width="14" height="14" viewBox="0 0 24 24" fill="none"
-                  stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                  <circle cx="12" cy="12" r="10" />
-                  <line x1="12" y1="8" x2="12" y2="12" />
-                  <line x1="12" y1="16" x2="12.01" y2="16" />
-                </svg>
-                {verifyError}
-              </div>
-            )}
-
-            {/* Submit */}
-            <button
-              type="submit"
-              disabled={verifying}
-              style={{
-                padding:        "12px",
-                borderRadius:   10,
-                border:         "none",
-                background:     verifying ? "rgba(220,31,46,0.4)" : "#DC1F2E",
-                color:          "#fff",
-                fontSize:       14,
-                fontWeight:     700,
-                cursor:         verifying ? "not-allowed" : "pointer",
-                display:        "flex",
-                alignItems:     "center",
-                justifyContent: "center",
-                gap:            8,
-                transition:     "all 0.2s",
-                boxShadow:      verifying ? "none" : "0 4px 16px rgba(220,31,46,0.35)",
-              }}
-            >
-              {verifying ? (
-                <>
-                  <div style={{
-                    width:        16,
-                    height:       16,
-                    border:       "2px solid rgba(255,255,255,0.3)",
-                    borderTop:    "2px solid #fff",
-                    borderRadius: "50%",
-                    animation:    "spin 0.8s linear infinite",
-                  }} />
-                  Memverifikasi...
-                </>
-              ) : (
-                <>
-                  <svg width="15" height="15" viewBox="0 0 24 24" fill="none"
-                    stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
-                    <polyline points="20 6 9 17 4 12" />
-                  </svg>
-                  Verifikasi Akses
-                </>
-              )}
-            </button>
-          </form>
-
-          {/* Info box */}
-          <div style={{
-            marginTop:    16,
-            padding:      "12px 14px",
-            borderRadius: 8,
-            background:   "rgba(255,255,255,0.03)",
-            border:       "1px solid rgba(255,255,255,0.06)",
-          }}>
-            <p style={{ margin: "0 0 8px", fontSize: 11, fontWeight: 700, color: "rgba(255,255,255,0.4)", textTransform: "uppercase", letterSpacing: "0.05em" }}>
-              Informasi
-            </p>
-            <ul style={{ margin: 0, padding: "0 0 0 16px", display: "flex", flexDirection: "column", gap: 4 }}>
-              {[
-                "Code verifikasi hanya dapat digunakan sekali",
-                "IP address akan dicatat untuk keamanan",
-                "Akses berlaku selama 5 jam",
-                "Session tetap aktif saat refresh halaman",
-              ].map((info, i) => (
-                <li key={i} style={{ fontSize: 11, color: "rgba(255,255,255,0.35)", lineHeight: 1.5 }}>
-                  {info}
-                </li>
-              ))}
-            </ul>
-            <div style={{ marginTop: 10, paddingTop: 10, borderTop: "1px solid rgba(255,255,255,0.06)", fontSize: 11, color: "rgba(255,255,255,0.35)" }}>
-              Punya membership monthly?{" "}
-              <span
-                onClick={() => navigate("/signin")}
-                style={{ color: "#DC1F2E", cursor: "pointer", fontWeight: 700 }}
-              >
-                Login di sini
-              </span>
-            </div>
-          </div>
-
-          {/* Back button */}
-          <button
-            onClick={() => navigate(-1)}
-            style={{
-              marginTop:      14,
-              width:          "100%",
-              padding:        "10px",
-              borderRadius:   8,
-              border:         "1px solid rgba(255,255,255,0.08)",
-              background:     "transparent",
-              color:          "rgba(255,255,255,0.4)",
-              fontSize:       13,
-              cursor:         "pointer",
-              display:        "flex",
-              alignItems:     "center",
-              justifyContent: "center",
-              gap:            6,
-            }}
-          >
-            ← Kembali
-          </button>
-        </div>
-      </div>
-    );
-  }
-
-  // Loading stream
-  if (loading) {
-    return (
-      <div style={styles.fullCenter}>
-        <div style={styles.spinner} />
-        <p style={styles.loadingText}>
-          {isIdn ? "Memuat IDN Live Plus..." : "Memuat live stream member..."}
-        </p>
-      </div>
-    );
-  }
-
-  // Error
-  if (error) {
-    return (
-      <div style={styles.fullCenter}>
-        <div style={{
-          width:          52,
-          height:         52,
-          borderRadius:   "50%",
-          background:     "rgba(220,31,46,0.12)",
-          border:         "1px solid rgba(220,31,46,0.25)",
-          display:        "flex",
-          alignItems:     "center",
-          justifyContent: "center",
-          marginBottom:   16,
-        }}>
-          <svg width="24" height="24" viewBox="0 0 24 24" fill="none"
-            stroke="#DC1F2E" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-            <circle cx="12" cy="12" r="10" />
-            <line x1="12" y1="8" x2="12" y2="12" />
-            <line x1="12" y1="16" x2="12.01" y2="16" />
-          </svg>
-        </div>
-        <h3 style={{ margin: "0 0 8px", color: "#fff", fontSize: 16 }}>Terjadi Kesalahan</h3>
-        <p style={{ margin: "0 0 20px", color: "rgba(255,255,255,0.4)", fontSize: 13, textAlign: "center" }}>
-          {error}
-        </p>
-        <div style={{ display: "flex", gap: 10 }}>
-          <button
-            onClick={() => { setError(""); isIdn ? loadIdnStream() : loadMemberStream(); }}
-            style={styles.btnPrimary}
-          >
-            ↺ Coba Lagi
-          </button>
-          <button onClick={() => navigate(-1)} style={styles.btnSecondary}>
-            ← Kembali
-          </button>
-        </div>
-      </div>
-    );
-  }
-
-  // ── Main render ───────────────────────────────────────────────────────────
   const showTitle = isIdn
     ? (idnShow?.title || "Live Stream JKT48")
     : (memberShow?.name || "Live Member JKT48");
 
-  const showImage = isIdn
-    ? (idnShow?.image_url || "")
-    : (memberShow?.img || memberShow?.img_alt || "");
+  // ── Loading membership ────────────────────────────────────────────────────
+  if (isIdn && membershipLoading) {
+    return (
+      <>
+        <PageMeta title="Memeriksa Akses..." description="Live Stream JKT48" />
+        <div className="min-h-screen flex flex-col items-center justify-center gap-3 bg-gray-50 dark:bg-gray-900">
+          <div className="w-9 h-9 border-4 border-brand-500/20 border-t-brand-500 rounded-full animate-spin" />
+          <p className="text-sm text-gray-500 dark:text-white/40">Memeriksa akses...</p>
+        </div>
+      </>
+    );
+  }
 
+  // ── Verification page ────────────────────────────────────────────────────
+  if (isIdn && showVerification && !isVerified) {
+    return (
+      <>
+        <PageMeta title="Verifikasi Akses - Live Stream" description="Verifikasi akses live stream JKT48" />
+        <div className="min-h-screen flex items-center justify-center p-4 bg-gray-50 dark:bg-gray-900">
+          <div className="w-full max-w-md">
+            <div className="bg-white dark:bg-gray-800 border border-gray-200 dark:border-white/[0.08] rounded-2xl p-8 shadow-xl">
+              {/* Logo */}
+              <div className="text-center mb-6">
+                <div className="inline-flex items-center justify-center w-14 h-14 rounded-2xl bg-brand-500/10 border border-brand-500/25 mb-3">
+                  <svg width="26" height="26" viewBox="0 0 24 24" fill="none"
+                    stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"
+                    className="text-brand-500">
+                    <rect x="3" y="11" width="18" height="11" rx="2" ry="2" />
+                    <path d="M7 11V7a5 5 0 0 1 10 0v4" />
+                  </svg>
+                </div>
+                <h2 className="text-xl font-extrabold text-gray-900 dark:text-white m-0">
+                  Verifikasi Akses
+                </h2>
+                <p className="text-sm text-gray-500 dark:text-white/40 mt-1.5">
+                  Masukkan email dan kode untuk mengakses live stream
+                </p>
+              </div>
+
+              {/* Form */}
+              <form
+                onSubmit={(e) => { e.preventDefault(); verifyAccess(); }}
+                className="flex flex-col gap-4"
+              >
+                <div className="flex flex-col gap-1.5">
+                  <label className="text-xs font-semibold text-gray-500 dark:text-white/50">Email</label>
+                  <input
+                    type="email"
+                    value={verifData.email}
+                    onChange={(e) => { setVerifData((p) => ({ ...p, email: e.target.value })); setVerifyError(""); }}
+                    placeholder="email@example.com"
+                    required
+                    className="px-3.5 py-2.5 rounded-lg border border-gray-200 dark:border-white/10 bg-gray-50 dark:bg-white/[0.05] text-gray-900 dark:text-white text-sm outline-none focus:ring-2 focus:ring-brand-500/40 focus:border-brand-500 placeholder:text-gray-400"
+                  />
+                </div>
+
+                <div className="flex flex-col gap-1.5">
+                  <label className="text-xs font-semibold text-gray-500 dark:text-white/50">Verification Code</label>
+                  <input
+                    type="text"
+                    value={verifData.code}
+                    onChange={(e) => { setVerifData((p) => ({ ...p, code: e.target.value })); setVerifyError(""); }}
+                    placeholder="Masukkan kode verifikasi"
+                    required
+                    className="px-3.5 py-2.5 rounded-lg border border-gray-200 dark:border-white/10 bg-gray-50 dark:bg-white/[0.05] text-gray-900 dark:text-white text-sm outline-none focus:ring-2 focus:ring-brand-500/40 focus:border-brand-500 placeholder:text-gray-400 tracking-wider"
+                  />
+                </div>
+
+                {verifyError && (
+                  <div className="flex items-center gap-2 px-3.5 py-2.5 rounded-lg bg-error-50 dark:bg-error-500/12 border border-error-200 dark:border-error-500/30 text-error-600 dark:text-error-400 text-xs">
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none"
+                      stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                      <circle cx="12" cy="12" r="10" />
+                      <line x1="12" y1="8" x2="12" y2="12" />
+                      <line x1="12" y1="16" x2="12.01" y2="16" />
+                    </svg>
+                    {verifyError}
+                  </div>
+                )}
+
+                <button
+                  type="submit"
+                  disabled={verifying}
+                  className={`flex items-center justify-center gap-2 px-4 py-3 rounded-xl border-0 text-sm font-bold text-white transition-all duration-200 ${
+                    verifying
+                      ? "bg-brand-400 cursor-not-allowed"
+                      : "bg-brand-500 hover:bg-brand-600 cursor-pointer shadow-lg shadow-brand-500/30"
+                  }`}
+                >
+                  {verifying ? (
+                    <>
+                      <div className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" />
+                      Memverifikasi...
+                    </>
+                  ) : (
+                    <>
+                      <svg width="15" height="15" viewBox="0 0 24 24" fill="none"
+                        stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                        <polyline points="20 6 9 17 4 12" />
+                      </svg>
+                      Verifikasi Akses
+                    </>
+                  )}
+                </button>
+              </form>
+
+              {/* Info box */}
+              <div className="mt-4 p-3.5 rounded-xl bg-gray-50 dark:bg-white/[0.03] border border-gray-200 dark:border-white/[0.06]">
+                <p className="text-[10px] font-bold text-gray-400 dark:text-white/40 uppercase tracking-wide mb-2">
+                  Informasi
+                </p>
+                <ul className="m-0 pl-4 flex flex-col gap-1">
+                  {[
+                    "Code verifikasi hanya dapat digunakan sekali",
+                    "IP address akan dicatat untuk keamanan",
+                    "Akses berlaku selama 5 jam",
+                    "Session tetap aktif saat refresh halaman",
+                  ].map((info, i) => (
+                    <li key={i} className="text-[11px] text-gray-500 dark:text-white/35 leading-relaxed">
+                      {info}
+                    </li>
+                  ))}
+                </ul>
+                <div className="mt-2.5 pt-2.5 border-t border-gray-200 dark:border-white/[0.06] text-[11px] text-gray-500 dark:text-white/35">
+                  Punya membership monthly?{" "}
+                  <span
+                    onClick={() => navigate("/signin")}
+                    className="text-brand-500 cursor-pointer font-bold hover:underline"
+                  >
+                    Login di sini
+                  </span>
+                </div>
+              </div>
+
+              <button
+                onClick={() => navigate(-1)}
+                className="mt-3.5 w-full py-2.5 rounded-xl border border-gray-200 dark:border-white/[0.08] bg-transparent text-gray-500 dark:text-white/40 text-sm cursor-pointer hover:bg-gray-50 dark:hover:bg-white/[0.04] transition-colors flex items-center justify-center gap-1.5"
+              >
+                ← Kembali
+              </button>
+            </div>
+          </div>
+        </div>
+      </>
+    );
+  }
+
+  // ── Loading stream ────────────────────────────────────────────────────────
+  if (loading) {
+    return (
+      <>
+        <PageMeta title="Memuat Live Stream..." description="Live Stream JKT48" />
+        <div className="min-h-screen flex flex-col items-center justify-center gap-3 bg-gray-50 dark:bg-gray-900">
+          <div className="w-9 h-9 border-4 border-brand-500/20 border-t-brand-500 rounded-full animate-spin" />
+          <p className="text-sm text-gray-500 dark:text-white/40">
+            {isIdn ? "Memuat IDN Live Plus..." : "Memuat live stream member..."}
+          </p>
+        </div>
+      </>
+    );
+  }
+
+  // ── Error ─────────────────────────────────────────────────────────────────
+  if (error) {
+    return (
+      <>
+        <PageMeta title="Error - Live Stream" description="Live Stream JKT48" />
+        <div className="min-h-screen flex flex-col items-center justify-center gap-3 p-4 bg-gray-50 dark:bg-gray-900">
+          <div className="w-14 h-14 rounded-full bg-error-50 dark:bg-error-500/12 border border-error-200 dark:border-error-500/25 flex items-center justify-center">
+            <svg width="24" height="24" viewBox="0 0 24 24" fill="none"
+              stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"
+              className="text-error-500">
+              <circle cx="12" cy="12" r="10" />
+              <line x1="12" y1="8" x2="12" y2="12" />
+              <line x1="12" y1="16" x2="12.01" y2="16" />
+            </svg>
+          </div>
+          <h3 className="text-base font-bold text-gray-900 dark:text-white m-0">Terjadi Kesalahan</h3>
+          <p className="text-sm text-gray-500 dark:text-white/40 text-center m-0">{error}</p>
+          <div className="flex gap-2.5 mt-2">
+            <button
+              onClick={() => { setError(""); isIdn ? loadIdnStream() : loadMemberStream(); }}
+              className="px-5 py-2.5 rounded-lg border-0 bg-brand-500 text-white text-sm font-bold cursor-pointer hover:bg-brand-600 shadow-lg shadow-brand-500/30 transition-colors"
+            >
+              ↺ Coba Lagi
+            </button>
+            <button
+              onClick={() => navigate(-1)}
+              className="px-5 py-2.5 rounded-lg border border-gray-200 dark:border-white/10 bg-transparent text-gray-600 dark:text-white/60 text-sm font-semibold cursor-pointer hover:bg-gray-50 dark:hover:bg-white/[0.04] transition-colors"
+            >
+              ← Kembali
+            </button>
+          </div>
+        </div>
+      </>
+    );
+  }
+
+  // ── Main render ───────────────────────────────────────────────────────────
   return (
-    <div style={{
-      minHeight:  "100vh",
-      background: "#0a0a0a",
-      color:      "#fff",
-      display:    "flex",
-      flexDirection: "column",
-    }}>
-      {/* ── Top Bar ── */}
-      <div style={{
-        display:        "flex",
-        alignItems:     "center",
-        gap:            12,
-        padding:        "10px 16px",
-        background:     "rgba(0,0,0,0.6)",
-        backdropFilter: "blur(12px)",
-        borderBottom:   "1px solid rgba(255,255,255,0.06)",
-        position:       "sticky",
-        top:            0,
-        zIndex:         100,
-      }}>
-        <button onClick={() => navigate(-1)} style={{
-          padding:      "6px 12px",
-          borderRadius: 8,
-          border:       "1px solid rgba(255,255,255,0.1)",
-          background:   "rgba(255,255,255,0.05)",
-          color:        "rgba(255,255,255,0.7)",
-          fontSize:     12,
-          cursor:       "pointer",
-          display:      "flex",
-          alignItems:   "center",
-          gap:          5,
-          flexShrink:   0,
-        }}>
+    <>
+      <PageMeta
+        title={`${showTitle} - Live Stream JKT48`}
+        description={`Tonton live stream ${showTitle} di JKT48Connect`}
+      />
+      <PageBreadcrumb pageTitle={showTitle} />
+
+      {/* ── Status badges + back button row ── */}
+      <div className="flex items-center gap-2 mb-4 flex-wrap">
+        <button
+          onClick={() => navigate(-1)}
+          className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-gray-200 dark:border-white/10 bg-white dark:bg-white/[0.05] text-gray-600 dark:text-white/70 text-xs cursor-pointer hover:bg-gray-50 dark:hover:bg-white/[0.08] transition-colors"
+        >
           ← Kembali
         </button>
 
-        {/* Show info */}
-        <div style={{ display: "flex", alignItems: "center", gap: 10, flex: 1, minWidth: 0 }}>
-          {showImage && (
-            <img src={showImage} alt={showTitle}
-              style={{ width: 32, height: 32, borderRadius: 6, objectFit: "cover", flexShrink: 0 }}
-              onError={(e) => { (e.target as HTMLImageElement).style.display = "none"; }}
-            />
-          )}
-          <div style={{ minWidth: 0 }}>
-            <div style={{
-              fontSize:     13,
-              fontWeight:   700,
-              color:        "#fff",
-              overflow:     "hidden",
-              textOverflow: "ellipsis",
-              whiteSpace:   "nowrap",
-            }}>
-              {showTitle}
-            </div>
-            {isIdn && idnShow && (
-              <div style={{ fontSize: 11, color: "rgba(255,255,255,0.4)", marginTop: 1 }}>
-                👁 {idnShow.view_count?.toLocaleString() || 0} penonton
-              </div>
-            )}
-            {isMember && memberShow && (
-              <div style={{ fontSize: 11, color: "rgba(255,255,255,0.4)", marginTop: 1 }}>
-                {memberShow.type?.toUpperCase()} · {new Date(memberShow.started_at).toLocaleTimeString("id-ID", { hour: "2-digit", minute: "2-digit" })} WIB
-              </div>
-            )}
-          </div>
+        {/* LIVE badge */}
+        <div className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-error-500 text-white text-[11px] font-bold">
+          <span className="w-1.5 h-1.5 rounded-full bg-white animate-pulse inline-block" />
+          LIVE
         </div>
 
-                {/* Badges */}
-        <div style={{ display: "flex", alignItems: "center", gap: 8, flexShrink: 0 }}>
-          <div style={{
-            display:      "inline-flex",
-            alignItems:   "center",
-            gap:          5,
-            padding:      "4px 10px",
-            borderRadius: 999,
-            background:   "#DC1F2E",
-            fontSize:     11,
-            fontWeight:   700,
-          }}>
-            <span style={{
-              width:        6,
-              height:       6,
-              borderRadius: "50%",
-              background:   "#fff",
-              animation:    "livePulse 1.5s infinite",
-              display:      "inline-block",
-            }} />
-            LIVE
+        {isIdn && (
+          <div className="px-2.5 py-1 rounded-full bg-brand-500/15 border border-brand-500/30 text-brand-600 dark:text-brand-400 text-[11px] font-bold">
+            IDN Live+
           </div>
+        )}
 
-          {isIdn && (
-            <div style={{
-              padding:      "4px 10px",
-              borderRadius: 999,
-              background:   "rgba(70,95,255,0.15)",
-              border:       "1px solid rgba(70,95,255,0.3)",
-              fontSize:     11,
-              fontWeight:   700,
-              color:        "#7b8fff",
-            }}>
-              IDN Live+
-            </div>
-          )}
+        {isMember && (
+          <div className="px-2.5 py-1 rounded-full bg-success-50 dark:bg-success-500/12 border border-success-200 dark:border-success-500/25 text-success-600 dark:text-success-400 text-[11px] font-bold">
+            Member Live
+          </div>
+        )}
 
-          {isMember && (
-            <div style={{
-              padding:      "4px 10px",
-              borderRadius: 999,
-              background:   "rgba(34,197,94,0.12)",
-              border:       "1px solid rgba(34,197,94,0.25)",
-              fontSize:     11,
-              fontWeight:   700,
-              color:        "#4ade80",
-            }}>
-              Member Live
-            </div>
-          )}
+        {isIdn && hasMembership && (
+          <div className="px-2.5 py-1 rounded-full bg-brand-50 dark:bg-brand-500/12 border border-brand-200 dark:border-brand-500/25 text-brand-600 dark:text-brand-400 text-[11px] font-bold">
+            ★ MONTHLY
+          </div>
+        )}
 
-          {isIdn && hasMembership && (
-            <div style={{
-              padding:      "4px 10px",
-              borderRadius: 999,
-              background:   "rgba(220,31,46,0.12)",
-              border:       "1px solid rgba(220,31,46,0.25)",
-              fontSize:     11,
-              fontWeight:   700,
-              color:        "#DC1F2E",
-            }}>
-              ★ MONTHLY
-            </div>
-          )}
+        {isIdn && idnShow && (
+          <span className="text-xs text-gray-500 dark:text-white/40">
+            👁 {idnShow.view_count?.toLocaleString() || 0} penonton
+          </span>
+        )}
 
-          {isIdn && !hasMembership && isVerified && (
-            <button
-              onClick={handleLogout}
-              style={{
-                padding:      "4px 10px",
-                borderRadius: 999,
-                border:       "1px solid rgba(255,255,255,0.1)",
-                background:   "rgba(255,255,255,0.05)",
-                color:        "rgba(255,255,255,0.4)",
-                fontSize:     11,
-                fontWeight:   600,
-                cursor:       "pointer",
-              }}
-            >
-              Logout
-            </button>
-          )}
-        </div>
+        {isMember && memberShow && (
+          <span className="text-xs text-gray-500 dark:text-white/40">
+            {memberShow.type?.toUpperCase()} · Mulai{" "}
+            {new Date(memberShow.started_at).toLocaleTimeString("id-ID", { hour: "2-digit", minute: "2-digit" })} WIB
+          </span>
+        )}
+
+        {isIdn && !hasMembership && isVerified && (
+          <button
+            onClick={handleLogout}
+            className="ml-auto px-2.5 py-1 rounded-full border border-gray-200 dark:border-white/10 bg-transparent text-gray-500 dark:text-white/40 text-[11px] font-semibold cursor-pointer hover:bg-gray-50 dark:hover:bg-white/[0.04] transition-colors"
+          >
+            Logout
+          </button>
+        )}
       </div>
 
-      {/* ── Main Layout ── */}
-      <div style={{
-        flex:    1,
-        display: "grid",
-        gridTemplateColumns: "1fr 340px",
-        gap:     0,
-        height:  "calc(100vh - 53px)",
-      }}
-        className="live-layout"
-      >
-        {/* ── Left: Player + Info ── */}
-        <div style={{
-          overflowY: "auto",
-          padding:   "16px",
-          display:   "flex",
-          flexDirection: "column",
-          gap:       16,
-        }}>
-          {/* Player */}
-          {isIdn && hlsUrl ? (
-            <HlsPlayer
-              src={hlsUrl}
-              title={showTitle}
-              qualities={qualities}
-              onQualityChange={handleQualityChange}
-              currentQuality={currentQuality}
-              qualityMode={qualityMode}
-              onModeChange={handleModeChange}
-            />
-          ) : isMember && memberHlsUrl ? (
-            <HlsPlayer
-              src={memberHlsUrl}
-              title={showTitle}
-              qualities={[]}
-              onQualityChange={() => {}}
-              currentQuality={null}
-              qualityMode="auto"
-              onModeChange={() => {}}
-            />
-          ) : (
-            <div style={{
-              aspectRatio:    "16/9",
-              background:     "#111",
-              borderRadius:   8,
-              display:        "flex",
-              alignItems:     "center",
-              justifyContent: "center",
-            }}>
-              <div style={styles.spinner} />
-            </div>
+      {/* ── Main grid layout ── */}
+      <div className="grid grid-cols-1 xl:grid-cols-[1fr_340px] gap-5 sm:gap-6">
+        {/* ── Left column ── */}
+        <div className="flex flex-col gap-5 sm:gap-6">
+          {/* Player card */}
+          <ComponentCard title={isIdn ? "IDN Live Plus Stream" : "Member Live Stream"}>
+            {isIdn && hlsUrl ? (
+              <HlsPlayer
+                src={hlsUrl}
+                title={showTitle}
+                qualities={qualities}
+                onQualityChange={handleQualityChange}
+                currentQuality={currentQuality}
+                qualityMode={qualityMode}
+                onModeChange={handleModeChange}
+                isIdn={true}
+              />
+            ) : isMember && memberHlsUrl ? (
+              <HlsPlayer
+                src={memberHlsUrl}
+                title={showTitle}
+                qualities={[]}
+                onQualityChange={() => {}}
+                currentQuality={null}
+                qualityMode="auto"
+                onModeChange={() => {}}
+                isIdn={false}
+              />
+            ) : (
+              /* Placeholder saat loading */
+              <div className="aspect-video bg-gray-100 dark:bg-white/[0.04] rounded-xl flex items-center justify-center">
+                <div className="w-9 h-9 border-4 border-brand-500/20 border-t-brand-500 rounded-full animate-spin" />
+              </div>
+            )}
+          </ComponentCard>
+
+          {/* IDN Show detail */}
+          {isIdn && idnShow && (
+            <ComponentCard title="Detail Show">
+              <div className="flex gap-4 items-start">
+                {idnShow.image_url && (
+                  <img
+                    src={idnShow.image_url}
+                    alt={idnShow.title}
+                    className="w-16 h-16 rounded-xl object-cover flex-shrink-0"
+                    onError={(e) => { (e.target as HTMLImageElement).style.display = "none"; }}
+                  />
+                )}
+                <div className="flex-1 min-w-0">
+                  <h3 className="text-base font-extrabold text-gray-900 dark:text-white m-0 mb-1.5">
+                    {idnShow.title}
+                  </h3>
+                  <div className="flex flex-wrap gap-3 text-xs text-gray-500 dark:text-white/45">
+                    <span>👁 {idnShow.view_count?.toLocaleString() || 0} penonton</span>
+                    {idnShow.showId && <span>🎫 {idnShow.showId}</span>}
+                    {idnShow.idnliveplus?.liveroom_price && <span>🎟️ Rp 7.000</span>}
+                  </div>
+                  {idnShow.idnliveplus?.description && (
+                    <p className="text-xs leading-relaxed text-gray-500 dark:text-white/40 mt-2 mb-0 whitespace-pre-line">
+                      {idnShow.idnliveplus.description}
+                    </p>
+                  )}
+                </div>
+              </div>
+            </ComponentCard>
           )}
 
-          {/* IDN Show Info */}
-          {isIdn && idnShow && (
-            <div style={{
-              padding:      "14px 16px",
-              background:   "rgba(255,255,255,0.03)",
-              border:       "1px solid rgba(255,255,255,0.07)",
-              borderRadius: 10,
-              display:      "flex",
-              gap:          14,
-              alignItems:   "flex-start",
-            }}>
-              {idnShow.image_url && (
+          {/* Member show detail */}
+          {isMember && memberShow && (
+            <ComponentCard title="Detail Member">
+              <div className="flex gap-4 items-center">
                 <img
-                  src={idnShow.image_url}
-                  alt={idnShow.title}
-                  style={{ width: 64, height: 64, borderRadius: 8, objectFit: "cover", flexShrink: 0 }}
+                  src={memberShow.img_alt || memberShow.img}
+                  alt={memberShow.name}
+                  className="w-14 h-14 rounded-full object-cover flex-shrink-0 border-2 border-brand-500/30"
                   onError={(e) => { (e.target as HTMLImageElement).style.display = "none"; }}
                 />
-              )}
-              <div style={{ flex: 1, minWidth: 0 }}>
-                <h2 style={{ margin: "0 0 6px", fontSize: 15, fontWeight: 800, color: "#fff" }}>
-                  {idnShow.title}
-                </h2>
-                <div style={{ display: "flex", flexWrap: "wrap", gap: 10, fontSize: 12, color: "rgba(255,255,255,0.45)" }}>
-                  <span>👁 {idnShow.view_count?.toLocaleString() || 0} penonton</span>
-                  {idnShow.showId && <span>🎫 {idnShow.showId}</span>}
-                  {idnShow.idnliveplus?.liveroom_price && (
-                    <span>🎟️ Rp 7.000</span>
-                  )}
-                </div>
-                {idnShow.idnliveplus?.description && (
-                  <p style={{
-                    margin:     "8px 0 0",
-                    fontSize:   12,
-                    lineHeight: 1.6,
-                    color:      "rgba(255,255,255,0.4)",
-                    whiteSpace: "pre-line",
-                  }}>
-                    {idnShow.idnliveplus.description}
-                  </p>
-                )}
-              </div>
-            </div>
-          )}
-
-          {/* Member Show Info */}
-          {isMember && memberShow && (
-            <div style={{
-              padding:      "14px 16px",
-              background:   "rgba(255,255,255,0.03)",
-              border:       "1px solid rgba(255,255,255,0.07)",
-              borderRadius: 10,
-              display:      "flex",
-              gap:          14,
-              alignItems:   "center",
-            }}>
-              <img
-                src={memberShow.img_alt || memberShow.img}
-                alt={memberShow.name}
-                style={{ width: 52, height: 52, borderRadius: "50%", objectFit: "cover", flexShrink: 0, border: "2px solid rgba(220,31,46,0.3)" }}
-                onError={(e) => { (e.target as HTMLImageElement).style.display = "none"; }}
-              />
-              <div>
-                <h2 style={{ margin: "0 0 4px", fontSize: 15, fontWeight: 800, color: "#fff" }}>
-                  {memberShow.name}
-                </h2>
-                <div style={{ display: "flex", gap: 10, fontSize: 12, color: "rgba(255,255,255,0.4)", flexWrap: "wrap" }}>
-                  <span style={{
-                    padding:      "2px 8px",
-                    borderRadius: 999,
-                    background:   "rgba(34,197,94,0.1)",
-                    border:       "1px solid rgba(34,197,94,0.2)",
-                    color:        "#4ade80",
-                    fontWeight:   700,
-                    fontSize:     10,
-                  }}>
-                    {memberShow.type?.toUpperCase()}
-                  </span>
-                  <span>
-                    Mulai: {new Date(memberShow.started_at).toLocaleTimeString("id-ID", {
-                      hour: "2-digit", minute: "2-digit",
-                    })} WIB
-                  </span>
-                  {memberShow.streaming_url_list?.length > 0 && (
-                    <span>{memberShow.streaming_url_list[0].label}</span>
-                  )}
+                <div>
+                  <h3 className="text-base font-extrabold text-gray-900 dark:text-white m-0 mb-1.5">
+                    {memberShow.name}
+                  </h3>
+                  <div className="flex gap-2 flex-wrap items-center">
+                    <span className="px-2 py-0.5 rounded-full bg-success-50 dark:bg-success-500/10 border border-success-200 dark:border-success-500/20 text-success-600 dark:text-success-400 font-bold text-[10px]">
+                      {memberShow.type?.toUpperCase()}
+                    </span>
+                    <span className="text-xs text-gray-500 dark:text-white/40">
+                      Mulai: {new Date(memberShow.started_at).toLocaleTimeString("id-ID", { hour: "2-digit", minute: "2-digit" })} WIB
+                    </span>
+                    {memberShow.streaming_url_list?.length > 0 && (
+                      <span className="text-xs text-gray-500 dark:text-white/40">
+                        {memberShow.streaming_url_list[0].label}
+                      </span>
+                    )}
+                  </div>
                 </div>
               </div>
-            </div>
+            </ComponentCard>
           )}
 
-          {/* Members lineup (IDN only) */}
+          {/* Lineup members (IDN only) */}
           {isIdn && members.length > 0 && (
-            <div style={{
-              padding:      "14px 16px",
-              background:   "rgba(255,255,255,0.03)",
-              border:       "1px solid rgba(255,255,255,0.07)",
-              borderRadius: 10,
-            }}>
-              <div style={{
-                display:        "flex",
-                alignItems:     "center",
-                justifyContent: "space-between",
-                marginBottom:   12,
-              }}>
-                <h3 style={{ margin: 0, fontSize: 13, fontWeight: 700, color: "rgba(255,255,255,0.7)" }}>
-                  Lineup Show
-                </h3>
-                <span style={{
-                  fontSize:     11,
-                  fontWeight:   700,
-                  padding:      "2px 8px",
-                  borderRadius: 999,
-                  background:   "rgba(220,31,46,0.12)",
-                  color:        "#DC1F2E",
-                }}>
-                  {members.length} Member
-                </span>
-              </div>
-              <div style={{
-                display:             "grid",
-                gridTemplateColumns: "repeat(auto-fill, minmax(72px, 1fr))",
-                gap:                 10,
-              }}>
+            <ComponentCard title={`Lineup Show (${members.length} Member)`}>
+              <div className="grid grid-cols-[repeat(auto-fill,minmax(72px,1fr))] gap-3">
                 {members.map((m: any) => (
-                  <div key={m.id} style={{ textAlign: "center" }}>
+                  <div key={m.id} className="text-center">
                     <img
                       src={m.img}
                       alt={m.name}
-                      style={{
-                        width:        52,
-                        height:       52,
-                        borderRadius: "50%",
-                        objectFit:    "cover",
-                        border:       "2px solid rgba(220,31,46,0.2)",
-                        display:      "block",
-                        margin:       "0 auto 4px",
-                      }}
+                      className="w-13 h-13 rounded-full object-cover border-2 border-brand-500/20 block mx-auto mb-1"
                       onError={(e) => { (e.target as HTMLImageElement).style.display = "none"; }}
                     />
-                    <p style={{
-                      margin:       0,
-                      fontSize:     10,
-                      color:        "rgba(255,255,255,0.55)",
-                      overflow:     "hidden",
-                      textOverflow: "ellipsis",
-                      whiteSpace:   "nowrap",
-                    }}>
+                    <p className="m-0 text-[10px] text-gray-500 dark:text-white/55 overflow-hidden text-ellipsis whitespace-nowrap">
                       {m.name}
                     </p>
                   </div>
                 ))}
               </div>
-            </div>
+            </ComponentCard>
           )}
 
           {/* Footer */}
-          <div style={{ textAlign: "center", padding: "8px 0 16px", fontSize: 11, color: "rgba(255,255,255,0.15)" }}>
+          <p className="text-center text-[11px] text-gray-300 dark:text-white/15 pb-2">
             POWERED BY JKT48Connect
-          </div>
+          </p>
         </div>
 
-        {/* ── Right: Chat ── */}
-        <div style={{
-          borderLeft: "1px solid rgba(255,255,255,0.06)",
-          display:    "flex",
-          flexDirection: "column",
-          overflow:   "hidden",
-        }}>
-          <ChatPanel
-            messages={chatMessages}
-            chatInput={chatInput}
-            setChatInput={setChatInput}
-            chatUser={chatUser}
-            isChatLoggingIn={isChatLoggingIn}
-            onSend={handleSendMessage}
-            chatEndRef={chatEndRef}
-            navigate={navigate}
-          />
+        {/* ── Right column: Chat ── */}
+        <div className="xl:sticky xl:top-4 xl:self-start">
+          <ComponentCard title="Live Chat" className="!p-0 overflow-hidden">
+            <div className="h-[500px] xl:h-[calc(100vh-180px)] flex flex-col">
+              <ChatPanel
+                messages={chatMessages}
+                chatInput={chatInput}
+                setChatInput={setChatInput}
+                chatUser={chatUser}
+                isChatLoggingIn={isChatLoggingIn}
+                onSend={handleSendMessage}
+                chatEndRef={chatEndRef}
+                navigate={navigate}
+              />
+            </div>
+          </ComponentCard>
         </div>
       </div>
-
-      {/* ── Keyframes ── */}
-      <style>{`
-        @keyframes spin {
-          to { transform: rotate(360deg); }
-        }
-        @keyframes livePulse {
-          0%, 100% { opacity: 1; transform: scale(1); }
-          50%       { opacity: 0.5; transform: scale(0.8); }
-        }
-        @media (max-width: 768px) {
-          .live-layout {
-            grid-template-columns: 1fr !important;
-            grid-template-rows: auto 400px;
-            height: auto !important;
-          }
-        }
-      `}</style>
-    </div>
+    </>
   );
 }
-
-// ── Shared Styles ─────────────────────────────────────────────────────────────
-const styles = {
-  fullCenter: {
-    minHeight:      "100vh",
-    background:     "#0a0a0a",
-    display:        "flex",
-    flexDirection:  "column" as const,
-    alignItems:     "center",
-    justifyContent: "center",
-    gap:            12,
-    padding:        16,
-  },
-  spinner: {
-    width:        36,
-    height:       36,
-    border:       "3px solid rgba(220,31,46,0.2)",
-    borderTop:    "3px solid #DC1F2E",
-    borderRadius: "50%",
-    animation:    "spin 0.8s linear infinite",
-  },
-  loadingText: {
-    margin:    0,
-    fontSize:  14,
-    color:     "rgba(255,255,255,0.4)",
-    textAlign: "center" as const,
-  },
-  btnPrimary: {
-    padding:      "10px 20px",
-    borderRadius: 8,
-    border:       "none",
-    background:   "#DC1F2E",
-    color:        "#fff",
-    fontSize:     13,
-    fontWeight:   700,
-    cursor:       "pointer",
-    boxShadow:    "0 4px 14px rgba(220,31,46,0.35)",
-  },
-  btnSecondary: {
-    padding:      "10px 20px",
-    borderRadius: 8,
-    border:       "1px solid rgba(255,255,255,0.1)",
-    background:   "rgba(255,255,255,0.05)",
-    color:        "rgba(255,255,255,0.6)",
-    fontSize:     13,
-    fontWeight:   600,
-    cursor:       "pointer",
-  },
-};
 
 export default LiveStream;
