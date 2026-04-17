@@ -18,9 +18,11 @@
     "@fullcalendar/timegrid": "^6.1.15",
     "@react-jvectormap/core": "^1.0.4",
     "@react-jvectormap/world": "^1.1.2",
+    "@supabase/supabase-js": "^2.49.4",
     "apexcharts": "^4.1.0",
     "clsx": "^2.1.1",
     "flatpickr": "^4.6.13",
+    "hls.js": "^1.5.20",
     "react": "^19.0.0",
     "react-apexcharts": "^1.7.0",
     "react-dnd": "^16.0.1",
@@ -35,6 +37,7 @@
   "devDependencies": {
     "@eslint/js": "^9.19.0",
     "@tailwindcss/postcss": "^4.0.8",
+    "@types/hls.js": "^1.0.5",
     "@types/react": "^19.0.12",
     "@types/react-dom": "^19.0.4",
     "@vitejs/plugin-react": "^4.3.4",
@@ -60,6 +63,9 @@
     "@react-jvectormap/world": {
       "react": "^16.8.0 || ^17 || ^18 || ^19",
       "react-dom": "^16.8.0 || ^17 || ^18 || ^19"
+    },
+    "hls.js": {
+      "react": "^16.8.0 || ^17 || ^18 || ^19"
     }
   }
 }
