@@ -134,17 +134,41 @@ function HlsPlayer({
 
   return (
     <div className="relative w-full bg-black rounded-xl overflow-hidden">
-      {/* IDN Plus: landscape 16:9 | Member: auto-detect dari video */}
-      <div className={isIdn ? "aspect-video" : ""}>
-        <video
-          ref={videoRef}
-          controls
-          autoPlay
-          playsInline
-          className={`w-full ${isIdn ? "h-full" : ""} block`}
-          title={title}
-        />
-      </div>
+      {isIdn ? (
+        /* IDN Plus: landscape 16:9 */
+        <div className="aspect-video">
+          <video
+            ref={videoRef}
+            controls
+            autoPlay
+            playsInline
+            className="w-full h-full block"
+            title={title}
+          />
+        </div>
+      ) : (
+        /* Member Live: portrait/vertical — dibatasi max-height agar tidak overflow */
+        <div
+          className="flex items-center justify-center bg-black"
+          style={{ maxHeight: "420px" }}
+        >
+          <video
+            ref={videoRef}
+            controls
+            autoPlay
+            playsInline
+            className="block"
+            style={{
+              maxWidth:  "100%",
+              maxHeight: "420px",
+              width:     "auto",
+              height:    "auto",
+              margin:    "0 auto",
+            }}
+            title={title}
+          />
+        </div>
+      )}
 
       {/* Quality Button */}
       {qualities.length > 0 && (
@@ -684,11 +708,13 @@ function LiveStream() {
     : (memberShow?.name || "Live Member JKT48");
 
   // ── Loading membership ────────────────────────────────────────────────────
+  // FIX: Tetap di dalam layout utama — hanya render konten, bukan full-page
   if (isIdn && membershipLoading) {
     return (
       <>
         <PageMeta title="Memeriksa Akses..." description="Live Stream JKT48" />
-        <div className="min-h-screen flex flex-col items-center justify-center gap-3 bg-gray-50 dark:bg-gray-900">
+        <PageBreadcrumb pageTitle="Live Stream" />
+        <div className="flex flex-col items-center justify-center gap-3 py-24">
           <div className="w-9 h-9 border-4 border-brand-500/20 border-t-brand-500 rounded-full animate-spin" />
           <p className="text-sm text-gray-500 dark:text-white/40">Memeriksa akses...</p>
         </div>
@@ -696,12 +722,15 @@ function LiveStream() {
     );
   }
 
-  // ── Verification page ────────────────────────────────────────────────────
+  // ── Verification page ─────────────────────────────────────────────────────
+  // FIX: Tetap di dalam layout utama — pakai PageBreadcrumb & render as card
   if (isIdn && showVerification && !isVerified) {
     return (
       <>
         <PageMeta title="Verifikasi Akses - Live Stream" description="Verifikasi akses live stream JKT48" />
-        <div className="min-h-screen flex items-center justify-center p-4 bg-gray-50 dark:bg-gray-900">
+        <PageBreadcrumb pageTitle="Verifikasi Akses" />
+
+        <div className="flex items-center justify-center py-8 px-4">
           <div className="w-full max-w-md">
             <div className="bg-white dark:bg-gray-800 border border-gray-200 dark:border-white/[0.08] rounded-2xl p-8 shadow-xl">
               {/* Logo */}
@@ -835,7 +864,8 @@ function LiveStream() {
     return (
       <>
         <PageMeta title="Memuat Live Stream..." description="Live Stream JKT48" />
-        <div className="min-h-screen flex flex-col items-center justify-center gap-3 bg-gray-50 dark:bg-gray-900">
+        <PageBreadcrumb pageTitle="Live Stream" />
+        <div className="flex flex-col items-center justify-center gap-3 py-24">
           <div className="w-9 h-9 border-4 border-brand-500/20 border-t-brand-500 rounded-full animate-spin" />
           <p className="text-sm text-gray-500 dark:text-white/40">
             {isIdn ? "Memuat IDN Live Plus..." : "Memuat live stream member..."}
@@ -850,7 +880,8 @@ function LiveStream() {
     return (
       <>
         <PageMeta title="Error - Live Stream" description="Live Stream JKT48" />
-        <div className="min-h-screen flex flex-col items-center justify-center gap-3 p-4 bg-gray-50 dark:bg-gray-900">
+        <PageBreadcrumb pageTitle="Live Stream" />
+        <div className="flex flex-col items-center justify-center gap-3 p-4 py-16">
           <div className="w-14 h-14 rounded-full bg-error-50 dark:bg-error-500/12 border border-error-200 dark:border-error-500/25 flex items-center justify-center">
             <svg width="24" height="24" viewBox="0 0 24 24" fill="none"
               stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"
@@ -899,7 +930,6 @@ function LiveStream() {
           ← Kembali
         </button>
 
-        {/* LIVE badge */}
         <div className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-error-500 text-white text-[11px] font-bold">
           <span className="w-1.5 h-1.5 rounded-full bg-white animate-pulse inline-block" />
           LIVE
@@ -976,7 +1006,7 @@ function LiveStream() {
               />
             ) : (
               /* Placeholder saat loading */
-              <div className="aspect-video bg-gray-100 dark:bg-white/[0.04] rounded-xl flex items-center justify-center">
+              <div className="bg-gray-100 dark:bg-white/[0.04] rounded-xl flex items-center justify-center" style={{ height: "320px" }}>
                 <div className="w-9 h-9 border-4 border-brand-500/20 border-t-brand-500 rounded-full animate-spin" />
               </div>
             )}
