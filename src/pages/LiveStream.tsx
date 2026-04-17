@@ -144,23 +144,13 @@ function HlsPlayer({
           />
         </div>
       ) : (
-        <div
-          className="flex items-center justify-center bg-black"
-          style={{ maxHeight: "420px" }}
-        >
+        <div className="relative w-full bg-black" style={{ aspectRatio: "9/16", maxHeight: "80vh" }}>
           <video
             ref={videoRef}
             controls
             autoPlay
             playsInline
-            className="block"
-            style={{
-              maxWidth:  "100%",
-              maxHeight: "420px",
-              width:     "auto",
-              height:    "auto",
-              margin:    "0 auto",
-            }}
+            className="absolute inset-0 w-full h-full object-contain"
             title={title}
           />
         </div>
@@ -937,7 +927,7 @@ function LiveStream() {
       <div className="rounded-2xl border border-gray-200 bg-white dark:border-gray-800 dark:bg-white/[0.03] overflow-hidden">
 
         {/* ── Page Header ── */}
-        <div className="px-6 py-5 border-b border-gray-200 dark:border-gray-800">
+        <div className="px-4 sm:px-6 py-4 sm:py-5 border-b border-gray-200 dark:border-gray-800">
           <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: 12 }}>
 
             {/* Title + badges */}
@@ -1042,7 +1032,7 @@ function LiveStream() {
         </div>
 
         {/* ── Main Content: Left sidebar (info) + Right (player + chat) ── */}
-        <div style={{ display: "flex", minHeight: 0 }}>
+        <div className="flex flex-col xl:flex-row" style={{ minHeight: 0 }}>
 
           {/* ── LEFT SIDEBAR: Show Info ── */}
           <div
@@ -1246,10 +1236,10 @@ function LiveStream() {
           </div>
 
           {/* ── RIGHT CONTENT: Player + Chat ── */}
-          <div style={{ flex: 1, minWidth: 0, display: "flex", flexDirection: "column" }}>
+          <div style={{ flex: 1, minWidth: 0, display: "flex", flexDirection: "column", width: "100%" }}>
 
             {/* Player area */}
-            <div style={{ padding: 24, paddingBottom: 0 }}>
+            <div className="p-3 sm:p-6 pb-0">
               {isIdn && hlsUrl ? (
                 <HlsPlayer
                   src={hlsUrl}
@@ -1273,14 +1263,14 @@ function LiveStream() {
                   isIdn={false}
                 />
               ) : (
-                <div className="bg-gray-100 dark:bg-white/[0.04] rounded-xl flex items-center justify-center" style={{ height: "320px" }}>
+                <div className="bg-gray-100 dark:bg-white/[0.04] rounded-xl flex items-center justify-center" style={{ aspectRatio: "16/9", minHeight: "200px" }}>
                   <div className="w-9 h-9 border-4 border-brand-500/20 border-t-brand-500 rounded-full animate-spin" />
                 </div>
               )}
             </div>
 
             {/* Mobile-only show info (below player, only on small screens) */}
-            <div className="xl:hidden" style={{ padding: "16px 24px 0" }}>
+            <div className="xl:hidden px-3 sm:px-6 pt-4">
               <div style={{
                 display: "flex", flexWrap: "wrap", gap: 8, alignItems: "center",
                 paddingBottom: 16, borderBottom: "1px solid rgba(0,0,0,0.06)",
@@ -1318,12 +1308,12 @@ function LiveStream() {
             </div>
 
             {/* Chat panel */}
-            <div style={{ flex: 1, minHeight: 0, margin: 24, marginTop: 16 }}>
+            <div style={{ flex: 1, minHeight: 0, margin: "16px 12px 12px", marginTop: 16 }} className="sm:mx-6 sm:mb-6">
               <div style={{
                 border: "1px solid",
                 borderRadius: 12,
                 overflow: "hidden",
-                height: 480,
+                height: "clamp(320px, 45vh, 520px)",
                 display: "flex",
                 flexDirection: "column",
               }} className="border-gray-200 dark:border-gray-800">
