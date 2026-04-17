@@ -22,6 +22,7 @@ import AppLayout from "./layout/AppLayout";
 import { ScrollToTop } from "./components/common/ScrollToTop";
 import Home from "./pages/Dashboard/Home";
 import LivePage from "./pages/Live";
+import LiveStream from "./pages/LiveStream";
 
 export default function App() {
   return (
@@ -72,6 +73,10 @@ export default function App() {
 
           {/* Fallback Route */}
           <Route path="*" element={<NotFound />} />
+          
+          {/* Live Stream - Full Page (tanpa AppLayout) */}
+          <Route path="/live/:playbackId" element={<LiveStream />} />
+
         </Routes>
       </Router>
     </>
