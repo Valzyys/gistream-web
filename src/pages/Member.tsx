@@ -4,6 +4,8 @@ import PageMeta from "../components/common/PageMeta";
 // ── API ──────────────────────────────────────────────────────────────────────
 const MEMBERS_API = "https://v2.jkt48connect.com/api/jkt48/members";
 const API_KEY = "JKTCONNECT";
+const CACHE_KEY = "jkt48_members_cache";
+const CACHE_TTL = 1000 * 60 * 30; // 30 menit
 
 // ── Types ────────────────────────────────────────────────────────────────────
 interface Social {
@@ -29,8 +31,39 @@ interface Member {
   idn_username?: string;
 }
 
+interface CacheData {
+  members: Member[];
+  timestamp: number;
+  etag?: string;
+}
+
 type FilterMode = "active" | "graduated" | "all";
 type SortMode = "name" | "generation" | "team";
+
+// ── Cache Helpers ─────────────────────────────────────────────────────────────
+const getCache = (): CacheData | null => {
+  try {
+    const raw = localStorage.getItem(CACHE_KEY);
+    if (!raw) return null;
+    const data: CacheData = JSON.parse(raw);
+    return data;
+  } catch {
+    return null;
+  }
+};
+
+const setCache = (members: Member[], etag?: string) => {
+  try {
+    const data: CacheData = { members, timestamp: Date.now(), etag };
+    localStorage.setItem(CACHE_KEY, JSON.stringify(data));
+  } catch {
+    // localStorage penuh atau tidak tersedia
+  }
+};
+
+const isCacheValid = (cache: CacheData): boolean => {
+  return Date.now() - cache.timestamp < CACHE_TTL;
+};
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 const genLabel = (gen?: string): string => {
@@ -125,6 +158,15 @@ const LinkIcon = () => (
   </svg>
 );
 
+const RefreshIcon = () => (
+  <svg width="13" height="13" viewBox="0 0 24 24" fill="none"
+    stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+    <polyline points="23 4 23 10 17 10" />
+    <polyline points="1 20 1 14 7 14" />
+    <path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15" />
+  </svg>
+);
+
 const getSocialIcon = (title: string) => {
   const t = title.toLowerCase();
   if (t === "instagram") return <InstagramIcon />;
@@ -137,7 +179,7 @@ const getSocialIcon = (title: string) => {
 };
 
 // ── Member Card ──────────────────────────────────────────────────────────────
-function MemberCard({ member }: { member: Member }) {
+function MemberCard({ member, isMobile }: { member: Member; isMobile: boolean }) {
   const [imgSrc, setImgSrc] = useState(member.img_alt || member.img);
   const tc = member.team ? teamColor[member.team.toLowerCase()] : null;
 
@@ -146,7 +188,7 @@ function MemberCard({ member }: { member: Member }) {
       style={{
         background: "var(--card-bg, #fff)",
         border: "1px solid var(--card-border, #e5e7eb)",
-        borderRadius: 16,
+        borderRadius: isMobile ? 12 : 16,
         overflow: "hidden",
         display: "flex",
         flexDirection: "column",
@@ -175,76 +217,105 @@ function MemberCard({ member }: { member: Member }) {
           alt={member.name}
           style={{ width: "100%", height: "100%", objectFit: "cover", display: "block" }}
           onError={() => setImgSrc(member.img)}
+          loading="lazy"
         />
 
         {/* Gradient */}
         <div style={{
           position: "absolute", inset: 0,
-          background: "linear-gradient(to top, rgba(0,0,0,0.70) 0%, transparent 55%)",
+          background: "linear-gradient(to top, rgba(0,0,0,0.75) 0%, transparent 55%)",
         }} />
 
         {/* Graduate badge */}
         {member.is_graduate && (
           <div style={{
-            position: "absolute", top: 8, left: 8,
-            display: "inline-flex", alignItems: "center", gap: 4,
-            padding: "3px 8px", borderRadius: 999,
-            fontSize: 10, fontWeight: 700,
+            position: "absolute", top: isMobile ? 4 : 8, left: isMobile ? 4 : 8,
+            display: "inline-flex", alignItems: "center", gap: 3,
+            padding: isMobile ? "2px 5px" : "3px 8px",
+            borderRadius: 999,
+            fontSize: isMobile ? 8 : 10, fontWeight: 700,
             background: "rgba(0,0,0,0.60)",
             backdropFilter: "blur(4px)",
             color: "rgba(255,255,255,0.9)",
           }}>
             <GraduateIcon />
-            Alumni
+            {!isMobile && "Alumni"}
           </div>
         )}
 
         {/* Team badge */}
         {member.team && (
           <div style={{
-            position: "absolute", top: 8, right: 8,
-            padding: "3px 8px", borderRadius: 999,
-            fontSize: 10, fontWeight: 700,
+            position: "absolute", top: isMobile ? 4 : 8, right: isMobile ? 4 : 8,
+            padding: isMobile ? "2px 5px" : "3px 8px",
+            borderRadius: 999,
+            fontSize: isMobile ? 8 : 10, fontWeight: 700,
             background: "rgba(0,0,0,0.55)",
             backdropFilter: "blur(4px)",
             color: "#fff",
             textTransform: "capitalize",
           }}>
-            {member.team}
+            {isMobile ? member.team.charAt(0).toUpperCase() : member.team}
           </div>
         )}
 
-        {/* Name overlay */}
+              {/* Name overlay */}
         <div style={{
           position: "absolute", bottom: 0, left: 0, right: 0,
-          padding: "10px 12px",
+          padding: isMobile ? "8px 6px" : "10px 12px",
         }}>
           <p style={{
-            margin: 0, fontSize: 13, fontWeight: 700,
-            color: "#fff", lineHeight: 1.3,
+            margin: 0,
+            fontSize: isMobile ? 10 : 13,
+            fontWeight: 700,
+            color: "#fff",
+            lineHeight: 1.3,
+            overflow: "hidden",
+            textOverflow: "ellipsis",
+            whiteSpace: "nowrap",
           }}>
             {member.name}
           </p>
-          {member.nicknames.length > 0 && (
+          {!isMobile && member.nicknames.length > 0 && (
             <p style={{
               margin: "2px 0 0", fontSize: 11,
               color: "rgba(255,255,255,0.65)",
+              overflow: "hidden",
+              textOverflow: "ellipsis",
+              whiteSpace: "nowrap",
             }}>
               {member.nicknames.slice(0, 2).join(" · ")}
+            </p>
+          )}
+          {isMobile && member.nicknames.length > 0 && (
+            <p style={{
+              margin: "1px 0 0", fontSize: 9,
+              color: "rgba(255,255,255,0.65)",
+              overflow: "hidden",
+              textOverflow: "ellipsis",
+              whiteSpace: "nowrap",
+            }}>
+              {member.nicknames[0]}
             </p>
           )}
         </div>
       </div>
 
       {/* ── Body ── */}
-      <div style={{ padding: "10px 12px 12px", display: "flex", flexDirection: "column", gap: 8 }}>
+      <div style={{
+        padding: isMobile ? "6px 6px 8px" : "10px 12px 12px",
+        display: "flex",
+        flexDirection: "column",
+        gap: isMobile ? 4 : 8,
+      }}>
 
         {/* Gen + Team badges */}
-        <div style={{ display: "flex", gap: 5, flexWrap: "wrap" }}>
+        <div style={{ display: "flex", gap: 3, flexWrap: "wrap" }}>
           {member.generation && (
             <span style={{
-              fontSize: 10, fontWeight: 700,
-              padding: "2px 8px", borderRadius: 999,
+              fontSize: isMobile ? 8 : 10, fontWeight: 700,
+              padding: isMobile ? "1px 5px" : "2px 8px",
+              borderRadius: 999,
               background: "rgba(70,95,255,0.08)",
               color: "#465FFF",
               border: "1px solid rgba(70,95,255,0.15)",
@@ -252,7 +323,7 @@ function MemberCard({ member }: { member: Member }) {
               {genLabel(member.generation)}
             </span>
           )}
-          {member.team && tc && (
+          {!isMobile && member.team && tc && (
             <span style={{
               fontSize: 10, fontWeight: 700,
               padding: "2px 8px", borderRadius: 999,
@@ -266,8 +337,8 @@ function MemberCard({ member }: { member: Member }) {
           )}
         </div>
 
-                {/* Social icons */}
-        {member.socials.length > 0 && (
+        {/* Social icons — sembunyikan di mobile untuk hemat ruang */}
+        {!isMobile && member.socials.length > 0 && (
           <div style={{ display: "flex", gap: 4, flexWrap: "wrap" }}>
             {member.socials.slice(0, 6).map((s, i) => (
               <a
@@ -305,35 +376,93 @@ function MemberCard({ member }: { member: Member }) {
           </div>
         )}
 
+        {/* Mobile: social icons compact */}
+        {isMobile && member.socials.length > 0 && (
+          <div style={{ display: "flex", gap: 3, flexWrap: "wrap" }}>
+            {member.socials.slice(0, 3).map((s, i) => (
+              <a
+                key={i}
+                href={s.url}
+                target="_blank"
+                rel="noopener noreferrer"
+                title={s.title}
+                style={{
+                  width: 22, height: 22,
+                  borderRadius: 6,
+                  background: "rgba(0,0,0,0.04)",
+                  border: "1px solid rgba(0,0,0,0.07)",
+                  display: "flex", alignItems: "center", justifyContent: "center",
+                  color: "#6b7280",
+                  textDecoration: "none",
+                  flexShrink: 0,
+                }}
+                className="dark:bg-white/[0.05] dark:border-white/[0.08] dark:text-gray-400"
+              >
+                <span style={{ transform: "scale(0.8)", display: "flex" }}>
+                  {getSocialIcon(s.title)}
+                </span>
+              </a>
+            ))}
+          </div>
+        )}
+
         {/* Platform indicators */}
-        <div style={{ display: "flex", gap: 5, flexWrap: "wrap" }}>
-          {member.sr_exists && (
-            <span style={{
-              display: "inline-flex", alignItems: "center", gap: 4,
-              fontSize: 10, fontWeight: 600,
-              padding: "2px 8px", borderRadius: 999,
-              background: "rgba(239,68,68,0.07)",
-              color: "#EF4444",
-              border: "1px solid rgba(239,68,68,0.15)",
-            }}>
-              <ShowroomIcon />
-              SHOWROOM
-            </span>
-          )}
-          {member.idn_username && (
-            <span style={{
-              display: "inline-flex", alignItems: "center", gap: 4,
-              fontSize: 10, fontWeight: 600,
-              padding: "2px 8px", borderRadius: 999,
-              background: "rgba(245,158,11,0.07)",
-              color: "#D97706",
-              border: "1px solid rgba(245,158,11,0.15)",
-            }}>
-              <IdnIcon />
-              IDN Live
-            </span>
-          )}
-        </div>
+        {!isMobile && (
+          <div style={{ display: "flex", gap: 5, flexWrap: "wrap" }}>
+            {member.sr_exists && (
+              <span style={{
+                display: "inline-flex", alignItems: "center", gap: 4,
+                fontSize: 10, fontWeight: 600,
+                padding: "2px 8px", borderRadius: 999,
+                background: "rgba(239,68,68,0.07)",
+                color: "#EF4444",
+                border: "1px solid rgba(239,68,68,0.15)",
+              }}>
+                <ShowroomIcon />
+                SHOWROOM
+              </span>
+            )}
+            {member.idn_username && (
+              <span style={{
+                display: "inline-flex", alignItems: "center", gap: 4,
+                fontSize: 10, fontWeight: 600,
+                padding: "2px 8px", borderRadius: 999,
+                background: "rgba(245,158,11,0.07)",
+                color: "#D97706",
+                border: "1px solid rgba(245,158,11,0.15)",
+              }}>
+                <IdnIcon />
+                IDN Live
+              </span>
+            )}
+          </div>
+        )}
+
+        {/* Mobile: platform dot indicators */}
+        {isMobile && (member.sr_exists || member.idn_username) && (
+          <div style={{ display: "flex", gap: 3 }}>
+            {member.sr_exists && (
+              <span style={{
+                width: 6, height: 6, borderRadius: "50%",
+                background: "#EF4444",
+                display: "inline-block",
+                flexShrink: 0,
+              }}
+                title="SHOWROOM"
+              />
+            )}
+            {member.idn_username && (
+              <span style={{
+                width: 6, height: 6, borderRadius: "50%",
+                background: "#D97706",
+                display: "inline-block",
+                flexShrink: 0,
+              }}
+                title="IDN Live"
+              />
+            )}
+          </div>
+        )}
       </div>
     </div>
   );
@@ -343,39 +472,142 @@ function MemberCard({ member }: { member: Member }) {
 const MembersPage: React.FC = () => {
   const [members, setMembers] = useState<Member[]>([]);
   const [loading, setLoading] = useState(true);
+  const [isRefreshing, setIsRefreshing] = useState(false);
   const [filterMode, setFilterMode] = useState<FilterMode>("active");
   const [sortMode, setSortMode] = useState<SortMode>("name");
   const [search, setSearch] = useState("");
   const [teamFilter, setTeamFilter] = useState<string>("all");
+  const [isMobile, setIsMobile] = useState(false);
+  const [cacheInfo, setCacheInfo] = useState<{ fromCache: boolean; timestamp?: number } | null>(null);
+
+  // ── Detect mobile ─────────────────────────────────────────────────────────
+  useEffect(() => {
+    const check = () => setIsMobile(window.innerWidth < 640);
+    check();
+    window.addEventListener("resize", check);
+    return () => window.removeEventListener("resize", check);
+  }, []);
+
+  // ── Fetch dengan cache strategy ───────────────────────────────────────────
+  const fetchMembers = async (forceRefresh = false) => {
+    // 1. Cek cache dulu — tampilkan segera jika valid
+    const cache = getCache();
+    if (!forceRefresh && cache && isCacheValid(cache)) {
+      setMembers(cache.members);
+      setCacheInfo({ fromCache: true, timestamp: cache.timestamp });
+      setLoading(false);
+
+      // Background refresh untuk cek perubahan
+      refreshInBackground(cache);
+      return;
+    }
+
+    // 2. Cache expired atau tidak ada — tampilkan cache lama dulu (jika ada)
+    if (cache && cache.members.length > 0) {
+      setMembers(cache.members);
+      setCacheInfo({ fromCache: true, timestamp: cache.timestamp });
+      setLoading(false);
+      setIsRefreshing(true);
+    }
+
+    // 3. Fetch data baru
+    await fetchFromAPI(forceRefresh);
+  };
+
+  const fetchFromAPI = async (showRefreshing = false) => {
+    if (showRefreshing) setIsRefreshing(true);
+    else setLoading(true);
+
+    try {
+      const [activeRes, gradRes] = await Promise.all([
+        fetch(`${MEMBERS_API}?apikey=${API_KEY}`),
+        fetch(`${MEMBERS_API}?apikey=${API_KEY}&graduated_only=true`),
+      ]);
+
+      const activeJson = await activeRes.json();
+      const gradJson = await gradRes.json();
+
+      const activeData: Member[] = Array.isArray(activeJson) ? activeJson : [];
+      const gradData: Member[] = Array.isArray(gradJson) ? gradJson : [];
+
+      const map = new Map<string, Member>();
+      [...activeData, ...gradData].forEach((m) => map.set(m._id, m));
+      const freshMembers = Array.from(map.values());
+
+      // Cek apakah data berubah dibanding cache
+      const cache = getCache();
+      const cacheStr = cache ? JSON.stringify(cache.members.map(m => m._id).sort()) : "";
+      const freshStr = JSON.stringify(freshMembers.map(m => m._id).sort());
+      const hasChanged = cacheStr !== freshStr;
+
+      if (hasChanged || !cache) {
+        setMembers(freshMembers);
+        setCache(freshMembers);
+        setCacheInfo({ fromCache: false, timestamp: Date.now() });
+      } else {
+        // Data sama, update timestamp cache saja
+        setCache(cache.members);
+        setCacheInfo({ fromCache: true, timestamp: Date.now() });
+      }
+    } catch (e) {
+      console.error("Error fetching members:", e);
+      // Jika gagal fetch tapi ada cache, tetap pakai cache
+      const cache = getCache();
+      if (cache && members.length === 0) {
+        setMembers(cache.members);
+        setCacheInfo({ fromCache: true, timestamp: cache.timestamp });
+      }
+    } finally {
+      setLoading(false);
+      setIsRefreshing(false);
+    }
+  };
+
+  const refreshInBackground = async (cache: CacheData) => {
+    // Silent background check
+    try {
+      const [activeRes, gradRes] = await Promise.all([
+        fetch(`${MEMBERS_API}?apikey=${API_KEY}`),
+        fetch(`${MEMBERS_API}?apikey=${API_KEY}&graduated_only=true`),
+      ]);
+
+      const activeJson = await activeRes.json();
+      const gradJson = await gradRes.json();
+
+      const activeData: Member[] = Array.isArray(activeJson) ? activeJson : [];
+      const gradData: Member[] = Array.isArray(gradJson) ? gradJson : [];
+
+      const map = new Map<string, Member>();
+      [...activeData, ...gradData].forEach((m) => map.set(m._id, m));
+      const freshMembers = Array.from(map.values());
+
+      // Bandingkan lebih detail (termasuk perubahan data member)
+      const cacheStr = JSON.stringify(
+        cache.members.map(m => ({ id: m._id, team: m.team, gen: m.generation })).sort((a, b) => a.id.localeCompare(b.id))
+      );
+      const freshStr = JSON.stringify(
+        freshMembers.map(m => ({ id: m._id, team: m.team, gen: m.generation })).sort((a, b) => a.id.localeCompare(b.id))
+      );
+
+      if (cacheStr !== freshStr) {
+        // Ada perubahan — update state & cache
+        setMembers(freshMembers);
+        setCache(freshMembers);
+        setCacheInfo({ fromCache: false, timestamp: Date.now() });
+      } else {
+        // Tidak ada perubahan — refresh timestamp cache saja
+        setCache(cache.members);
+      }
+    } catch {
+      // Gagal background refresh — tidak masalah, pakai cache
+    }
+  };
 
   useEffect(() => {
-    const fetchMembers = async () => {
-      setLoading(true);
-      try {
-        const [activeRes, gradRes] = await Promise.all([
-          fetch(`${MEMBERS_API}?apikey=${API_KEY}`),
-          fetch(`${MEMBERS_API}?apikey=${API_KEY}&graduated_only=true`),
-        ]);
-        const activeJson = await activeRes.json();
-        const gradJson = await gradRes.json();
-
-        const activeData: Member[] = Array.isArray(activeJson) ? activeJson : [];
-        const gradData: Member[] = Array.isArray(gradJson) ? gradJson : [];
-
-        // Merge & deduplicate by _id
-        const map = new Map<string, Member>();
-        [...activeData, ...gradData].forEach((m) => map.set(m._id, m));
-        setMembers(Array.from(map.values()));
-      } catch (e) {
-        console.error("Error fetching members:", e);
-      } finally {
-        setLoading(false);
-      }
-    };
     fetchMembers();
   }, []);
 
-  // ── Derived ───────────────────────────────────────────────────────────────
+    // ── Derived ───────────────────────────────────────────────────────────────
   const teams = useMemo(() => {
     const t = new Set<string>();
     members
@@ -422,6 +654,17 @@ const MembersPage: React.FC = () => {
   const activeCount = members.filter((m) => !m.is_graduate).length;
   const graduatedCount = members.filter((m) => m.is_graduate).length;
 
+  // ── Format cache time ─────────────────────────────────────────────────────
+  const formatCacheTime = (timestamp: number): string => {
+    const diff = Date.now() - timestamp;
+    const mins = Math.floor(diff / 60000);
+    if (mins < 1) return "baru saja";
+    if (mins < 60) return `${mins} menit lalu`;
+    const hours = Math.floor(mins / 60);
+    if (hours < 24) return `${hours} jam lalu`;
+    return `${Math.floor(hours / 24)} hari lalu`;
+  };
+
   return (
     <>
       <PageMeta
@@ -432,13 +675,15 @@ const MembersPage: React.FC = () => {
       <div className="rounded-2xl border border-gray-200 bg-white dark:border-gray-800 dark:bg-white/[0.03] overflow-hidden">
 
         {/* ── Header ── */}
-        <div className="px-6 py-5 border-b border-gray-200 dark:border-gray-800">
-          <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
+        <div className="px-4 sm:px-6 py-4 sm:py-5 border-b border-gray-200 dark:border-gray-800">
+          <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
 
             {/* Title */}
             <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
               <div style={{
-                width: 44, height: 44, borderRadius: 12, flexShrink: 0,
+                width: isMobile ? 38 : 44,
+                height: isMobile ? 38 : 44,
+                borderRadius: 12, flexShrink: 0,
                 background: "rgba(236,72,153,0.08)",
                 border: "1px solid rgba(236,72,153,0.15)",
                 display: "flex", alignItems: "center", justifyContent: "center",
@@ -446,48 +691,130 @@ const MembersPage: React.FC = () => {
                 <UsersIcon />
               </div>
               <div>
-                <h1 className="text-lg font-bold text-gray-800 dark:text-white" style={{ margin: 0 }}>
-                  Members JKT48
-                </h1>
-                <p style={{ margin: "3px 0 0", fontSize: 12, color: "#9ca3af" }}>
-                  {activeCount} aktif · {graduatedCount} alumni
-                </p>
+                <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                  <h1 className="text-base sm:text-lg font-bold text-gray-800 dark:text-white"
+                    style={{ margin: 0 }}>
+                    Members JKT48
+                  </h1>
+                  {/* Refreshing indicator */}
+                  {isRefreshing && (
+                    <div style={{
+                      display: "inline-flex", alignItems: "center", gap: 4,
+                      padding: "2px 8px", borderRadius: 999,
+                      fontSize: 10, fontWeight: 600,
+                      background: "rgba(70,95,255,0.08)",
+                      color: "#465FFF",
+                      border: "1px solid rgba(70,95,255,0.15)",
+                    }}>
+                      <div style={{
+                        width: 8, height: 8,
+                        border: "1.5px solid rgba(70,95,255,0.3)",
+                        borderTop: "1.5px solid #465FFF",
+                        borderRadius: "50%",
+                        animation: "spin 0.8s linear infinite",
+                      }} />
+                      Memperbarui...
+                    </div>
+                  )}
+                </div>
+                <div style={{ display: "flex", alignItems: "center", gap: 6, marginTop: 3 }}>
+                  <p style={{ margin: 0, fontSize: 12, color: "#9ca3af" }}>
+                    {activeCount} aktif · {graduatedCount} alumni
+                  </p>
+                  {/* Cache info */}
+                  {cacheInfo && (
+                    <span style={{
+                      fontSize: 10, color: "#9ca3af",
+                      display: "flex", alignItems: "center", gap: 3,
+                    }}>
+                      ·
+                      <span style={{
+                        color: cacheInfo.fromCache ? "#D97706" : "#10B981",
+                      }}>
+                        {cacheInfo.fromCache
+                          ? `Cache ${formatCacheTime(cacheInfo.timestamp!)}`
+                          : "Data terbaru"}
+                      </span>
+                    </span>
+                  )}
+                </div>
               </div>
             </div>
 
-            {/* Search */}
-            <div style={{ position: "relative", minWidth: 220 }}>
-              <span style={{
-                position: "absolute", left: 10, top: "50%",
-                transform: "translateY(-50%)",
-                color: "#9ca3af", pointerEvents: "none",
-                display: "flex", alignItems: "center",
-              }}>
-                <SearchIcon />
-              </span>
-              <input
-                type="text"
-                placeholder="Cari member..."
-                value={search}
-                onChange={(e) => setSearch(e.target.value)}
+            {/* Search + Refresh */}
+            <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+              <div style={{ position: "relative", flex: 1, minWidth: isMobile ? 0 : 220 }}>
+                <span style={{
+                  position: "absolute", left: 10, top: "50%",
+                  transform: "translateY(-50%)",
+                  color: "#9ca3af", pointerEvents: "none",
+                  display: "flex", alignItems: "center",
+                }}>
+                  <SearchIcon />
+                </span>
+                <input
+                  type="text"
+                  placeholder="Cari member..."
+                  value={search}
+                  onChange={(e) => setSearch(e.target.value)}
+                  style={{
+                    width: "100%",
+                    padding: "8px 12px 8px 32px",
+                    borderRadius: 10,
+                    border: "1px solid #e5e7eb",
+                    fontSize: 13,
+                    outline: "none",
+                    background: "transparent",
+                    color: "inherit",
+                  }}
+                  className="dark:border-gray-700 dark:text-white dark:placeholder-gray-500"
+                />
+              </div>
+
+              {/* Manual refresh button */}
+              <button
+                onClick={() => fetchMembers(true)}
+                disabled={isRefreshing || loading}
+                title="Refresh data"
                 style={{
-                  width: "100%",
-                  padding: "8px 12px 8px 32px",
+                  width: 36, height: 36,
                   borderRadius: 10,
                   border: "1px solid #e5e7eb",
-                  fontSize: 13,
-                  outline: "none",
                   background: "transparent",
-                  color: "inherit",
+                  display: "flex", alignItems: "center", justifyContent: "center",
+                  cursor: isRefreshing || loading ? "not-allowed" : "pointer",
+                  color: "#6b7280",
+                  flexShrink: 0,
+                  opacity: isRefreshing || loading ? 0.5 : 1,
+                  transition: "all 0.15s",
                 }}
-                className="dark:border-gray-700 dark:text-white dark:placeholder-gray-500"
-              />
+                className="dark:border-gray-700 dark:text-gray-400"
+                onMouseEnter={(e) => {
+                  if (!isRefreshing && !loading) {
+                    (e.currentTarget as HTMLButtonElement).style.background = "rgba(70,95,255,0.08)";
+                    (e.currentTarget as HTMLButtonElement).style.color = "#465FFF";
+                    (e.currentTarget as HTMLButtonElement).style.borderColor = "rgba(70,95,255,0.25)";
+                  }
+                }}
+                onMouseLeave={(e) => {
+                  (e.currentTarget as HTMLButtonElement).style.background = "transparent";
+                  (e.currentTarget as HTMLButtonElement).style.color = "#6b7280";
+                  (e.currentTarget as HTMLButtonElement).style.borderColor = "#e5e7eb";
+                }}
+              >
+                <span style={{
+                  display: "flex",
+                  animation: isRefreshing ? "spin 1s linear infinite" : "none",
+                }}>
+                  <RefreshIcon />
+                </span>
+              </button>
             </div>
           </div>
 
           {/* ── Controls ── */}
           <div style={{
-            display: "flex", gap: 8, marginTop: 16,
+            display: "flex", gap: 8, marginTop: 14,
             flexWrap: "wrap", alignItems: "center",
           }}>
 
@@ -520,8 +847,10 @@ const MembersPage: React.FC = () => {
                     }}
                     style={{
                       display: "flex", alignItems: "center", gap: 5,
-                      padding: "5px 12px", borderRadius: 7,
-                      fontSize: 12, fontWeight: 600,
+                      padding: isMobile ? "4px 8px" : "5px 12px",
+                      borderRadius: 7,
+                      fontSize: isMobile ? 11 : 12,
+                      fontWeight: 600,
                       border: "none", cursor: "pointer",
                       transition: "all 0.15s",
                       background: isActive ? "#fff" : "transparent",
@@ -536,7 +865,7 @@ const MembersPage: React.FC = () => {
                     {tab.label}
                     {!loading && (
                       <span style={{
-                        padding: "1px 6px", borderRadius: 999,
+                        padding: "1px 5px", borderRadius: 999,
                         fontSize: 10, fontWeight: 700,
                         background: isActive ? "#465FFF" : "rgba(0,0,0,0.08)",
                         color: isActive ? "#fff" : "#6b7280",
@@ -551,7 +880,7 @@ const MembersPage: React.FC = () => {
               })}
             </div>
 
-            {/* Team Filter — hanya tampil saat mode active/all */}
+            {/* Team Filter */}
             {filterMode !== "graduated" && teams.length > 0 && (
               <div style={{ display: "flex", gap: 3, flexWrap: "wrap" }}>
                 {["all", ...teams].map((t) => {
@@ -562,8 +891,10 @@ const MembersPage: React.FC = () => {
                       key={t}
                       onClick={() => setTeamFilter(t)}
                       style={{
-                        padding: "5px 12px", borderRadius: 999,
-                        fontSize: 11, fontWeight: 600,
+                        padding: isMobile ? "4px 8px" : "5px 12px",
+                        borderRadius: 999,
+                        fontSize: isMobile ? 10 : 11,
+                        fontWeight: 600,
                         border: isActive
                           ? `1px solid ${tc?.border || "rgba(70,95,255,0.3)"}`
                           : "1px solid rgba(0,0,0,0.08)",
@@ -584,15 +915,20 @@ const MembersPage: React.FC = () => {
 
             {/* Sort */}
             <div style={{ marginLeft: "auto", display: "flex", alignItems: "center", gap: 6 }}>
-              <span style={{ fontSize: 11, color: "#9ca3af", whiteSpace: "nowrap" }}>Urutkan:</span>
+              {!isMobile && (
+                <span style={{ fontSize: 11, color: "#9ca3af", whiteSpace: "nowrap" }}>
+                  Urutkan:
+                </span>
+              )}
               <select
                 value={sortMode}
                 onChange={(e) => setSortMode(e.target.value as SortMode)}
                 style={{
-                  padding: "5px 10px",
+                  padding: isMobile ? "4px 8px" : "5px 10px",
                   borderRadius: 8,
                   border: "1px solid #e5e7eb",
-                  fontSize: 12, fontWeight: 600,
+                  fontSize: isMobile ? 11 : 12,
+                  fontWeight: 600,
                   background: "transparent",
                   color: "inherit",
                   cursor: "pointer",
@@ -609,7 +945,7 @@ const MembersPage: React.FC = () => {
         </div>
 
                {/* ── Content ── */}
-        <div style={{ padding: 24 }}>
+        <div style={{ padding: isMobile ? 12 : 24 }}>
           {loading ? (
             <div style={{
               display: "flex", flexDirection: "column",
@@ -691,23 +1027,53 @@ const MembersPage: React.FC = () => {
               </div>
             </div>
           ) : (
-            /* ── Grid ── */
-            <div style={{
-              display: "grid",
-              gridTemplateColumns: "repeat(auto-fill, minmax(180px, 1fr))",
-              gap: 16,
-            }}>
-              {filtered.map((member) => (
-                <MemberCard key={member._id} member={member} />
-              ))}
-            </div>
+            <>
+              {/* ── Grid ── */}
+              <div style={{
+                display: "grid",
+                gridTemplateColumns: isMobile
+                  ? "repeat(3, 1fr)"           // mobile: 3 kolom
+                  : "repeat(auto-fill, minmax(180px, 1fr))", // desktop: auto
+                gap: isMobile ? 8 : 16,
+              }}>
+                {filtered.map((member) => (
+                  <MemberCard key={member._id} member={member} isMobile={isMobile} />
+                ))}
+              </div>
+
+              {/* ── Refreshing overlay bar ── */}
+              {isRefreshing && (
+                <div style={{
+                  marginTop: 16,
+                  padding: "10px 16px",
+                  borderRadius: 10,
+                  background: "rgba(70,95,255,0.06)",
+                  border: "1px solid rgba(70,95,255,0.15)",
+                  display: "flex",
+                  alignItems: "center",
+                  gap: 10,
+                }}>
+                  <div style={{
+                    width: 14, height: 14,
+                    border: "2px solid rgba(70,95,255,0.2)",
+                    borderTop: "2px solid #465FFF",
+                    borderRadius: "50%",
+                    animation: "spin 0.8s linear infinite",
+                    flexShrink: 0,
+                  }} />
+                  <p style={{ margin: 0, fontSize: 12, color: "#465FFF", fontWeight: 500 }}>
+                    Memeriksa pembaruan data di latar belakang...
+                  </p>
+                </div>
+              )}
+            </>
           )}
         </div>
 
         {/* ── Footer ── */}
         {!loading && filtered.length > 0 && (
           <div style={{
-            padding: "12px 24px",
+            padding: isMobile ? "10px 12px" : "12px 24px",
             borderTop: "1px solid",
             display: "flex",
             alignItems: "center",
@@ -729,25 +1095,51 @@ const MembersPage: React.FC = () => {
               member
             </p>
 
-            <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
-              {Object.entries(teamColor).map(([team, tc]) => (
-                <span
-                  key={team}
-                  style={{
-                    display: "flex", alignItems: "center",
-                    gap: 5, fontSize: 11, color: "#9ca3af",
-                    textTransform: "capitalize",
-                  }}
-                >
-                  <span style={{
-                    width: 8, height: 8, borderRadius: "50%",
-                    background: tc.color, display: "inline-block",
-                    flexShrink: 0,
-                  }} />
-                  {team}
-                </span>
-              ))}
-            </div>
+            {/* Team legend — sembunyikan di mobile */}
+            {!isMobile && (
+              <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+                {Object.entries(teamColor).map(([team, tc]) => (
+                  <span
+                    key={team}
+                    style={{
+                      display: "flex", alignItems: "center",
+                      gap: 5, fontSize: 11, color: "#9ca3af",
+                      textTransform: "capitalize",
+                    }}
+                  >
+                    <span style={{
+                      width: 8, height: 8, borderRadius: "50%",
+                      background: tc.color, display: "inline-block",
+                      flexShrink: 0,
+                    }} />
+                    {team}
+                  </span>
+                ))}
+              </div>
+            )}
+
+            {/* Mobile: team legend compact */}
+            {isMobile && (
+              <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                {Object.entries(teamColor).map(([team, tc]) => (
+                  <span
+                    key={team}
+                    style={{
+                      display: "flex", alignItems: "center",
+                      gap: 3, fontSize: 10, color: "#9ca3af",
+                      textTransform: "capitalize",
+                    }}
+                  >
+                    <span style={{
+                      width: 6, height: 6, borderRadius: "50%",
+                      background: tc.color, display: "inline-block",
+                      flexShrink: 0,
+                    }} />
+                    {team}
+                  </span>
+                ))}
+              </div>
+            )}
           </div>
         )}
 
