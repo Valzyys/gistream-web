@@ -37,7 +37,6 @@
   "devDependencies": {
     "@eslint/js": "^9.19.0",
     "@tailwindcss/postcss": "^4.0.8",
-    "@types/hls.js": "^1.0.5",
     "@types/react": "^19.0.12",
     "@types/react-dom": "^19.0.4",
     "@vitejs/plugin-react": "^4.3.4",
@@ -63,9 +62,6 @@
     "@react-jvectormap/world": {
       "react": "^16.8.0 || ^17 || ^18 || ^19",
       "react-dom": "^16.8.0 || ^17 || ^18 || ^19"
-    },
-    "hls.js": {
-      "react": "^16.8.0 || ^17 || ^18 || ^19"
     }
   }
 }
