@@ -41,12 +41,12 @@ const navItems: NavItem[] = [
     path: "/member",
   },
   {
-    name: "Forms",
+    name: "News",
     icon: <ListIcon />,
     path: "/news",
   },
   {
-    name: "Tables",
+    name: "Live",
     icon: <TableIcon />,
     path: "/live",
   },
