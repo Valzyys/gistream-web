@@ -264,7 +264,7 @@ function ChatPanel({
   chatUser:        any;
   isChatLoggingIn: boolean;
   onSend:          (e: React.FormEvent) => void;
-  chatEndRef:      React.RefObject<HTMLDivElement>;
+  chatEndRef:      React.RefObject<HTMLDivElement | null>;
   navigate:        (path: string) => void;
 }) {
   return (
