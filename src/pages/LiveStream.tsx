@@ -2,8 +2,6 @@ import { useEffect, useState, useRef, useCallback } from "react";
 import { useParams, useNavigate } from "react-router";
 import Hls from "hls.js";
 import { createClient } from "@supabase/supabase-js";
-import PageBreadcrumb from "../components/common/PageBreadCrumb";
-import PageMeta from "../components/common/PageMeta";
 
 const supabaseUrl = import.meta.env.VITE_SUPABASE_URL || "https://mzxfuaoihgzxvokwarao.supabase.co";
 const supabaseKey = import.meta.env.VITE_SUPABASE_ANON_KEY || "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im16eGZ1YW9paGd6eHZva3dhcmFvIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzQ0MDg0NjIsImV4cCI6MjA4OTk4NDQ2Mn0.OFYCkBFXCSfLn-wG94OHHKL5CX8T_BLrbDGPiBdPIog";
@@ -52,6 +50,71 @@ interface ChatMessage {
   role:         string;
   text_content: string;
   timestamp:    string;
+}
+
+// Showroom comment type (untuk member live via polling)
+interface SRComment {
+  id: string;
+  name: string;
+  avatar_url: string;
+  comment: string;
+  created_at: number;
+  class_level: number;
+  user_id: number;
+}
+
+// ── Showroom comment polling hook ─────────────────────────────────────────────
+function useShowroomComments(roomId: number | null) {
+  const [comments, setComments] = useState<SRComment[]>([]);
+  const [loading, setLoading]   = useState(true);
+  const [error, setError]       = useState(false);
+  const [lastPoll, setLastPoll] = useState<Date | null>(null);
+  const mounted = useRef(true);
+  const timer   = useRef<ReturnType<typeof setInterval> | null>(null);
+
+  const fetchComments = useCallback(async () => {
+    if (!roomId || !mounted.current) return;
+    try {
+      const res = await fetch(
+        `https://www.showroom-live.com/api/live/comment_log?room_id=${roomId}`,
+        { headers: { Accept: "application/json", "User-Agent": "Mozilla/5.0" } }
+      );
+      if (!res.ok) throw new Error();
+      const data = await res.json();
+      const parsed: SRComment[] = (data?.comment_log ?? [])
+        .map((c: any) => ({
+          id: `${c.user_id}-${c.created_at}`,
+          name: c.name ?? "Unknown",
+          avatar_url: c.avatar_url ?? "",
+          comment: c.comment ?? "",
+          created_at: c.created_at ?? 0,
+          class_level: c.class_level ?? 1,
+          user_id: c.user_id ?? 0,
+        }))
+        .sort((a: SRComment, b: SRComment) => a.created_at - b.created_at);
+      if (!mounted.current) return;
+      setComments(parsed);
+      setLastPoll(new Date());
+      setError(false);
+    } catch {
+      if (mounted.current) setError(true);
+    } finally {
+      if (mounted.current) setLoading(false);
+    }
+  }, [roomId]);
+
+  useEffect(() => {
+    mounted.current = true;
+    if (!roomId) { setLoading(false); return; }
+    fetchComments();
+    timer.current = setInterval(fetchComments, 5000);
+    return () => {
+      mounted.current = false;
+      if (timer.current) clearInterval(timer.current);
+    };
+  }, [roomId, fetchComments]);
+
+  return { comments, loading, error, lastPoll, retry: fetchComments };
 }
 
 // ── HLS Player ────────────────────────────────────────────────────────────────
@@ -162,8 +225,8 @@ function HlsPlayer({
   );
 }
 
-// ── Chat Panel ────────────────────────────────────────────────────────────────
-function ChatPanel({
+// ── IDN Chat Panel (Supabase realtime, bisa kirim) ────────────────────────────
+function IdnChatPanel({
   messages, chatInput, setChatInput, chatUser, isChatLoggingIn, onSend, chatEndRef, navigate,
 }: {
   messages: ChatMessage[]; chatInput: string; setChatInput: (v: string) => void;
@@ -172,7 +235,6 @@ function ChatPanel({
 }) {
   return (
     <div className="flex flex-col h-full">
-      {/* Header */}
       <div className="flex items-center justify-between px-5 py-3.5 border-b border-gray-100 dark:border-gray-800">
         <div className="flex items-center gap-2.5">
           <span className="relative flex h-2.5 w-2.5">
@@ -186,7 +248,6 @@ function ChatPanel({
         </span>
       </div>
 
-      {/* Messages */}
       <div className="flex-1 overflow-y-auto px-4 py-3 flex flex-col gap-3 scroll-smooth">
         {messages.length === 0 && (
           <div className="flex-1 flex flex-col items-center justify-center gap-3 py-12 text-center">
@@ -234,7 +295,6 @@ function ChatPanel({
         <div ref={chatEndRef} />
       </div>
 
-      {/* Input */}
       <div className="px-4 py-3 border-t border-gray-100 dark:border-gray-800">
         {isChatLoggingIn ? (
           <div className="flex items-center justify-center gap-2 py-2">
@@ -275,6 +335,142 @@ function ChatPanel({
   );
 }
 
+// ── Member/Showroom Chat Panel (read-only, polling) ───────────────────────────
+function MemberChatPanel({
+  comments, loading, error, lastPoll, retry,
+}: {
+  comments: SRComment[];
+  loading: boolean;
+  error: boolean;
+  lastPoll: Date | null;
+  retry: () => void;
+}) {
+  const chatEndRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    chatEndRef.current?.scrollIntoView({ behavior: "smooth" });
+  }, [comments.length]);
+
+  const formatTime = (ts: number) => {
+    const d = new Date(ts * 1000);
+    return `${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
+  };
+
+  const getLevelColor = (level: number) => {
+    if (level >= 20) return "#7B4FFF";
+    if (level >= 10) return "#158DE8";
+    return "#929CC3";
+  };
+
+  return (
+    <div className="flex flex-col h-full">
+      {/* Header */}
+      <div className="flex items-center justify-between px-5 py-3.5 border-b border-gray-100 dark:border-gray-800">
+        <div className="flex items-center gap-2.5">
+          <span className="relative flex h-2.5 w-2.5">
+            <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75" />
+            <span className="relative inline-flex rounded-full h-2.5 w-2.5 bg-emerald-500" />
+          </span>
+          <span className="text-sm font-bold text-gray-900 dark:text-white tracking-tight">Komentar Live</span>
+        </div>
+        <div className="flex items-center gap-2">
+          {lastPoll && !error && (
+            <span className="text-[10px] text-gray-400 dark:text-gray-600">
+              Update {lastPoll.toLocaleTimeString("id-ID", { hour: "2-digit", minute: "2-digit" })}
+            </span>
+          )}
+          <button
+            onClick={retry}
+            className="flex items-center gap-1 text-[11px] text-emerald-600 dark:text-emerald-400 font-semibold hover:opacity-75 transition-opacity"
+          >
+            <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+              <path d="M23 4v6h-6"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/>
+            </svg>
+            Refresh
+          </button>
+          <span className="text-[11px] font-medium text-gray-400 dark:text-gray-500 bg-gray-100 dark:bg-gray-800 px-2.5 py-1 rounded-full">
+            {comments.length} komentar
+          </span>
+        </div>
+      </div>
+
+      {/* Messages */}
+      <div className="flex-1 overflow-y-auto px-4 py-3 flex flex-col gap-3 scroll-smooth">
+        {loading && comments.length === 0 && (
+          <div className="flex-1 flex flex-col items-center justify-center gap-3 py-12">
+            <div className="w-8 h-8 border-2 border-gray-200 dark:border-gray-700 border-t-emerald-500 rounded-full animate-spin" />
+            <p className="text-sm text-gray-400">Memuat komentar...</p>
+          </div>
+        )}
+        {error && comments.length === 0 && (
+          <div className="flex-1 flex flex-col items-center justify-center gap-3 py-12 text-center">
+            <div className="w-12 h-12 rounded-2xl bg-red-50 dark:bg-red-500/10 flex items-center justify-center">
+              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" className="text-red-400">
+                <circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/>
+              </svg>
+            </div>
+            <p className="text-sm font-semibold text-gray-500 dark:text-gray-400">Gagal memuat komentar</p>
+            <button onClick={retry} className="text-xs text-red-500 font-bold hover:underline">Coba Lagi</button>
+          </div>
+        )}
+        {!loading && !error && comments.length === 0 && (
+          <div className="flex-1 flex flex-col items-center justify-center gap-3 py-12 text-center">
+            <div className="w-12 h-12 rounded-2xl bg-gray-100 dark:bg-gray-800 flex items-center justify-center">
+              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" className="text-gray-400">
+                <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" />
+              </svg>
+            </div>
+            <p className="text-sm font-semibold text-gray-500 dark:text-gray-400">Belum ada komentar</p>
+          </div>
+        )}
+        {comments.map((msg) => (
+          <div key={msg.id} className="flex gap-2.5 items-start group">
+            <img
+              src={msg.avatar_url || `https://ui-avatars.com/api/?name=${msg.name}&background=22c55e&color=fff`}
+              alt={msg.name}
+              className="w-7 h-7 rounded-full object-cover flex-shrink-0 ring-2 ring-white dark:ring-gray-900"
+              onError={(e) => { (e.target as HTMLImageElement).src = `https://ui-avatars.com/api/?name=${msg.name}&background=22c55e&color=fff`; }}
+            />
+            <div className="flex-1 min-w-0">
+              <div className="flex items-center gap-1.5 flex-wrap mb-0.5">
+                {/* Level badge */}
+                <span
+                  className="text-[9px] font-extrabold px-1.5 py-0.5 rounded-md"
+                  style={{
+                    backgroundColor: getLevelColor(msg.class_level) + "22",
+                    color: getLevelColor(msg.class_level),
+                    border: `1px solid ${getLevelColor(msg.class_level)}44`,
+                  }}
+                >
+                  ★ {msg.class_level}
+                </span>
+                <span className="text-xs font-bold text-gray-800 dark:text-gray-200 leading-none">{msg.name}</span>
+                <span className="text-[10px] text-gray-400 dark:text-gray-600 ml-auto opacity-0 group-hover:opacity-100 transition-opacity">
+                  {formatTime(msg.created_at)}
+                </span>
+              </div>
+              <p className="text-xs leading-relaxed text-gray-600 dark:text-gray-400 break-words m-0">{msg.comment}</p>
+            </div>
+          </div>
+        ))}
+        <div ref={chatEndRef} />
+      </div>
+
+      {/* Read-only footer */}
+      <div className="px-4 py-3 border-t border-gray-100 dark:border-gray-800">
+        <div className="flex items-center justify-center gap-2 py-1">
+          <div className="flex items-center gap-1.5">
+            <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
+            <span className="text-xs text-gray-400 dark:text-gray-500">
+              Komentar Showroom · auto-refresh 5 detik
+            </span>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 // ── Main ──────────────────────────────────────────────────────────────────────
 function LiveStream() {
   const { playbackId } = useParams<{ playbackId: string }>();
@@ -290,6 +486,7 @@ function LiveStream() {
   const [hlsUrl,            setHlsUrl]            = useState("");
   const [memberShow,        setMemberShow]        = useState<any>(null);
   const [memberHlsUrl,      setMemberHlsUrl]      = useState("");
+  const [memberRoomId,      setMemberRoomId]      = useState<number | null>(null);
   const [membershipLoading, setMembershipLoading] = useState(isIdn);
   const [hasMembership,     setHasMembership]     = useState(false);
   const [isVerified,        setIsVerified]        = useState(false);
@@ -301,12 +498,18 @@ function LiveStream() {
   const [loading,           setLoading]           = useState(true);
   const [error,             setError]             = useState("");
   const [members,           setMembers]           = useState<any[]>([]);
+
+  // IDN chat (Supabase)
   const [chatMessages,      setChatMessages]      = useState<ChatMessage[]>([]);
   const [chatInput,         setChatInput]         = useState("");
   const [chatUser,          setChatUser]          = useState<any>(null);
   const [isChatLoggingIn,   setIsChatLoggingIn]   = useState(true);
   const chatEndRef = useRef<HTMLDivElement>(null);
   const channelRef = useRef<any>(null);
+
+  // Member/Showroom chat (polling, read-only)
+  const { comments: srComments, loading: srLoading, error: srError, lastPoll: srLastPoll, retry: srRetry } =
+    useShowroomComments(isMember ? memberRoomId : null);
 
   const fetchClientIP = async () => {
     try {
@@ -441,6 +644,8 @@ function LiveStream() {
       const streamUrl = show.streaming_url_list?.[0]?.url || null;
       if (!streamUrl) { setError("URL stream tidak tersedia"); setLoading(false); return; }
       setMemberHlsUrl(streamUrl);
+      // Set room_id untuk polling Showroom comments
+      if (show.room_id) setMemberRoomId(show.room_id);
       setLoading(false);
     } catch { setError("Terjadi kesalahan saat memuat stream member."); setLoading(false); }
   }, [playbackId]);
@@ -514,7 +719,9 @@ function LiveStream() {
     await channelRef.current?.send({ type: "broadcast", event: "pesan_baru", payload });
   };
 
+  // IDN chat via Supabase realtime
   useEffect(() => {
+    if (!isIdn) return;
     const channel = supabase.channel(`chat-${playbackId}`, { config: { broadcast: { ack: true } } });
     channel
       .on("broadcast", { event: "pesan_baru" }, ({ payload }: { payload: ChatMessage }) => {
@@ -527,7 +734,7 @@ function LiveStream() {
     channelRef.current = channel;
     initChat();
     return () => { supabase.removeChannel(channel); };
-  }, [playbackId, initChat]);
+  }, [playbackId, isIdn, initChat]);
 
   useEffect(() => { chatEndRef.current?.scrollIntoView({ behavior: "smooth" }); }, [chatMessages]);
 
@@ -565,14 +772,10 @@ function LiveStream() {
   // ── Membership Loading ────────────────────────────────────────────────────
   if (isIdn && membershipLoading) {
     return (
-      <div>
-        <PageMeta title="Memeriksa Akses..." description="Live Stream JKT48" />
-        <PageBreadcrumb pageTitle="Live Stream" />
-        <div className="min-h-screen rounded-2xl border border-gray-200 bg-white dark:border-gray-800 dark:bg-white/[0.03] flex items-center justify-center">
-          <div className="text-center">
-            <div className="w-10 h-10 border-[3px] border-gray-200 dark:border-gray-700 border-t-red-500 rounded-full animate-spin mx-auto mb-4" />
-            <p className="text-sm font-medium text-gray-500 dark:text-gray-400">Memeriksa akses...</p>
-          </div>
+      <div className="min-h-screen rounded-2xl border border-gray-200 bg-white dark:border-gray-800 dark:bg-white/[0.03] flex items-center justify-center">
+        <div className="text-center">
+          <div className="w-10 h-10 border-[3px] border-gray-200 dark:border-gray-700 border-t-red-500 rounded-full animate-spin mx-auto mb-4" />
+          <p className="text-sm font-medium text-gray-500 dark:text-gray-400">Memeriksa akses...</p>
         </div>
       </div>
     );
@@ -581,93 +784,86 @@ function LiveStream() {
   // ── Verification Page ─────────────────────────────────────────────────────
   if (isIdn && showVerification && !isVerified) {
     return (
-      <div>
-        <PageMeta title="Verifikasi Akses - Live Stream" description="Verifikasi akses live stream JKT48" />
-        <PageBreadcrumb pageTitle="Verifikasi Akses" />
-        <div className="min-h-screen rounded-2xl border border-gray-200 bg-white px-5 py-7 dark:border-gray-800 dark:bg-white/[0.03] xl:px-10 xl:py-12 flex items-center justify-center">
-          <div className="w-full max-w-[440px]">
-            {/* Icon header */}
-            <div className="text-center mb-8">
-              <div className="inline-flex items-center justify-center w-16 h-16 rounded-2xl bg-red-50 dark:bg-red-500/10 border border-red-200 dark:border-red-500/20 mb-4">
-                <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round" className="text-red-500">
-                  <rect x="3" y="11" width="18" height="11" rx="2" ry="2" /><path d="M7 11V7a5 5 0 0 1 10 0v4" />
-                </svg>
-              </div>
-              <h3 className="text-2xl font-bold text-gray-800 dark:text-white/90 mb-1.5">Verifikasi Akses</h3>
-              <p className="text-sm text-gray-500 dark:text-gray-400">Masukkan email dan kode untuk mengakses live stream IDN Plus</p>
+      <div className="min-h-screen rounded-2xl border border-gray-200 bg-white px-5 py-7 dark:border-gray-800 dark:bg-white/[0.03] xl:px-10 xl:py-12 flex items-center justify-center">
+        <div className="w-full max-w-[440px]">
+          <div className="text-center mb-8">
+            <div className="inline-flex items-center justify-center w-16 h-16 rounded-2xl bg-red-50 dark:bg-red-500/10 border border-red-200 dark:border-red-500/20 mb-4">
+              <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round" className="text-red-500">
+                <rect x="3" y="11" width="18" height="11" rx="2" ry="2" /><path d="M7 11V7a5 5 0 0 1 10 0v4" />
+              </svg>
             </div>
-
-            {/* Form card */}
-            <div className="bg-gray-50 dark:bg-gray-800/50 rounded-2xl border border-gray-200 dark:border-gray-700 p-6 mb-4">
-              <form onSubmit={(e) => { e.preventDefault(); verifyAccess(); }} className="flex flex-col gap-4">
-                <div>
-                  <label className="block text-xs font-semibold text-gray-600 dark:text-gray-400 mb-1.5 uppercase tracking-wide">Email</label>
-                  <input
-                    type="email"
-                    value={verifData.email}
-                    onChange={(e) => { setVerifData((p) => ({ ...p, email: e.target.value })); setVerifyError(""); }}
-                    placeholder="email@example.com"
-                    required
-                    className="w-full px-4 py-3 rounded-xl border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-900/50 text-gray-900 dark:text-white text-sm outline-none focus:ring-2 focus:ring-red-500/30 focus:border-red-400 dark:focus:border-red-500 placeholder:text-gray-400 transition-all"
-                  />
-                </div>
-                <div>
-                  <label className="block text-xs font-semibold text-gray-600 dark:text-gray-400 mb-1.5 uppercase tracking-wide">Verification Code</label>
-                  <input
-                    type="text"
-                    value={verifData.code}
-                    onChange={(e) => { setVerifData((p) => ({ ...p, code: e.target.value })); setVerifyError(""); }}
-                    placeholder="Masukkan kode verifikasi"
-                    required
-                    className="w-full px-4 py-3 rounded-xl border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-900/50 text-gray-900 dark:text-white text-sm outline-none focus:ring-2 focus:ring-red-500/30 focus:border-red-400 dark:focus:border-red-500 placeholder:text-gray-400 tracking-widest transition-all"
-                  />
-                </div>
-                {verifyError && (
-                  <div className="flex items-center gap-2.5 px-4 py-3 rounded-xl bg-red-50 dark:bg-red-500/10 border border-red-200 dark:border-red-500/20 text-red-600 dark:text-red-400 text-xs font-medium">
-                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="flex-shrink-0">
-                      <circle cx="12" cy="12" r="10" /><line x1="12" y1="8" x2="12" y2="12" /><line x1="12" y1="16" x2="12.01" y2="16" />
-                    </svg>
-                    {verifyError}
-                  </div>
-                )}
-                <button
-                  type="submit"
-                  disabled={verifying}
-                  className={`flex items-center justify-center gap-2 px-4 py-3.5 rounded-xl border-0 text-sm font-bold text-white transition-all duration-200 mt-1 ${verifying ? "bg-red-400 cursor-not-allowed" : "bg-red-500 hover:bg-red-600 cursor-pointer shadow-lg shadow-red-500/25 hover:shadow-red-500/40 hover:-translate-y-0.5"}`}
-                >
-                  {verifying ? (
-                    <><div className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" />Memverifikasi...</>
-                  ) : (
-                    <><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><polyline points="20 6 9 17 4 12" /></svg>Verifikasi Akses</>
-                  )}
-                </button>
-              </form>
-            </div>
-
-            {/* Info */}
-            <div className="bg-gray-50 dark:bg-gray-800/30 rounded-xl border border-gray-200 dark:border-gray-700/50 p-4 mb-3">
-              <p className="text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-2">Informasi</p>
-              <ul className="space-y-1">
-                {["Code verifikasi hanya dapat digunakan sekali", "IP address akan dicatat untuk keamanan", "Akses berlaku selama 5 jam", "Session tetap aktif saat refresh halaman"].map((info, i) => (
-                  <li key={i} className="flex items-start gap-2 text-xs text-gray-500 dark:text-gray-400">
-                    <span className="text-gray-300 dark:text-gray-600 mt-0.5">•</span>{info}
-                  </li>
-                ))}
-              </ul>
-              <div className="mt-3 pt-3 border-t border-gray-200 dark:border-gray-700/50 text-xs text-gray-500 dark:text-gray-400">
-                Punya membership monthly?{" "}
-                <span onClick={() => navigate("/signin")} className="text-red-500 cursor-pointer font-bold hover:underline">Login di sini</span>
-              </div>
-            </div>
-
-            <button
-              onClick={() => navigate(-1)}
-              className="w-full py-3 rounded-xl border border-gray-200 dark:border-gray-700 bg-transparent text-gray-500 dark:text-gray-400 text-sm font-medium cursor-pointer hover:bg-gray-50 dark:hover:bg-gray-800/50 transition-colors flex items-center justify-center gap-1.5"
-            >
-              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="15 18 9 12 15 6" /></svg>
-              Kembali
-            </button>
+            <h3 className="text-2xl font-bold text-gray-800 dark:text-white/90 mb-1.5">Verifikasi Akses</h3>
+            <p className="text-sm text-gray-500 dark:text-gray-400">Masukkan email dan kode untuk mengakses live stream IDN Plus</p>
           </div>
+
+          <div className="bg-gray-50 dark:bg-gray-800/50 rounded-2xl border border-gray-200 dark:border-gray-700 p-6 mb-4">
+            <form onSubmit={(e) => { e.preventDefault(); verifyAccess(); }} className="flex flex-col gap-4">
+              <div>
+                <label className="block text-xs font-semibold text-gray-600 dark:text-gray-400 mb-1.5 uppercase tracking-wide">Email</label>
+                <input
+                  type="email"
+                  value={verifData.email}
+                  onChange={(e) => { setVerifData((p) => ({ ...p, email: e.target.value })); setVerifyError(""); }}
+                  placeholder="email@example.com"
+                  required
+                  className="w-full px-4 py-3 rounded-xl border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-900/50 text-gray-900 dark:text-white text-sm outline-none focus:ring-2 focus:ring-red-500/30 focus:border-red-400 dark:focus:border-red-500 placeholder:text-gray-400 transition-all"
+                />
+              </div>
+              <div>
+                <label className="block text-xs font-semibold text-gray-600 dark:text-gray-400 mb-1.5 uppercase tracking-wide">Verification Code</label>
+                <input
+                  type="text"
+                  value={verifData.code}
+                  onChange={(e) => { setVerifData((p) => ({ ...p, code: e.target.value })); setVerifyError(""); }}
+                  placeholder="Masukkan kode verifikasi"
+                  required
+                  className="w-full px-4 py-3 rounded-xl border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-900/50 text-gray-900 dark:text-white text-sm outline-none focus:ring-2 focus:ring-red-500/30 focus:border-red-400 dark:focus:border-red-500 placeholder:text-gray-400 tracking-widest transition-all"
+                />
+              </div>
+              {verifyError && (
+                <div className="flex items-center gap-2.5 px-4 py-3 rounded-xl bg-red-50 dark:bg-red-500/10 border border-red-200 dark:border-red-500/20 text-red-600 dark:text-red-400 text-xs font-medium">
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="flex-shrink-0">
+                    <circle cx="12" cy="12" r="10" /><line x1="12" y1="8" x2="12" y2="12" /><line x1="12" y1="16" x2="12.01" y2="16" />
+                  </svg>
+                  {verifyError}
+                </div>
+              )}
+              <button
+                type="submit"
+                disabled={verifying}
+                className={`flex items-center justify-center gap-2 px-4 py-3.5 rounded-xl border-0 text-sm font-bold text-white transition-all duration-200 mt-1 ${verifying ? "bg-red-400 cursor-not-allowed" : "bg-red-500 hover:bg-red-600 cursor-pointer shadow-lg shadow-red-500/25 hover:shadow-red-500/40 hover:-translate-y-0.5"}`}
+              >
+                {verifying ? (
+                  <><div className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" />Memverifikasi...</>
+                ) : (
+                  <><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><polyline points="20 6 9 17 4 12" /></svg>Verifikasi Akses</>
+                )}
+              </button>
+            </form>
+          </div>
+
+          <div className="bg-gray-50 dark:bg-gray-800/30 rounded-xl border border-gray-200 dark:border-gray-700/50 p-4 mb-3">
+            <p className="text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-2">Informasi</p>
+            <ul className="space-y-1">
+              {["Code verifikasi hanya dapat digunakan sekali", "IP address akan dicatat untuk keamanan", "Akses berlaku selama 5 jam", "Session tetap aktif saat refresh halaman"].map((info, i) => (
+                <li key={i} className="flex items-start gap-2 text-xs text-gray-500 dark:text-gray-400">
+                  <span className="text-gray-300 dark:text-gray-600 mt-0.5">•</span>{info}
+                </li>
+              ))}
+            </ul>
+            <div className="mt-3 pt-3 border-t border-gray-200 dark:border-gray-700/50 text-xs text-gray-500 dark:text-gray-400">
+              Punya membership monthly?{" "}
+              <span onClick={() => navigate("/signin")} className="text-red-500 cursor-pointer font-bold hover:underline">Login di sini</span>
+            </div>
+          </div>
+
+          <button
+            onClick={() => navigate(-1)}
+            className="w-full py-3 rounded-xl border border-gray-200 dark:border-gray-700 bg-transparent text-gray-500 dark:text-gray-400 text-sm font-medium cursor-pointer hover:bg-gray-50 dark:hover:bg-gray-800/50 transition-colors flex items-center justify-center gap-1.5"
+          >
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="15 18 9 12 15 6" /></svg>
+            Kembali
+          </button>
         </div>
       </div>
     );
@@ -676,16 +872,12 @@ function LiveStream() {
   // ── Loading stream ────────────────────────────────────────────────────────
   if (loading) {
     return (
-      <div>
-        <PageMeta title="Memuat Live Stream..." description="Live Stream JKT48" />
-        <PageBreadcrumb pageTitle="Live Stream" />
-        <div className="min-h-screen rounded-2xl border border-gray-200 bg-white dark:border-gray-800 dark:bg-white/[0.03] flex items-center justify-center">
-          <div className="text-center">
-            <div className="w-10 h-10 border-[3px] border-gray-200 dark:border-gray-700 border-t-red-500 rounded-full animate-spin mx-auto mb-4" />
-            <p className="text-sm font-medium text-gray-500 dark:text-gray-400">
-              {isIdn ? "Memuat IDN Live Plus..." : "Memuat live stream member..."}
-            </p>
-          </div>
+      <div className="min-h-screen rounded-2xl border border-gray-200 bg-white dark:border-gray-800 dark:bg-white/[0.03] flex items-center justify-center">
+        <div className="text-center">
+          <div className="w-10 h-10 border-[3px] border-gray-200 dark:border-gray-700 border-t-red-500 rounded-full animate-spin mx-auto mb-4" />
+          <p className="text-sm font-medium text-gray-500 dark:text-gray-400">
+            {isIdn ? "Memuat IDN Live Plus..." : "Memuat live stream member..."}
+          </p>
         </div>
       </div>
     );
@@ -694,32 +886,28 @@ function LiveStream() {
   // ── Error ─────────────────────────────────────────────────────────────────
   if (error) {
     return (
-      <div>
-        <PageMeta title="Error - Live Stream" description="Live Stream JKT48" />
-        <PageBreadcrumb pageTitle="Live Stream" />
-        <div className="min-h-screen rounded-2xl border border-gray-200 bg-white px-5 py-7 dark:border-gray-800 dark:bg-white/[0.03] xl:px-10 xl:py-12 flex items-center justify-center">
-          <div className="text-center max-w-sm">
-            <div className="w-14 h-14 rounded-2xl bg-red-50 dark:bg-red-500/10 border border-red-200 dark:border-red-500/20 flex items-center justify-center mx-auto mb-4">
-              <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round" className="text-red-500">
-                <circle cx="12" cy="12" r="10" /><line x1="12" y1="8" x2="12" y2="12" /><line x1="12" y1="16" x2="12.01" y2="16" />
-              </svg>
-            </div>
-            <h3 className="text-lg font-bold text-gray-800 dark:text-white/90 mb-2">Terjadi Kesalahan</h3>
-            <p className="text-sm text-gray-500 dark:text-gray-400 mb-6">{error}</p>
-            <div className="flex gap-3 justify-center">
-              <button
-                onClick={() => { setError(""); isIdn ? loadIdnStream() : loadMemberStream(); }}
-                className="px-5 py-2.5 rounded-xl border-0 bg-red-500 text-white text-sm font-bold cursor-pointer hover:bg-red-600 shadow-lg shadow-red-500/25 transition-all hover:-translate-y-0.5"
-              >
-                Coba Lagi
-              </button>
-              <button
-                onClick={() => navigate(-1)}
-                className="px-5 py-2.5 rounded-xl border border-gray-200 dark:border-gray-700 bg-transparent text-gray-600 dark:text-gray-400 text-sm font-semibold cursor-pointer hover:bg-gray-50 dark:hover:bg-gray-800/50 transition-colors"
-              >
-                Kembali
-              </button>
-            </div>
+      <div className="min-h-screen rounded-2xl border border-gray-200 bg-white px-5 py-7 dark:border-gray-800 dark:bg-white/[0.03] xl:px-10 xl:py-12 flex items-center justify-center">
+        <div className="text-center max-w-sm">
+          <div className="w-14 h-14 rounded-2xl bg-red-50 dark:bg-red-500/10 border border-red-200 dark:border-red-500/20 flex items-center justify-center mx-auto mb-4">
+            <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round" className="text-red-500">
+              <circle cx="12" cy="12" r="10" /><line x1="12" y1="8" x2="12" y2="12" /><line x1="12" y1="16" x2="12.01" y2="16" />
+            </svg>
+          </div>
+          <h3 className="text-lg font-bold text-gray-800 dark:text-white/90 mb-2">Terjadi Kesalahan</h3>
+          <p className="text-sm text-gray-500 dark:text-gray-400 mb-6">{error}</p>
+          <div className="flex gap-3 justify-center">
+            <button
+              onClick={() => { setError(""); isIdn ? loadIdnStream() : loadMemberStream(); }}
+              className="px-5 py-2.5 rounded-xl border-0 bg-red-500 text-white text-sm font-bold cursor-pointer hover:bg-red-600 shadow-lg shadow-red-500/25 transition-all hover:-translate-y-0.5"
+            >
+              Coba Lagi
+            </button>
+            <button
+              onClick={() => navigate(-1)}
+              className="px-5 py-2.5 rounded-xl border border-gray-200 dark:border-gray-700 bg-transparent text-gray-600 dark:text-gray-400 text-sm font-semibold cursor-pointer hover:bg-gray-50 dark:hover:bg-gray-800/50 transition-colors"
+            >
+              Kembali
+            </button>
           </div>
         </div>
       </div>
@@ -729,12 +917,6 @@ function LiveStream() {
   // ── Main render ───────────────────────────────────────────────────────────
   return (
     <div>
-      <PageMeta
-        title={`${showTitle} - Live Stream JKT48`}
-        description={`Tonton live stream ${showTitle} di JKT48Connect`}
-      />
-      <PageBreadcrumb pageTitle={showTitle} />
-
       <div className="rounded-2xl border border-gray-200 bg-white px-5 py-6 dark:border-gray-800 dark:bg-white/[0.03] xl:px-8 xl:py-7">
 
         {/* ── Top bar ── */}
@@ -747,7 +929,6 @@ function LiveStream() {
             Kembali
           </button>
 
-          {/* LIVE pill */}
           <div className="flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-red-500 text-white text-[11px] font-extrabold tracking-wide shadow-md shadow-red-500/30">
             <span className="w-1.5 h-1.5 rounded-full bg-white animate-pulse" />
             LIVE
@@ -890,7 +1071,6 @@ function LiveStream() {
               </div>
             )}
 
-            {/* Footer */}
             <p className="text-center text-[10px] font-semibold text-gray-300 dark:text-gray-700 uppercase tracking-widest pb-1">
               Powered by JKT48Connect
             </p>
@@ -900,16 +1080,26 @@ function LiveStream() {
           <div className="xl:sticky xl:top-4 xl:self-start">
             <div className="rounded-2xl border border-gray-200 dark:border-gray-800 bg-white dark:bg-white/[0.02] overflow-hidden" style={{ height: "580px" }}>
               <div className="h-full flex flex-col">
-                <ChatPanel
-                  messages={chatMessages}
-                  chatInput={chatInput}
-                  setChatInput={setChatInput}
-                  chatUser={chatUser}
-                  isChatLoggingIn={isChatLoggingIn}
-                  onSend={handleSendMessage}
-                  chatEndRef={chatEndRef}
-                  navigate={navigate}
-                />
+                {isIdn ? (
+                  <IdnChatPanel
+                    messages={chatMessages}
+                    chatInput={chatInput}
+                    setChatInput={setChatInput}
+                    chatUser={chatUser}
+                    isChatLoggingIn={isChatLoggingIn}
+                    onSend={handleSendMessage}
+                    chatEndRef={chatEndRef}
+                    navigate={navigate}
+                  />
+                ) : (
+                  <MemberChatPanel
+                    comments={srComments}
+                    loading={srLoading}
+                    error={srError}
+                    lastPoll={srLastPoll}
+                    retry={srRetry}
+                  />
+                )}
               </div>
             </div>
           </div>
