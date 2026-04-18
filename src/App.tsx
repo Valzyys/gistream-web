@@ -25,6 +25,7 @@ import LivePage from "./pages/Live";
 import LiveStream from "./pages/LiveStream";
 import AboutGiStream from "./pages/About";
 import ReplayPage from "./pages/Replay";
+import ReplayPlayerPage from "./pages/ReplayDetail";
 
 export default function App() {
   return (
@@ -80,6 +81,7 @@ export default function App() {
           
           {/* Live Stream - Full Page (tanpa AppLayout) */}
           <Route path="/live/:playbackId" element={<LiveStream />} />
+          <Route path="/replay/:id" element={<ReplayPlayerPage />} />
 
         </Routes>
       </Router>
