@@ -232,15 +232,26 @@ function ReplayPlyrPlayer({
         .plyr__tooltip::before {
           border-top-color: rgba(0,0,0,0.85);
         }
-        video.plyr-video-el {
-          max-height: 520px;
+        .plyr,
+        .plyr--video,
+        .plyr__video-wrapper,
+        .plyr video {
+          width: 100% !important;
+          height: 100% !important;
+          max-height: none !important;
+          position: absolute !important;
+          top: 0 !important;
+          left: 0 !important;
+        }
+        .plyr__video-wrapper {
+          padding-bottom: 0 !important;
         }
       `}</style>
 
-      <div className="aspect-video">
+      <div className="relative w-full" style={{ paddingBottom: "56.25%" }}>
         <video
           ref={videoRef}
-          className="plyr-video-el w-full h-full"
+          className="plyr-video-el"
           crossOrigin="anonymous"
           playsInline
           poster={poster}
