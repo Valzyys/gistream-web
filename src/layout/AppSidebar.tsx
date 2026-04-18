@@ -34,6 +34,23 @@ const LiveIcon = () => (
   </svg>
 );
 
+const ReplayIcon = () => (
+ <svg
+    width="22"
+    height="22"
+    viewBox="0 0 24 24"
+    fill="none"
+    stroke="currentColor"
+    strokeWidth="2"
+    strokeLinecap="round"
+    strokeLinejoin="round"
+  >
+   
+    <polygon points="5 3 19 12 5 21 5 3" />  {/* segitiga play */}
+    <line x1="19" y1="3" x2="19" y2="21" />  {/* garis vertikal */}
+  </svg>
+);
+
 const AboutIcon = () => (
   <svg
     width="22"
@@ -85,6 +102,11 @@ const navItems: NavItem[] = [
     name: "Live",
     icon: <LiveIcon />,
     path: "/live",
+  },
+  {
+    name: "Replay",
+    icon: <ReplayIcon />,
+    path: "/replay",
   },
 ];
 
