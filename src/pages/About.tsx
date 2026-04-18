@@ -1,4 +1,4 @@
-import { Link } from "react-router";
+import { Link } from "react-router-dom";
 import PageBreadcrumb from "../components/common/PageBreadCrumb";
 import PageMeta from "../components/common/PageMeta";
 
@@ -178,17 +178,13 @@ export default function AboutGiStream() {
                 <h1 className="text-2xl font-bold text-gray-800 dark:text-white/90 sm:text-3xl">
                   GiStream
                 </h1>
-                <Badge
-                  color="green"
-                  icon={<span className="w-1.5 h-1.5 rounded-full bg-green-500 dark:bg-green-400 inline-block" />}
-                >
-                  Live Now
-                </Badge>
                 <Badge color="gray">Unofficial</Badge>
               </div>
               <p className="text-gray-500 dark:text-gray-400 text-sm sm:text-base leading-relaxed max-w-xl">
                 Platform streaming tidak resmi untuk menonton{" "}
-               {" "}
+                <span className="font-semibold text-pink-600 dark:text-pink-400">
+                  Live Theater JKT48
+                </span>{" "}
                 kapan saja dan di mana saja, dengan harga yang terjangkau untuk semua fans.
               </p>
               <div className="flex flex-wrap gap-2 mt-3">
