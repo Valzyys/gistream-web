@@ -130,29 +130,11 @@ function ReplayCard({ show }: { show: ReplayShow }) {
           REPLAY
         </div>
 
-        {/* ID badge */}
-        <div style={{
-          position:       "absolute",
-          top:            10,
-          right:          10,
-          padding:        "3px 8px",
-          borderRadius:   6,
-          fontSize:       10,
-          fontWeight:     700,
-          fontFamily:     "monospace",
-          background:     "rgba(0,0,0,0.55)",
-          backdropFilter: "blur(6px)",
-          color:          "rgba(255,255,255,0.7)",
-          border:         "1px solid rgba(255,255,255,0.1)",
-        }}>
-          {show.id}
-        </div>
-
         {/* Member count */}
         {show.lineup.length > 0 && (
           <div style={{
             position:       "absolute",
-            bottom:         10,
+            top:            10,
             right:          10,
             display:        "inline-flex",
             alignItems:     "center",
