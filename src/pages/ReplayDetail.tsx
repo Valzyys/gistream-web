@@ -312,6 +312,41 @@ function ReplayPlyrPlayer({
   );
 }
 
+// ── Helpers ───────────────────────────────────────────────────────────────────
+
+/**
+ * Cek membership dari localStorage/sessionStorage.
+ * Sama persis seperti getSession() di LiveStream.tsx
+ */
+const getSession = () => {
+  try {
+    const d = JSON.parse(
+      sessionStorage.getItem("userLogin") ||
+      localStorage.getItem("userLogin") ||
+      "null"
+    );
+    if (d && d.isLoggedIn && d.token) return d;
+    return null;
+  } catch { return null; }
+};
+
+const API_BASE = "https://v2.jkt48connect.com/api/jkt48connect";
+
+async function checkMonthlyMembership(): Promise<boolean> {
+  const session = getSession();
+  if (!session) return false;
+  const uid   = session.user?.user_id;
+  const token = session.token;
+  if (!uid || !token) return false;
+  try {
+    const res  = await fetch(`${API_BASE}/membership/status/${uid}?apikey=${API_KEY}`, {
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    const data = await res.json();
+    return !!(data.status && data.data?.is_active && data.data?.membership_type === "monthly");
+  } catch { return false; }
+}
+
 // ── Verification Gate ─────────────────────────────────────────────────────────
 function VerificationGate({
   onVerified,
@@ -331,21 +366,34 @@ function VerificationGate({
     setLoading(true);
     setError("");
     try {
-      // Only check if code exists — no expiry / usage check
+      // ── 1. Cek membership monthly terlebih dahulu ─────────────────────────
+      const hasMembership = await checkMonthlyMembership();
+      if (hasMembership) {
+        localStorage.setItem(
+          "replay_verification",
+          JSON.stringify({ email: email.trim(), code: "MEMBERSHIP_BYPASS", ts: Date.now() })
+        );
+        onVerified();
+        return;
+      }
+
+      // ── 2. Cek apakah kode ada untuk email ini (tanpa cek expiry/usage) ───
       const res  = await fetch(
         `https://v2.jkt48connect.com/api/codes/list?email=${encodeURIComponent(email.trim())}&apikey=${API_KEY}`
       );
       const data = await res.json();
+
       if (!data.status) { setError("Email tidak ditemukan"); setLoading(false); return; }
 
-      const tokens: any[] = data.data?.wotatokens || [];
-      const found = tokens.find(
+      // Support struktur baru (data.codes) maupun lama (data.wotatokens)
+      const codes: any[] = data.data?.codes || data.data?.wotatokens || [];
+      const found = codes.find(
         (t) => t.code?.toLowerCase() === code.trim().toLowerCase()
       );
 
       if (!found) { setError("Kode tidak ditemukan untuk email ini"); setLoading(false); return; }
 
-      // Save minimal session — just mark verified
+      // Kode ditemukan — simpan sesi & beri akses
       localStorage.setItem(
         "replay_verification",
         JSON.stringify({ email: email.trim(), code: code.trim(), ts: Date.now() })
@@ -463,16 +511,35 @@ const ReplayPlayerPage: React.FC = () => {
   const [loading,    setLoading]    = useState(true);
   const [error,      setError]      = useState("");
   const [verified,   setVerified]   = useState(false);
+  const [checkingAccess, setCheckingAccess] = useState(true);
 
-  // Check existing verification in localStorage
+  // ── Check membership bypass OR existing localStorage verification ──────────
   useEffect(() => {
-    const stored = localStorage.getItem("replay_verification");
-    if (stored) {
-      try {
-        const parsed = JSON.parse(stored);
-        if (parsed?.code && parsed?.email) setVerified(true);
-      } catch {}
-    }
+    const init = async () => {
+      // 1. Monthly membership → bypass gate completely
+      const hasMembership = await checkMonthlyMembership();
+      if (hasMembership) {
+        setVerified(true);
+        setCheckingAccess(false);
+        return;
+      }
+
+      // 2. Existing localStorage session
+      const stored = localStorage.getItem("replay_verification");
+      if (stored) {
+        try {
+          const parsed = JSON.parse(stored);
+          if (parsed?.code && parsed?.email) {
+            setVerified(true);
+            setCheckingAccess(false);
+            return;
+          }
+        } catch {}
+      }
+
+      setCheckingAccess(false);
+    };
+    init();
   }, []);
 
   const fetchShow = useCallback(async () => {
@@ -494,6 +561,18 @@ const ReplayPlayerPage: React.FC = () => {
   }, [id]);
 
   useEffect(() => { fetchShow(); }, [fetchShow]);
+
+  // ── Checking access spinner ──
+  if (checkingAccess) {
+    return (
+      <div className="rounded-2xl border border-gray-200 bg-white dark:border-gray-800 dark:bg-white/[0.03] min-h-[60vh] flex items-center justify-center">
+        <div className="text-center">
+          <div className="w-10 h-10 border-[3px] border-gray-200 dark:border-gray-700 border-t-red-500 rounded-full animate-spin mx-auto mb-4" />
+          <p className="text-sm font-medium text-gray-500 dark:text-gray-400">Memeriksa akses...</p>
+        </div>
+      </div>
+    );
+  }
 
   // ── Loading ──
   if (loading) {
