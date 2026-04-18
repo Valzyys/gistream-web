@@ -52,7 +52,6 @@ interface ChatMessage {
   timestamp:    string;
 }
 
-// Showroom comment type (untuk member live via polling)
 interface SRComment {
   id: string;
   name: string;
@@ -130,58 +129,151 @@ function HlsPlayer({
 }) {
   const videoRef = useRef<HTMLVideoElement>(null);
   const hlsRef   = useRef<Hls | null>(null);
+  const retryRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [showQualityPanel, setShowQualityPanel] = useState(false);
   const [currentLevel, setCurrentLevel]         = useState<string>("Auto");
   const [bandwidth, setBandwidth]               = useState<string>("");
 
+  const destroyHls = useCallback(() => {
+    if (retryRef.current) { clearTimeout(retryRef.current); retryRef.current = null; }
+    if (hlsRef.current) { hlsRef.current.destroy(); hlsRef.current = null; }
+  }, []);
+
   useEffect(() => {
     const video = videoRef.current;
     if (!video || !src) return;
-    if (hlsRef.current) { hlsRef.current.destroy(); hlsRef.current = null; }
-    if (Hls.isSupported()) {
-      const hls = new Hls({
-        enableWorker: true, lowLatencyMode: true,
-        liveSyncDuration: 3, liveMaxLatencyDuration: 10,
-        startLevel: qualityMode === "auto" ? -1 : undefined,
-        abrEwmaDefaultEstimate: 1_000_000,
-        abrBandWidthFactor: 0.9, abrBandWidthUpFactor: 0.7,
-      });
-      hlsRef.current = hls;
-      hls.loadSource(src);
-      hls.attachMedia(video);
-      hls.on(Hls.Events.MANIFEST_PARSED, () => { video.play().catch(() => {}); });
-      hls.on(Hls.Events.LEVEL_SWITCHED, (_, data) => {
-        const lvl = hls.levels[data.level];
-        if (lvl) {
-          setCurrentLevel(lvl.name || `${lvl.height}p`);
-          const bw = hls.bandwidthEstimate;
-          if (bw > 0) setBandwidth(bw >= 1_000_000 ? (bw / 1_000_000).toFixed(1) + " Mbps" : Math.round(bw / 1_000) + " Kbps");
-        }
-      });
-      hls.on(Hls.Events.ERROR, (_, data) => {
-        if (data.fatal) {
-          if (data.type === Hls.ErrorTypes.NETWORK_ERROR) hls.startLoad();
-          else if (data.type === Hls.ErrorTypes.MEDIA_ERROR) hls.recoverMediaError();
-          else hls.destroy();
-        }
-      });
-    } else if (video.canPlayType("application/vnd.apple.mpegurl")) {
-      video.src = src;
-      video.addEventListener("loadedmetadata", () => { video.play().catch(() => {}); });
+
+    destroyHls();
+
+    if (!Hls.isSupported()) {
+      if (video.canPlayType("application/vnd.apple.mpegurl")) {
+        video.src = src;
+        video.load();
+        video.play().catch(() => {});
+      }
+      return;
     }
-    return () => { if (hlsRef.current) { hlsRef.current.destroy(); hlsRef.current = null; } };
-  }, [src]);
+
+    const hls = new Hls({
+      enableWorker: true,
+
+      // ── CRITICAL: disable lowLatencyMode for standard HLS ─────────────────
+      // lowLatencyMode:true only helps LL-HLS streams; for regular HLS it
+      // causes the player to use segment counts that are too small, starving
+      // the buffer and causing constant stalls.
+      lowLatencyMode: false,
+
+      // ── Buffer: give enough headroom so network jitter doesn't stall ──────
+      maxBufferLength:    30,           // try to hold 30s of video ahead
+      maxMaxBufferLength: 60,           // hard ceiling
+      maxBufferSize:      60 * 1000 * 1000, // 60 MB
+
+      // Back-buffer: keep 30s behind so seeking back is instant; clear older
+      backBufferLength: 30,
+
+      // ── Live sync: sensible latency, not razor-thin ───────────────────────
+      // Use segment-count based config (more portable across segment lengths)
+      liveSyncDurationCount:       3,   // target = 3 segments behind live edge
+      liveMaxLatencyDurationCount: 10,  // if > 10 segments behind → jump
+      liveDurationInfinity:        true,
+
+      // ── Fragment loading: generous timeouts, retry fast ───────────────────
+      fragLoadingTimeOut:             10000,
+      fragLoadingMaxRetry:            6,
+      fragLoadingRetryDelay:          1000,
+      fragLoadingMaxRetryTimeout:     8000,
+
+      // ── Manifest / level loading ──────────────────────────────────────────
+      manifestLoadingTimeOut:         10000,
+      manifestLoadingMaxRetry:        4,
+      manifestLoadingRetryDelay:      1000,
+      levelLoadingTimeOut:            10000,
+      levelLoadingMaxRetry:           4,
+      levelLoadingRetryDelay:         1000,
+
+      // ── ABR: prefer stability, be slow to upgrade ─────────────────────────
+      startLevel:              qualityMode === "auto" ? -1 : undefined,
+      abrEwmaDefaultEstimate:  500_000,  // conservative; let real BW measurement drive
+      abrBandWidthFactor:      0.8,      // only use 80% of measured BW when choosing level
+      abrBandWidthUpFactor:    0.7,      // upgrade quality only when clearly stable
+      abrEwmaFastLive:         3.0,
+      abrEwmaSlowLive:         9.0,
+
+      // ── Stall nudge ───────────────────────────────────────────────────────
+      nudgeOffset:    0.3,
+      nudgeMaxRetry:  5,
+    });
+
+    hlsRef.current = hls;
+    hls.loadSource(src);
+    hls.attachMedia(video);
+
+    hls.on(Hls.Events.MANIFEST_PARSED, () => {
+      video.play().catch(() => {});
+    });
+
+    hls.on(Hls.Events.LEVEL_SWITCHED, (_, data) => {
+      const lvl = hls.levels[data.level];
+      if (lvl) {
+        setCurrentLevel(lvl.name || `${lvl.height}p`);
+        const bw = hls.bandwidthEstimate;
+        if (bw > 0) setBandwidth(
+          bw >= 1_000_000
+            ? (bw / 1_000_000).toFixed(1) + " Mbps"
+            : Math.round(bw / 1_000) + " Kbps"
+        );
+      }
+    });
+
+    hls.on(Hls.Events.ERROR, (_, data) => {
+      // Let hls.js handle non-fatal errors on its own
+      if (!data.fatal) return;
+
+      if (data.type === Hls.ErrorTypes.NETWORK_ERROR) {
+        hls.startLoad();
+      } else if (data.type === Hls.ErrorTypes.MEDIA_ERROR) {
+        hls.recoverMediaError();
+      } else {
+        // Fully unrecoverable: tear down and reinit after a pause
+        destroyHls();
+        retryRef.current = setTimeout(() => {
+          const v = videoRef.current;
+          if (!v) return;
+          // Re-run the whole effect by updating src via the closure
+          const newHls = new Hls({ lowLatencyMode: false, maxBufferLength: 30 });
+          newHls.loadSource(src);
+          newHls.attachMedia(v);
+          newHls.on(Hls.Events.MANIFEST_PARSED, () => v.play().catch(() => {}));
+          hlsRef.current = newHls;
+        }, 2000);
+      }
+    });
+
+    return destroyHls;
+  }, [src, destroyHls]); // eslint-disable-line
 
   return (
     <div className="relative w-full rounded-2xl overflow-hidden bg-black shadow-2xl">
+      {/* Hide timeline / seek bar — keep play, volume, fullscreen */}
+      <style>{`
+        video.live-player::-webkit-media-controls-timeline,
+        video.live-player::-webkit-media-controls-time-remaining-display,
+        video.live-player::-webkit-media-controls-current-time-display {
+          display: none !important;
+        }
+      `}</style>
+
       <div className={isIdn ? "aspect-video" : ""}>
         <video
           ref={videoRef}
-          controls autoPlay playsInline
-          className={`w-full ${isIdn ? "h-full" : ""} block`}
+          controls
+          autoPlay
+          playsInline
+          className={`live-player w-full ${isIdn ? "h-full" : ""} block`}
           title={title}
         />
       </div>
+
       {qualities.length > 0 && (
         <div className="absolute bottom-12 right-3 z-20">
           <button
@@ -225,7 +317,7 @@ function HlsPlayer({
   );
 }
 
-// ── IDN Chat Panel (Supabase realtime, bisa kirim) ────────────────────────────
+// ── IDN Chat Panel ────────────────────────────────────────────────────────────
 function IdnChatPanel({
   messages, chatInput, setChatInput, chatUser, isChatLoggingIn, onSend, chatEndRef, navigate,
 }: {
@@ -247,7 +339,6 @@ function IdnChatPanel({
           {messages.length} pesan
         </span>
       </div>
-
       <div className="flex-1 overflow-y-auto px-4 py-3 flex flex-col gap-3 scroll-smooth">
         {messages.length === 0 && (
           <div className="flex-1 flex flex-col items-center justify-center gap-3 py-12 text-center">
@@ -294,7 +385,6 @@ function IdnChatPanel({
         ))}
         <div ref={chatEndRef} />
       </div>
-
       <div className="px-4 py-3 border-t border-gray-100 dark:border-gray-800">
         {isChatLoggingIn ? (
           <div className="flex items-center justify-center gap-2 py-2">
@@ -324,9 +414,7 @@ function IdnChatPanel({
         ) : (
           <p className="text-center text-xs text-gray-400 dark:text-gray-500 py-1">
             Hanya bisa melihat chat.{" "}
-            <span onClick={() => navigate("/signin")} className="text-red-500 cursor-pointer font-bold hover:underline">
-              Login
-            </span>{" "}
+            <span onClick={() => navigate("/signin")} className="text-red-500 cursor-pointer font-bold hover:underline">Login</span>{" "}
             untuk ikut komentar.
           </p>
         )}
@@ -335,7 +423,7 @@ function IdnChatPanel({
   );
 }
 
-// ── Member/Showroom Chat Panel (read-only, polling) ───────────────────────────
+// ── Member/Showroom Chat Panel ────────────────────────────────────────────────
 function MemberChatPanel({
   comments, loading, error, lastPoll, retry,
 }: {
@@ -346,10 +434,7 @@ function MemberChatPanel({
   retry: () => void;
 }) {
   const chatEndRef = useRef<HTMLDivElement>(null);
-
-  useEffect(() => {
-    chatEndRef.current?.scrollIntoView({ behavior: "smooth" });
-  }, [comments.length]);
+  useEffect(() => { chatEndRef.current?.scrollIntoView({ behavior: "smooth" }); }, [comments.length]);
 
   const formatTime = (ts: number) => {
     const d = new Date(ts * 1000);
@@ -364,7 +449,6 @@ function MemberChatPanel({
 
   return (
     <div className="flex flex-col h-full">
-      {/* Header */}
       <div className="flex items-center justify-between px-5 py-3.5 border-b border-gray-100 dark:border-gray-800">
         <div className="flex items-center gap-2.5">
           <span className="relative flex h-2.5 w-2.5">
@@ -379,22 +463,15 @@ function MemberChatPanel({
               Update {lastPoll.toLocaleTimeString("id-ID", { hour: "2-digit", minute: "2-digit" })}
             </span>
           )}
-          <button
-            onClick={retry}
-            className="flex items-center gap-1 text-[11px] text-emerald-600 dark:text-emerald-400 font-semibold hover:opacity-75 transition-opacity"
-          >
+          <button onClick={retry} className="flex items-center gap-1 text-[11px] text-emerald-600 dark:text-emerald-400 font-semibold hover:opacity-75 transition-opacity">
             <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
               <path d="M23 4v6h-6"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/>
             </svg>
             Refresh
           </button>
-          <span className="text-[11px] font-medium text-gray-400 dark:text-gray-500 bg-gray-100 dark:bg-gray-800 px-2.5 py-1 rounded-full">
-            {comments.length} komentar
-          </span>
+          <span className="text-[11px] font-medium text-gray-400 dark:text-gray-500 bg-gray-100 dark:bg-gray-800 px-2.5 py-1 rounded-full">{comments.length} komentar</span>
         </div>
       </div>
-
-      {/* Messages */}
       <div className="flex-1 overflow-y-auto px-4 py-3 flex flex-col gap-3 scroll-smooth">
         {loading && comments.length === 0 && (
           <div className="flex-1 flex flex-col items-center justify-center gap-3 py-12">
@@ -433,21 +510,11 @@ function MemberChatPanel({
             />
             <div className="flex-1 min-w-0">
               <div className="flex items-center gap-1.5 flex-wrap mb-0.5">
-                {/* Level badge */}
-                <span
-                  className="text-[9px] font-extrabold px-1.5 py-0.5 rounded-md"
-                  style={{
-                    backgroundColor: getLevelColor(msg.class_level) + "22",
-                    color: getLevelColor(msg.class_level),
-                    border: `1px solid ${getLevelColor(msg.class_level)}44`,
-                  }}
-                >
+                <span className="text-[9px] font-extrabold px-1.5 py-0.5 rounded-md" style={{ backgroundColor: getLevelColor(msg.class_level) + "22", color: getLevelColor(msg.class_level), border: `1px solid ${getLevelColor(msg.class_level)}44` }}>
                   ★ {msg.class_level}
                 </span>
                 <span className="text-xs font-bold text-gray-800 dark:text-gray-200 leading-none">{msg.name}</span>
-                <span className="text-[10px] text-gray-400 dark:text-gray-600 ml-auto opacity-0 group-hover:opacity-100 transition-opacity">
-                  {formatTime(msg.created_at)}
-                </span>
+                <span className="text-[10px] text-gray-400 dark:text-gray-600 ml-auto opacity-0 group-hover:opacity-100 transition-opacity">{formatTime(msg.created_at)}</span>
               </div>
               <p className="text-xs leading-relaxed text-gray-600 dark:text-gray-400 break-words m-0">{msg.comment}</p>
             </div>
@@ -455,16 +522,10 @@ function MemberChatPanel({
         ))}
         <div ref={chatEndRef} />
       </div>
-
-      {/* Read-only footer */}
       <div className="px-4 py-3 border-t border-gray-100 dark:border-gray-800">
         <div className="flex items-center justify-center gap-2 py-1">
-          <div className="flex items-center gap-1.5">
-            <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
-            <span className="text-xs text-gray-400 dark:text-gray-500">
-              Komentar Showroom · auto-refresh 5 detik
-            </span>
-          </div>
+          <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
+          <span className="text-xs text-gray-400 dark:text-gray-500">Komentar Showroom · auto-refresh 5 detik</span>
         </div>
       </div>
     </div>
@@ -499,7 +560,6 @@ function LiveStream() {
   const [error,             setError]             = useState("");
   const [members,           setMembers]           = useState<any[]>([]);
 
-  // IDN chat (Supabase)
   const [chatMessages,      setChatMessages]      = useState<ChatMessage[]>([]);
   const [chatInput,         setChatInput]         = useState("");
   const [chatUser,          setChatUser]          = useState<any>(null);
@@ -507,7 +567,6 @@ function LiveStream() {
   const chatEndRef = useRef<HTMLDivElement>(null);
   const channelRef = useRef<any>(null);
 
-  // Member/Showroom chat (polling, read-only)
   const { comments: srComments, loading: srLoading, error: srError, lastPoll: srLastPoll, retry: srRetry } =
     useShowroomComments(isMember ? memberRoomId : null);
 
@@ -644,7 +703,6 @@ function LiveStream() {
       const streamUrl = show.streaming_url_list?.[0]?.url || null;
       if (!streamUrl) { setError("URL stream tidak tersedia"); setLoading(false); return; }
       setMemberHlsUrl(streamUrl);
-      // Set room_id untuk polling Showroom comments
       if (show.room_id) setMemberRoomId(show.room_id);
       setLoading(false);
     } catch { setError("Terjadi kesalahan saat memuat stream member."); setLoading(false); }
@@ -719,7 +777,6 @@ function LiveStream() {
     await channelRef.current?.send({ type: "broadcast", event: "pesan_baru", payload });
   };
 
-  // IDN chat via Supabase realtime
   useEffect(() => {
     if (!isIdn) return;
     const channel = supabase.channel(`chat-${playbackId}`, { config: { broadcast: { ack: true } } });
@@ -769,7 +826,6 @@ function LiveStream() {
     ? (idnShow?.title || "Live Stream JKT48")
     : (memberShow?.name || "Live Member JKT48");
 
-  // ── Membership Loading ────────────────────────────────────────────────────
   if (isIdn && membershipLoading) {
     return (
       <div className="min-h-screen rounded-2xl border border-gray-200 bg-white dark:border-gray-800 dark:bg-white/[0.03] flex items-center justify-center">
@@ -781,7 +837,6 @@ function LiveStream() {
     );
   }
 
-  // ── Verification Page ─────────────────────────────────────────────────────
   if (isIdn && showVerification && !isVerified) {
     return (
       <div className="min-h-screen rounded-2xl border border-gray-200 bg-white px-5 py-7 dark:border-gray-800 dark:bg-white/[0.03] xl:px-10 xl:py-12 flex items-center justify-center">
@@ -795,72 +850,39 @@ function LiveStream() {
             <h3 className="text-2xl font-bold text-gray-800 dark:text-white/90 mb-1.5">Verifikasi Akses</h3>
             <p className="text-sm text-gray-500 dark:text-gray-400">Masukkan email dan kode untuk mengakses live stream IDN Plus</p>
           </div>
-
           <div className="bg-gray-50 dark:bg-gray-800/50 rounded-2xl border border-gray-200 dark:border-gray-700 p-6 mb-4">
             <form onSubmit={(e) => { e.preventDefault(); verifyAccess(); }} className="flex flex-col gap-4">
               <div>
                 <label className="block text-xs font-semibold text-gray-600 dark:text-gray-400 mb-1.5 uppercase tracking-wide">Email</label>
-                <input
-                  type="email"
-                  value={verifData.email}
-                  onChange={(e) => { setVerifData((p) => ({ ...p, email: e.target.value })); setVerifyError(""); }}
-                  placeholder="email@example.com"
-                  required
-                  className="w-full px-4 py-3 rounded-xl border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-900/50 text-gray-900 dark:text-white text-sm outline-none focus:ring-2 focus:ring-red-500/30 focus:border-red-400 dark:focus:border-red-500 placeholder:text-gray-400 transition-all"
-                />
+                <input type="email" value={verifData.email} onChange={(e) => { setVerifData((p) => ({ ...p, email: e.target.value })); setVerifyError(""); }} placeholder="email@example.com" required className="w-full px-4 py-3 rounded-xl border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-900/50 text-gray-900 dark:text-white text-sm outline-none focus:ring-2 focus:ring-red-500/30 focus:border-red-400 dark:focus:border-red-500 placeholder:text-gray-400 transition-all" />
               </div>
               <div>
                 <label className="block text-xs font-semibold text-gray-600 dark:text-gray-400 mb-1.5 uppercase tracking-wide">Verification Code</label>
-                <input
-                  type="text"
-                  value={verifData.code}
-                  onChange={(e) => { setVerifData((p) => ({ ...p, code: e.target.value })); setVerifyError(""); }}
-                  placeholder="Masukkan kode verifikasi"
-                  required
-                  className="w-full px-4 py-3 rounded-xl border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-900/50 text-gray-900 dark:text-white text-sm outline-none focus:ring-2 focus:ring-red-500/30 focus:border-red-400 dark:focus:border-red-500 placeholder:text-gray-400 tracking-widest transition-all"
-                />
+                <input type="text" value={verifData.code} onChange={(e) => { setVerifData((p) => ({ ...p, code: e.target.value })); setVerifyError(""); }} placeholder="Masukkan kode verifikasi" required className="w-full px-4 py-3 rounded-xl border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-900/50 text-gray-900 dark:text-white text-sm outline-none focus:ring-2 focus:ring-red-500/30 focus:border-red-400 dark:focus:border-red-500 placeholder:text-gray-400 tracking-widest transition-all" />
               </div>
               {verifyError && (
                 <div className="flex items-center gap-2.5 px-4 py-3 rounded-xl bg-red-50 dark:bg-red-500/10 border border-red-200 dark:border-red-500/20 text-red-600 dark:text-red-400 text-xs font-medium">
-                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="flex-shrink-0">
-                    <circle cx="12" cy="12" r="10" /><line x1="12" y1="8" x2="12" y2="12" /><line x1="12" y1="16" x2="12.01" y2="16" />
-                  </svg>
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="flex-shrink-0"><circle cx="12" cy="12" r="10" /><line x1="12" y1="8" x2="12" y2="12" /><line x1="12" y1="16" x2="12.01" y2="16" /></svg>
                   {verifyError}
                 </div>
               )}
-              <button
-                type="submit"
-                disabled={verifying}
-                className={`flex items-center justify-center gap-2 px-4 py-3.5 rounded-xl border-0 text-sm font-bold text-white transition-all duration-200 mt-1 ${verifying ? "bg-red-400 cursor-not-allowed" : "bg-red-500 hover:bg-red-600 cursor-pointer shadow-lg shadow-red-500/25 hover:shadow-red-500/40 hover:-translate-y-0.5"}`}
-              >
-                {verifying ? (
-                  <><div className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" />Memverifikasi...</>
-                ) : (
-                  <><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><polyline points="20 6 9 17 4 12" /></svg>Verifikasi Akses</>
-                )}
+              <button type="submit" disabled={verifying} className={`flex items-center justify-center gap-2 px-4 py-3.5 rounded-xl border-0 text-sm font-bold text-white transition-all duration-200 mt-1 ${verifying ? "bg-red-400 cursor-not-allowed" : "bg-red-500 hover:bg-red-600 cursor-pointer shadow-lg shadow-red-500/25 hover:shadow-red-500/40 hover:-translate-y-0.5"}`}>
+                {verifying ? (<><div className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" />Memverifikasi...</>) : (<><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><polyline points="20 6 9 17 4 12" /></svg>Verifikasi Akses</>)}
               </button>
             </form>
           </div>
-
           <div className="bg-gray-50 dark:bg-gray-800/30 rounded-xl border border-gray-200 dark:border-gray-700/50 p-4 mb-3">
             <p className="text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-2">Informasi</p>
             <ul className="space-y-1">
               {["Code verifikasi hanya dapat digunakan sekali", "IP address akan dicatat untuk keamanan", "Akses berlaku selama 5 jam", "Session tetap aktif saat refresh halaman"].map((info, i) => (
-                <li key={i} className="flex items-start gap-2 text-xs text-gray-500 dark:text-gray-400">
-                  <span className="text-gray-300 dark:text-gray-600 mt-0.5">•</span>{info}
-                </li>
+                <li key={i} className="flex items-start gap-2 text-xs text-gray-500 dark:text-gray-400"><span className="text-gray-300 dark:text-gray-600 mt-0.5">•</span>{info}</li>
               ))}
             </ul>
             <div className="mt-3 pt-3 border-t border-gray-200 dark:border-gray-700/50 text-xs text-gray-500 dark:text-gray-400">
-              Punya membership monthly?{" "}
-              <span onClick={() => navigate("/signin")} className="text-red-500 cursor-pointer font-bold hover:underline">Login di sini</span>
+              Punya membership monthly?{" "}<span onClick={() => navigate("/signin")} className="text-red-500 cursor-pointer font-bold hover:underline">Login di sini</span>
             </div>
           </div>
-
-          <button
-            onClick={() => navigate(-1)}
-            className="w-full py-3 rounded-xl border border-gray-200 dark:border-gray-700 bg-transparent text-gray-500 dark:text-gray-400 text-sm font-medium cursor-pointer hover:bg-gray-50 dark:hover:bg-gray-800/50 transition-colors flex items-center justify-center gap-1.5"
-          >
+          <button onClick={() => navigate(-1)} className="w-full py-3 rounded-xl border border-gray-200 dark:border-gray-700 bg-transparent text-gray-500 dark:text-gray-400 text-sm font-medium cursor-pointer hover:bg-gray-50 dark:hover:bg-gray-800/50 transition-colors flex items-center justify-center gap-1.5">
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="15 18 9 12 15 6" /></svg>
             Kembali
           </button>
@@ -869,7 +891,6 @@ function LiveStream() {
     );
   }
 
-  // ── Loading stream ────────────────────────────────────────────────────────
   if (loading) {
     return (
       <div className="min-h-screen rounded-2xl border border-gray-200 bg-white dark:border-gray-800 dark:bg-white/[0.03] flex items-center justify-center">
@@ -883,186 +904,99 @@ function LiveStream() {
     );
   }
 
-  // ── Error ─────────────────────────────────────────────────────────────────
   if (error) {
     return (
       <div className="min-h-screen rounded-2xl border border-gray-200 bg-white px-5 py-7 dark:border-gray-800 dark:bg-white/[0.03] xl:px-10 xl:py-12 flex items-center justify-center">
         <div className="text-center max-w-sm">
           <div className="w-14 h-14 rounded-2xl bg-red-50 dark:bg-red-500/10 border border-red-200 dark:border-red-500/20 flex items-center justify-center mx-auto mb-4">
-            <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round" className="text-red-500">
-              <circle cx="12" cy="12" r="10" /><line x1="12" y1="8" x2="12" y2="12" /><line x1="12" y1="16" x2="12.01" y2="16" />
-            </svg>
+            <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round" className="text-red-500"><circle cx="12" cy="12" r="10" /><line x1="12" y1="8" x2="12" y2="12" /><line x1="12" y1="16" x2="12.01" y2="16" /></svg>
           </div>
           <h3 className="text-lg font-bold text-gray-800 dark:text-white/90 mb-2">Terjadi Kesalahan</h3>
           <p className="text-sm text-gray-500 dark:text-gray-400 mb-6">{error}</p>
           <div className="flex gap-3 justify-center">
-            <button
-              onClick={() => { setError(""); isIdn ? loadIdnStream() : loadMemberStream(); }}
-              className="px-5 py-2.5 rounded-xl border-0 bg-red-500 text-white text-sm font-bold cursor-pointer hover:bg-red-600 shadow-lg shadow-red-500/25 transition-all hover:-translate-y-0.5"
-            >
-              Coba Lagi
-            </button>
-            <button
-              onClick={() => navigate(-1)}
-              className="px-5 py-2.5 rounded-xl border border-gray-200 dark:border-gray-700 bg-transparent text-gray-600 dark:text-gray-400 text-sm font-semibold cursor-pointer hover:bg-gray-50 dark:hover:bg-gray-800/50 transition-colors"
-            >
-              Kembali
-            </button>
+            <button onClick={() => { setError(""); isIdn ? loadIdnStream() : loadMemberStream(); }} className="px-5 py-2.5 rounded-xl border-0 bg-red-500 text-white text-sm font-bold cursor-pointer hover:bg-red-600 shadow-lg shadow-red-500/25 transition-all hover:-translate-y-0.5">Coba Lagi</button>
+            <button onClick={() => navigate(-1)} className="px-5 py-2.5 rounded-xl border border-gray-200 dark:border-gray-700 bg-transparent text-gray-600 dark:text-gray-400 text-sm font-semibold cursor-pointer hover:bg-gray-50 dark:hover:bg-gray-800/50 transition-colors">Kembali</button>
           </div>
         </div>
       </div>
     );
   }
 
-  // ── Main render ───────────────────────────────────────────────────────────
   return (
     <div>
       <div className="rounded-2xl border border-gray-200 bg-white px-5 py-6 dark:border-gray-800 dark:bg-white/[0.03] xl:px-8 xl:py-7">
-
-        {/* ── Top bar ── */}
         <div className="flex items-center gap-2.5 mb-6 flex-wrap">
-          <button
-            onClick={() => navigate(-1)}
-            className="flex items-center gap-1.5 px-3.5 py-2 rounded-xl border border-gray-200 dark:border-gray-700 bg-transparent text-gray-600 dark:text-gray-400 text-xs font-semibold cursor-pointer hover:bg-gray-50 dark:hover:bg-gray-800/50 transition-colors"
-          >
+          <button onClick={() => navigate(-1)} className="flex items-center gap-1.5 px-3.5 py-2 rounded-xl border border-gray-200 dark:border-gray-700 bg-transparent text-gray-600 dark:text-gray-400 text-xs font-semibold cursor-pointer hover:bg-gray-50 dark:hover:bg-gray-800/50 transition-colors">
             <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="15 18 9 12 15 6" /></svg>
             Kembali
           </button>
-
           <div className="flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-red-500 text-white text-[11px] font-extrabold tracking-wide shadow-md shadow-red-500/30">
             <span className="w-1.5 h-1.5 rounded-full bg-white animate-pulse" />
             LIVE
           </div>
-
-          {isIdn && (
-            <span className="px-3 py-1.5 rounded-full bg-blue-50 dark:bg-blue-500/10 border border-blue-200 dark:border-blue-500/20 text-blue-600 dark:text-blue-400 text-[11px] font-bold">
-              IDN Live+
-            </span>
-          )}
-          {isMember && (
-            <span className="px-3 py-1.5 rounded-full bg-emerald-50 dark:bg-emerald-500/10 border border-emerald-200 dark:border-emerald-500/20 text-emerald-600 dark:text-emerald-400 text-[11px] font-bold">
-              Member Live
-            </span>
-          )}
-          {isIdn && hasMembership && (
-            <span className="px-3 py-1.5 rounded-full bg-amber-50 dark:bg-amber-500/10 border border-amber-200 dark:border-amber-500/20 text-amber-600 dark:text-amber-400 text-[11px] font-bold">
-              ★ Monthly
-            </span>
-          )}
-          {isIdn && idnShow && (
-            <span className="text-xs text-gray-500 dark:text-gray-400 font-medium">
-              {idnShow.view_count?.toLocaleString() || 0} penonton
-            </span>
-          )}
-          {isMember && memberShow && (
-            <span className="text-xs text-gray-500 dark:text-gray-400">
-              {memberShow.type?.toUpperCase()} · Mulai {new Date(memberShow.started_at).toLocaleTimeString("id-ID", { hour: "2-digit", minute: "2-digit" })} WIB
-            </span>
-          )}
+          {isIdn && <span className="px-3 py-1.5 rounded-full bg-blue-50 dark:bg-blue-500/10 border border-blue-200 dark:border-blue-500/20 text-blue-600 dark:text-blue-400 text-[11px] font-bold">IDN Live+</span>}
+          {isMember && <span className="px-3 py-1.5 rounded-full bg-emerald-50 dark:bg-emerald-500/10 border border-emerald-200 dark:border-emerald-500/20 text-emerald-600 dark:text-emerald-400 text-[11px] font-bold">Member Live</span>}
+          {isIdn && hasMembership && <span className="px-3 py-1.5 rounded-full bg-amber-50 dark:bg-amber-500/10 border border-amber-200 dark:border-amber-500/20 text-amber-600 dark:text-amber-400 text-[11px] font-bold">★ Monthly</span>}
+          {isIdn && idnShow && <span className="text-xs text-gray-500 dark:text-gray-400 font-medium">{idnShow.view_count?.toLocaleString() || 0} penonton</span>}
+          {isMember && memberShow && <span className="text-xs text-gray-500 dark:text-gray-400">{memberShow.type?.toUpperCase()} · Mulai {new Date(memberShow.started_at).toLocaleTimeString("id-ID", { hour: "2-digit", minute: "2-digit" })} WIB</span>}
           {isIdn && !hasMembership && isVerified && (
-            <button
-              onClick={handleLogout}
-              className="ml-auto px-3 py-1.5 rounded-xl border border-gray-200 dark:border-gray-700 bg-transparent text-gray-500 dark:text-gray-400 text-[11px] font-semibold cursor-pointer hover:bg-gray-50 dark:hover:bg-gray-800/50 transition-colors"
-            >
-              Logout
-            </button>
+            <button onClick={handleLogout} className="ml-auto px-3 py-1.5 rounded-xl border border-gray-200 dark:border-gray-700 bg-transparent text-gray-500 dark:text-gray-400 text-[11px] font-semibold cursor-pointer hover:bg-gray-50 dark:hover:bg-gray-800/50 transition-colors">Logout</button>
           )}
         </div>
 
-        {/* ── Main grid ── */}
         <div className="grid grid-cols-1 xl:grid-cols-[1fr_360px] gap-6">
-
-          {/* ── Left: video + info ── */}
           <div className="flex flex-col gap-5">
-
-            {/* Player */}
             {isIdn && hlsUrl ? (
-              <HlsPlayer
-                src={hlsUrl} title={showTitle} qualities={qualities}
-                onQualityChange={handleQualityChange} currentQuality={currentQuality}
-                qualityMode={qualityMode} onModeChange={handleModeChange} isIdn={true}
-              />
+              <HlsPlayer src={hlsUrl} title={showTitle} qualities={qualities} onQualityChange={handleQualityChange} currentQuality={currentQuality} qualityMode={qualityMode} onModeChange={handleModeChange} isIdn={true} />
             ) : isMember && memberHlsUrl ? (
-              <HlsPlayer
-                src={memberHlsUrl} title={showTitle} qualities={[]}
-                onQualityChange={() => {}} currentQuality={null}
-                qualityMode="auto" onModeChange={() => {}} isIdn={false}
-              />
+              <HlsPlayer src={memberHlsUrl} title={showTitle} qualities={[]} onQualityChange={() => {}} currentQuality={null} qualityMode="auto" onModeChange={() => {}} isIdn={false} />
             ) : (
               <div className="aspect-video bg-gray-100 dark:bg-gray-800/50 rounded-2xl flex items-center justify-center border border-gray-200 dark:border-gray-700">
                 <div className="w-10 h-10 border-[3px] border-gray-200 dark:border-gray-700 border-t-red-500 rounded-full animate-spin" />
               </div>
             )}
 
-            {/* IDN Show detail */}
             {isIdn && idnShow && (
               <div className="rounded-2xl border border-gray-200 dark:border-gray-800 bg-gray-50 dark:bg-gray-800/30 p-5">
                 <p className="text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-3">Detail Show</p>
                 <div className="flex gap-4 items-start">
-                  {idnShow.image_url && (
-                    <img
-                      src={idnShow.image_url} alt={idnShow.title}
-                      className="w-16 h-16 rounded-xl object-cover flex-shrink-0 border border-gray-200 dark:border-gray-700"
-                      onError={(e) => { (e.target as HTMLImageElement).style.display = "none"; }}
-                    />
-                  )}
+                  {idnShow.image_url && <img src={idnShow.image_url} alt={idnShow.title} className="w-16 h-16 rounded-xl object-cover flex-shrink-0 border border-gray-200 dark:border-gray-700" onError={(e) => { (e.target as HTMLImageElement).style.display = "none"; }} />}
                   <div className="flex-1 min-w-0">
                     <h3 className="text-base font-bold text-gray-800 dark:text-white/90 mb-2">{idnShow.title}</h3>
                     <div className="flex flex-wrap gap-3 text-xs text-gray-500 dark:text-gray-400 mb-2">
-                      <span className="flex items-center gap-1">
-                        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>
-                        {idnShow.view_count?.toLocaleString() || 0}
-                      </span>
+                      <span className="flex items-center gap-1"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>{idnShow.view_count?.toLocaleString() || 0}</span>
                       {idnShow.showId && <span>#{idnShow.showId}</span>}
                     </div>
-                    {idnShow.idnliveplus?.description && (
-                      <p className="text-xs leading-relaxed text-gray-500 dark:text-gray-400 m-0 whitespace-pre-line">{idnShow.idnliveplus.description}</p>
-                    )}
+                    {idnShow.idnliveplus?.description && <p className="text-xs leading-relaxed text-gray-500 dark:text-gray-400 m-0 whitespace-pre-line">{idnShow.idnliveplus.description}</p>}
                   </div>
                 </div>
               </div>
             )}
 
-            {/* Member detail */}
             {isMember && memberShow && (
               <div className="rounded-2xl border border-gray-200 dark:border-gray-800 bg-gray-50 dark:bg-gray-800/30 p-5">
                 <p className="text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-3">Detail Member</p>
                 <div className="flex gap-4 items-center">
-                  <img
-                    src={memberShow.img_alt || memberShow.img} alt={memberShow.name}
-                    className="w-14 h-14 rounded-full object-cover flex-shrink-0 border-2 border-gray-200 dark:border-gray-700"
-                    onError={(e) => { (e.target as HTMLImageElement).style.display = "none"; }}
-                  />
+                  <img src={memberShow.img_alt || memberShow.img} alt={memberShow.name} className="w-14 h-14 rounded-full object-cover flex-shrink-0 border-2 border-gray-200 dark:border-gray-700" onError={(e) => { (e.target as HTMLImageElement).style.display = "none"; }} />
                   <div>
                     <h3 className="text-base font-bold text-gray-800 dark:text-white/90 mb-2">{memberShow.name}</h3>
                     <div className="flex gap-2 flex-wrap items-center">
-                      <span className="px-2.5 py-1 rounded-full bg-emerald-50 dark:bg-emerald-500/10 border border-emerald-200 dark:border-emerald-500/20 text-emerald-600 dark:text-emerald-400 font-bold text-[10px] uppercase">
-                        {memberShow.type}
-                      </span>
-                      <span className="text-xs text-gray-500 dark:text-gray-400">
-                        Mulai: {new Date(memberShow.started_at).toLocaleTimeString("id-ID", { hour: "2-digit", minute: "2-digit" })} WIB
-                      </span>
+                      <span className="px-2.5 py-1 rounded-full bg-emerald-50 dark:bg-emerald-500/10 border border-emerald-200 dark:border-emerald-500/20 text-emerald-600 dark:text-emerald-400 font-bold text-[10px] uppercase">{memberShow.type}</span>
+                      <span className="text-xs text-gray-500 dark:text-gray-400">Mulai: {new Date(memberShow.started_at).toLocaleTimeString("id-ID", { hour: "2-digit", minute: "2-digit" })} WIB</span>
                     </div>
                   </div>
                 </div>
               </div>
             )}
 
-            {/* Lineup */}
             {isIdn && members.length > 0 && (
               <div className="rounded-2xl border border-gray-200 dark:border-gray-800 bg-gray-50 dark:bg-gray-800/30 p-5">
-                <p className="text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-4">
-                  Lineup Show · {members.length} Member
-                </p>
+                <p className="text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-4">Lineup Show · {members.length} Member</p>
                 <div className="grid grid-cols-[repeat(auto-fill,minmax(68px,1fr))] gap-3">
                   {members.map((m: any) => (
                     <div key={m.id} className="text-center group">
                       <div className="relative mx-auto w-12 h-12 mb-1.5">
-                        <img
-                          src={m.img} alt={m.name}
-                          className="w-12 h-12 rounded-full object-cover border-2 border-gray-200 dark:border-gray-700 group-hover:border-red-400 transition-colors"
-                          onError={(e) => { (e.target as HTMLImageElement).style.display = "none"; }}
-                        />
+                        <img src={m.img} alt={m.name} className="w-12 h-12 rounded-full object-cover border-2 border-gray-200 dark:border-gray-700 group-hover:border-red-400 transition-colors" onError={(e) => { (e.target as HTMLImageElement).style.display = "none"; }} />
                       </div>
                       <p className="m-0 text-[10px] font-medium text-gray-500 dark:text-gray-400 overflow-hidden text-ellipsis whitespace-nowrap leading-tight">{m.name}</p>
                     </div>
@@ -1071,34 +1005,16 @@ function LiveStream() {
               </div>
             )}
 
-            <p className="text-center text-[10px] font-semibold text-gray-300 dark:text-gray-700 uppercase tracking-widest pb-1">
-              Powered by JKT48Connect
-            </p>
+            <p className="text-center text-[10px] font-semibold text-gray-300 dark:text-gray-700 uppercase tracking-widest pb-1">Powered by JKT48Connect</p>
           </div>
 
-          {/* ── Right: Chat ── */}
           <div className="xl:sticky xl:top-4 xl:self-start">
             <div className="rounded-2xl border border-gray-200 dark:border-gray-800 bg-white dark:bg-white/[0.02] overflow-hidden" style={{ height: "580px" }}>
               <div className="h-full flex flex-col">
                 {isIdn ? (
-                  <IdnChatPanel
-                    messages={chatMessages}
-                    chatInput={chatInput}
-                    setChatInput={setChatInput}
-                    chatUser={chatUser}
-                    isChatLoggingIn={isChatLoggingIn}
-                    onSend={handleSendMessage}
-                    chatEndRef={chatEndRef}
-                    navigate={navigate}
-                  />
+                  <IdnChatPanel messages={chatMessages} chatInput={chatInput} setChatInput={setChatInput} chatUser={chatUser} isChatLoggingIn={isChatLoggingIn} onSend={handleSendMessage} chatEndRef={chatEndRef} navigate={navigate} />
                 ) : (
-                  <MemberChatPanel
-                    comments={srComments}
-                    loading={srLoading}
-                    error={srError}
-                    lastPoll={srLastPoll}
-                    retry={srRetry}
-                  />
+                  <MemberChatPanel comments={srComments} loading={srLoading} error={srError} lastPoll={srLastPoll} retry={srRetry} />
                 )}
               </div>
             </div>
