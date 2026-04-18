@@ -90,8 +90,6 @@ function ReplayPlyrPlayer({
         "captions",
         "fullscreen",
       ],
-      title,
-      poster,
       resetOnEnd: false,
       keyboard:   { focused: true, global: false },
       tooltips:   { controls: true, seek: true },
@@ -245,6 +243,7 @@ function ReplayPlyrPlayer({
           className="plyr-video-el w-full h-full"
           crossOrigin="anonymous"
           playsInline
+          poster={poster}
         />
       </div>
 
