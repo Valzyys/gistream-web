@@ -52,7 +52,6 @@ interface ChatMessage {
   timestamp:    string;
 }
 
-// Showroom comment type (untuk member live via polling)
 interface SRComment {
   id: string;
   name: string;
@@ -117,7 +116,7 @@ function useShowroomComments(roomId: number | null) {
   return { comments, loading, error, lastPoll, retry: fetchComments };
 }
 
-// ── HLS Player ────────────────────────────────────────────────────────────────
+// ── HLS Player (Anti-Buffering + No Seek) ─────────────────────────────────────
 function HlsPlayer({
   src, title, qualities, onQualityChange, currentQuality, qualityMode, onModeChange, isIdn,
 }: {
@@ -134,54 +133,159 @@ function HlsPlayer({
   const [currentLevel, setCurrentLevel]         = useState<string>("Auto");
   const [bandwidth, setBandwidth]               = useState<string>("");
 
+  // ── Anti-buffering: snap back to live edge if we drift ────────────────────
+  const snapToLiveEdge = useCallback(() => {
+    const video = videoRef.current;
+    const hls   = hlsRef.current;
+    if (!video || !hls) return;
+    try {
+      const liveEdge = hls.liveSyncPosition;
+      if (liveEdge && isFinite(liveEdge) && video.duration - video.currentTime > 8) {
+        video.currentTime = liveEdge;
+      }
+    } catch {}
+  }, []);
+
   useEffect(() => {
     const video = videoRef.current;
     if (!video || !src) return;
     if (hlsRef.current) { hlsRef.current.destroy(); hlsRef.current = null; }
+
     if (Hls.isSupported()) {
       const hls = new Hls({
-        enableWorker: true, lowLatencyMode: true,
-        liveSyncDuration: 3, liveMaxLatencyDuration: 10,
-        startLevel: qualityMode === "auto" ? -1 : undefined,
-        abrEwmaDefaultEstimate: 1_000_000,
-        abrBandWidthFactor: 0.9, abrBandWidthUpFactor: 0.7,
+        // ── Core live-stream tuning ──────────────────────────────────────────
+        enableWorker:            true,
+        lowLatencyMode:          true,
+
+        // Keep the buffer small so there's less to fill and less to stall on
+        maxBufferLength:         10,        // was unlimited — cap at 10s
+        maxMaxBufferLength:      20,        // absolute ceiling 20s
+        maxBufferSize:           30 * 1000 * 1000, // 30 MB max in-memory
+
+        // Live sync: stay close to the edge
+        liveSyncDuration:        2,         // was 3 — tighter sync
+        liveMaxLatencyDuration:  6,         // was 10 — force catch-up sooner
+        liveDurationInfinity:    true,
+
+        // Fragment loading: retry fast, don't give up
+        fragLoadingMaxRetry:     6,
+        fragLoadingRetryDelay:   500,
+        fragLoadingMaxRetryTimeout: 4000,
+
+        // Manifest loading: also retry fast
+        manifestLoadingMaxRetry: 4,
+        manifestLoadingRetryDelay: 500,
+
+        // Level loading retries
+        levelLoadingMaxRetry:    4,
+        levelLoadingRetryDelay:  500,
+
+        // ABR — start at highest possible, be conservative about downgrade
+        startLevel:              qualityMode === "auto" ? -1 : undefined,
+        abrEwmaDefaultEstimate:  3_000_000, // was 1M — assume faster connection first
+        abrBandWidthFactor:      0.85,
+        abrBandWidthUpFactor:    0.8,
+        abrEwmaFastLive:         3.0,
+        abrEwmaSlowLive:         9.0,
+
+        // Reduce stall: back-buffer can be aggressively cleared
+        backBufferLength:        10,
+
+        // Nudge stalled playback automatically
+        nudgeOffset:             0.2,
+        nudgeMaxRetry:           5,
       });
+
       hlsRef.current = hls;
       hls.loadSource(src);
       hls.attachMedia(video);
-      hls.on(Hls.Events.MANIFEST_PARSED, () => { video.play().catch(() => {}); });
+
+      hls.on(Hls.Events.MANIFEST_PARSED, () => {
+        video.play().catch(() => {});
+      });
+
       hls.on(Hls.Events.LEVEL_SWITCHED, (_, data) => {
         const lvl = hls.levels[data.level];
         if (lvl) {
           setCurrentLevel(lvl.name || `${lvl.height}p`);
           const bw = hls.bandwidthEstimate;
-          if (bw > 0) setBandwidth(bw >= 1_000_000 ? (bw / 1_000_000).toFixed(1) + " Mbps" : Math.round(bw / 1_000) + " Kbps");
+          if (bw > 0) setBandwidth(bw >= 1_000_000
+            ? (bw / 1_000_000).toFixed(1) + " Mbps"
+            : Math.round(bw / 1_000) + " Kbps");
         }
       });
+
+      // ── Auto-snap to live edge when we fall behind ───────────────────────
+      hls.on(Hls.Events.FRAG_CHANGED, () => { snapToLiveEdge(); });
+
       hls.on(Hls.Events.ERROR, (_, data) => {
         if (data.fatal) {
-          if (data.type === Hls.ErrorTypes.NETWORK_ERROR) hls.startLoad();
-          else if (data.type === Hls.ErrorTypes.MEDIA_ERROR) hls.recoverMediaError();
-          else hls.destroy();
+          switch (data.type) {
+            case Hls.ErrorTypes.NETWORK_ERROR:
+              // Retry network errors immediately
+              hls.startLoad();
+              break;
+            case Hls.ErrorTypes.MEDIA_ERROR:
+              hls.recoverMediaError();
+              break;
+            default:
+              // Non-recoverable: reload the source
+              hls.destroy();
+              hlsRef.current = null;
+              setTimeout(() => {
+                const v = videoRef.current;
+                if (!v) return;
+                const newHls = new Hls({ lowLatencyMode: true });
+                newHls.loadSource(src);
+                newHls.attachMedia(v);
+                newHls.on(Hls.Events.MANIFEST_PARSED, () => v.play().catch(() => {}));
+                hlsRef.current = newHls;
+              }, 1500);
+              break;
+          }
+        }
+        // Non-fatal buffer stalls: nudge playback
+        if (!data.fatal && data.details === Hls.ErrorDetails.BUFFER_STALLED_ERROR) {
+          snapToLiveEdge();
         }
       });
+
     } else if (video.canPlayType("application/vnd.apple.mpegurl")) {
+      // Safari native HLS
       video.src = src;
       video.addEventListener("loadedmetadata", () => { video.play().catch(() => {}); });
     }
-    return () => { if (hlsRef.current) { hlsRef.current.destroy(); hlsRef.current = null; } };
-  }, [src]);
+
+    return () => {
+      if (hlsRef.current) { hlsRef.current.destroy(); hlsRef.current = null; }
+    };
+  }, [src]); // eslint-disable-line
 
   return (
     <div className="relative w-full rounded-2xl overflow-hidden bg-black shadow-2xl">
+      {/*
+        Hide the timeline/seek bar via CSS while keeping other native controls.
+        The ::-webkit-media-controls-timeline selector removes the scrubber.
+        We also inject a <style> tag so it works across Chromium & Firefox.
+      */}
+      <style>{`
+        .live-video::-webkit-media-controls-timeline { display: none !important; }
+        .live-video::-webkit-media-controls-time-remaining-display { display: none !important; }
+        .live-video::-webkit-media-controls-current-time-display { display: none !important; }
+        .live-video::-moz-range-thumb { display: none !important; }
+      `}</style>
+
       <div className={isIdn ? "aspect-video" : ""}>
         <video
           ref={videoRef}
-          controls autoPlay playsInline
-          className={`w-full ${isIdn ? "h-full" : ""} block`}
+          controls
+          autoPlay
+          playsInline
+          className={`live-video w-full ${isIdn ? "h-full" : ""} block`}
           title={title}
         />
       </div>
+
       {qualities.length > 0 && (
         <div className="absolute bottom-12 right-3 z-20">
           <button
@@ -194,6 +298,7 @@ function HlsPlayer({
             {qualityMode === "auto" ? `Auto (${currentLevel})` : currentQuality?.name || currentLevel}
             {bandwidth && <span className="opacity-50 text-[10px]">· {bandwidth}</span>}
           </button>
+
           {showQualityPanel && (
             <div className="absolute bottom-[calc(100%+8px)] right-0 bg-gray-900/95 backdrop-blur-xl border border-white/10 rounded-2xl p-2 min-w-[190px] shadow-2xl">
               <p className="text-[9px] font-bold text-white/30 px-2 pb-1.5 uppercase tracking-widest">Kualitas</p>
@@ -364,7 +469,6 @@ function MemberChatPanel({
 
   return (
     <div className="flex flex-col h-full">
-      {/* Header */}
       <div className="flex items-center justify-between px-5 py-3.5 border-b border-gray-100 dark:border-gray-800">
         <div className="flex items-center gap-2.5">
           <span className="relative flex h-2.5 w-2.5">
@@ -394,7 +498,6 @@ function MemberChatPanel({
         </div>
       </div>
 
-      {/* Messages */}
       <div className="flex-1 overflow-y-auto px-4 py-3 flex flex-col gap-3 scroll-smooth">
         {loading && comments.length === 0 && (
           <div className="flex-1 flex flex-col items-center justify-center gap-3 py-12">
@@ -433,7 +536,6 @@ function MemberChatPanel({
             />
             <div className="flex-1 min-w-0">
               <div className="flex items-center gap-1.5 flex-wrap mb-0.5">
-                {/* Level badge */}
                 <span
                   className="text-[9px] font-extrabold px-1.5 py-0.5 rounded-md"
                   style={{
@@ -456,7 +558,6 @@ function MemberChatPanel({
         <div ref={chatEndRef} />
       </div>
 
-      {/* Read-only footer */}
       <div className="px-4 py-3 border-t border-gray-100 dark:border-gray-800">
         <div className="flex items-center justify-center gap-2 py-1">
           <div className="flex items-center gap-1.5">
@@ -499,7 +600,6 @@ function LiveStream() {
   const [error,             setError]             = useState("");
   const [members,           setMembers]           = useState<any[]>([]);
 
-  // IDN chat (Supabase)
   const [chatMessages,      setChatMessages]      = useState<ChatMessage[]>([]);
   const [chatInput,         setChatInput]         = useState("");
   const [chatUser,          setChatUser]          = useState<any>(null);
@@ -507,7 +607,6 @@ function LiveStream() {
   const chatEndRef = useRef<HTMLDivElement>(null);
   const channelRef = useRef<any>(null);
 
-  // Member/Showroom chat (polling, read-only)
   const { comments: srComments, loading: srLoading, error: srError, lastPoll: srLastPoll, retry: srRetry } =
     useShowroomComments(isMember ? memberRoomId : null);
 
@@ -644,7 +743,6 @@ function LiveStream() {
       const streamUrl = show.streaming_url_list?.[0]?.url || null;
       if (!streamUrl) { setError("URL stream tidak tersedia"); setLoading(false); return; }
       setMemberHlsUrl(streamUrl);
-      // Set room_id untuk polling Showroom comments
       if (show.room_id) setMemberRoomId(show.room_id);
       setLoading(false);
     } catch { setError("Terjadi kesalahan saat memuat stream member."); setLoading(false); }
@@ -719,7 +817,6 @@ function LiveStream() {
     await channelRef.current?.send({ type: "broadcast", event: "pesan_baru", payload });
   };
 
-  // IDN chat via Supabase realtime
   useEffect(() => {
     if (!isIdn) return;
     const channel = supabase.channel(`chat-${playbackId}`, { config: { broadcast: { ack: true } } });
@@ -769,7 +866,6 @@ function LiveStream() {
     ? (idnShow?.title || "Live Stream JKT48")
     : (memberShow?.name || "Live Member JKT48");
 
-  // ── Membership Loading ────────────────────────────────────────────────────
   if (isIdn && membershipLoading) {
     return (
       <div className="min-h-screen rounded-2xl border border-gray-200 bg-white dark:border-gray-800 dark:bg-white/[0.03] flex items-center justify-center">
@@ -781,7 +877,6 @@ function LiveStream() {
     );
   }
 
-  // ── Verification Page ─────────────────────────────────────────────────────
   if (isIdn && showVerification && !isVerified) {
     return (
       <div className="min-h-screen rounded-2xl border border-gray-200 bg-white px-5 py-7 dark:border-gray-800 dark:bg-white/[0.03] xl:px-10 xl:py-12 flex items-center justify-center">
@@ -869,7 +964,6 @@ function LiveStream() {
     );
   }
 
-  // ── Loading stream ────────────────────────────────────────────────────────
   if (loading) {
     return (
       <div className="min-h-screen rounded-2xl border border-gray-200 bg-white dark:border-gray-800 dark:bg-white/[0.03] flex items-center justify-center">
@@ -883,7 +977,6 @@ function LiveStream() {
     );
   }
 
-  // ── Error ─────────────────────────────────────────────────────────────────
   if (error) {
     return (
       <div className="min-h-screen rounded-2xl border border-gray-200 bg-white px-5 py-7 dark:border-gray-800 dark:bg-white/[0.03] xl:px-10 xl:py-12 flex items-center justify-center">
@@ -914,12 +1007,10 @@ function LiveStream() {
     );
   }
 
-  // ── Main render ───────────────────────────────────────────────────────────
   return (
     <div>
       <div className="rounded-2xl border border-gray-200 bg-white px-5 py-6 dark:border-gray-800 dark:bg-white/[0.03] xl:px-8 xl:py-7">
 
-        {/* ── Top bar ── */}
         <div className="flex items-center gap-2.5 mb-6 flex-wrap">
           <button
             onClick={() => navigate(-1)}
@@ -969,13 +1060,9 @@ function LiveStream() {
           )}
         </div>
 
-        {/* ── Main grid ── */}
         <div className="grid grid-cols-1 xl:grid-cols-[1fr_360px] gap-6">
-
-          {/* ── Left: video + info ── */}
           <div className="flex flex-col gap-5">
 
-            {/* Player */}
             {isIdn && hlsUrl ? (
               <HlsPlayer
                 src={hlsUrl} title={showTitle} qualities={qualities}
@@ -994,7 +1081,6 @@ function LiveStream() {
               </div>
             )}
 
-            {/* IDN Show detail */}
             {isIdn && idnShow && (
               <div className="rounded-2xl border border-gray-200 dark:border-gray-800 bg-gray-50 dark:bg-gray-800/30 p-5">
                 <p className="text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-3">Detail Show</p>
@@ -1023,7 +1109,6 @@ function LiveStream() {
               </div>
             )}
 
-            {/* Member detail */}
             {isMember && memberShow && (
               <div className="rounded-2xl border border-gray-200 dark:border-gray-800 bg-gray-50 dark:bg-gray-800/30 p-5">
                 <p className="text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-3">Detail Member</p>
@@ -1048,7 +1133,6 @@ function LiveStream() {
               </div>
             )}
 
-            {/* Lineup */}
             {isIdn && members.length > 0 && (
               <div className="rounded-2xl border border-gray-200 dark:border-gray-800 bg-gray-50 dark:bg-gray-800/30 p-5">
                 <p className="text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-4">
@@ -1076,7 +1160,6 @@ function LiveStream() {
             </p>
           </div>
 
-          {/* ── Right: Chat ── */}
           <div className="xl:sticky xl:top-4 xl:self-start">
             <div className="rounded-2xl border border-gray-200 dark:border-gray-800 bg-white dark:bg-white/[0.02] overflow-hidden" style={{ height: "580px" }}>
               <div className="h-full flex flex-col">
