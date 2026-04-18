@@ -78,10 +78,31 @@ const IconInfo = () => (
   </svg>
 );
 
+// ─── Types ────────────────────────────────────────────────────────────────────
+
+type BadgeColor = "pink" | "blue" | "green" | "orange" | "gray";
+
+interface BadgeProps {
+  children: React.ReactNode;
+  color?: BadgeColor;
+  icon?: React.ReactNode;
+}
+
+interface FeatureCardProps {
+  icon: React.ReactNode;
+  title: string;
+  desc: string;
+}
+
+interface StatCardProps {
+  value: string;
+  label: string;
+}
+
 // ─── Sub-components ───────────────────────────────────────────────────────────
 
-const Badge = ({ children, color = "pink", icon }) => {
-  const colors = {
+const Badge = ({ children, color = "pink", icon }: BadgeProps) => {
+  const colors: Record<BadgeColor, string> = {
     pink: "bg-pink-100 text-pink-700 dark:bg-pink-500/20 dark:text-pink-300",
     blue: "bg-blue-100 text-blue-700 dark:bg-blue-500/20 dark:text-blue-300",
     green: "bg-green-100 text-green-700 dark:bg-green-500/20 dark:text-green-300",
@@ -96,7 +117,7 @@ const Badge = ({ children, color = "pink", icon }) => {
   );
 };
 
-const FeatureCard = ({ icon, title, desc }) => (
+const FeatureCard = ({ icon, title, desc }: FeatureCardProps) => (
   <div className="group flex gap-4 p-4 rounded-xl bg-gray-50 dark:bg-white/[0.04] hover:bg-pink-50 dark:hover:bg-pink-500/10 transition-colors duration-200 border border-transparent hover:border-pink-200 dark:hover:border-pink-500/20">
     <div className="flex-shrink-0 w-10 h-10 flex items-center justify-center rounded-xl bg-white dark:bg-white/10 shadow-sm text-pink-500 dark:text-pink-400">
       {icon}
@@ -108,7 +129,7 @@ const FeatureCard = ({ icon, title, desc }) => (
   </div>
 );
 
-const StatCard = ({ value, label }) => (
+const StatCard = ({ value, label }: StatCardProps) => (
   <div className="text-center p-4 rounded-xl bg-gradient-to-b from-pink-50 to-white dark:from-pink-500/10 dark:to-transparent border border-pink-100 dark:border-pink-500/20">
     <p className="text-2xl font-bold text-pink-600 dark:text-pink-400">{value}</p>
     <p className="text-xs text-gray-500 dark:text-gray-400 mt-0.5">{label}</p>
@@ -139,7 +160,7 @@ export default function AboutGiStream() {
           <div className="relative flex flex-col sm:flex-row items-start sm:items-center gap-6">
             {/* Logo */}
             <div className="relative flex-shrink-0">
-              <Link to="/" className="block mb-0">
+              <Link to="/" className="block">
                 <img
                   width={231}
                   height={48}
@@ -157,9 +178,10 @@ export default function AboutGiStream() {
                 <h1 className="text-2xl font-bold text-gray-800 dark:text-white/90 sm:text-3xl">
                   GiStream
                 </h1>
-                <Badge color="green" icon={
-                  <span className="w-1.5 h-1.5 rounded-full bg-green-500 dark:bg-green-400 inline-block" />
-                }>
+                <Badge
+                  color="green"
+                  icon={<span className="w-1.5 h-1.5 rounded-full bg-green-500 dark:bg-green-400 inline-block" />}
+                >
                   Live Now
                 </Badge>
                 <Badge color="gray">Unofficial</Badge>
