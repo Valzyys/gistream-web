@@ -188,9 +188,7 @@ export default function AboutGiStream() {
               </div>
               <p className="text-gray-500 dark:text-gray-400 text-sm sm:text-base leading-relaxed max-w-xl">
                 Platform streaming tidak resmi untuk menonton{" "}
-                <span className="font-semibold text-pink-600 dark:text-pink-400">
-                  Live Theater JKT48
-                </span>{" "}
+               {" "}
                 kapan saja dan di mana saja, dengan harga yang terjangkau untuk semua fans.
               </p>
               <div className="flex flex-wrap gap-2 mt-3">
