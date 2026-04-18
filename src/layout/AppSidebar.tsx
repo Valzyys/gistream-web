@@ -17,6 +17,46 @@ import {
 import { useSidebar } from "../context/SidebarContext";
 import SidebarWidget from "./SidebarWidget";
 
+// ─── Custom SVG Icons ─────────────────────────────────────────────────────────
+
+const LiveIcon = () => (
+  <svg
+    width="22"
+    height="22"
+    viewBox="0 0 24 24"
+    fill="none"
+    stroke="currentColor"
+    strokeWidth="2"
+    strokeLinecap="round"
+    strokeLinejoin="round"
+  >
+    <circle cx="12" cy="12" r="2" fill="currentColor" stroke="none" />
+    <path d="M8.56 2.9A10 10 0 0 0 2 12a10 10 0 0 0 6.56 9.1" />
+    <path d="M15.44 2.9A10 10 0 0 1 22 12a10 10 0 0 1-6.56 9.1" />
+    <path d="M10.28 6.64A6 6 0 0 0 6 12a6 6 0 0 0 4.28 5.36" />
+    <path d="M13.72 6.64A6 6 0 0 1 18 12a6 6 0 0 1-4.28 5.36" />
+  </svg>
+);
+
+const AboutIcon = () => (
+  <svg
+    width="22"
+    height="22"
+    viewBox="0 0 24 24"
+    fill="none"
+    stroke="currentColor"
+    strokeWidth="2"
+    strokeLinecap="round"
+    strokeLinejoin="round"
+  >
+    <circle cx="12" cy="12" r="10" />
+    <line x1="12" y1="8" x2="12" y2="8.01" />
+    <line x1="12" y1="12" x2="12" y2="16" />
+  </svg>
+);
+
+// ─────────────────────────────────────────────────────────────────────────────
+
 type NavItem = {
   name: string;
   icon: React.ReactNode;
@@ -47,39 +87,16 @@ const navItems: NavItem[] = [
   },
   {
     name: "Live",
-    icon: <TableIcon />,
+    icon: <LiveIcon />,
     path: "/live",
   },
 ];
 
 const othersItems: NavItem[] = [
   {
-    icon: <PieChartIcon />,
-    name: "Charts",
-    subItems: [
-      { name: "Line Chart", path: "/line-chart", pro: false },
-      { name: "Bar Chart", path: "/bar-chart", pro: false },
-    ],
-  },
-  {
-    icon: <BoxCubeIcon />,
-    name: "UI Elements",
-    subItems: [
-      { name: "Alerts", path: "/alerts", pro: false },
-      { name: "Avatar", path: "/avatars", pro: false },
-      { name: "Badge", path: "/badge", pro: false },
-      { name: "Buttons", path: "/buttons", pro: false },
-      { name: "Images", path: "/images", pro: false },
-      { name: "Videos", path: "/videos", pro: false },
-    ],
-  },
-  {
-    icon: <PlugInIcon />,
-    name: "Authentication",
-    subItems: [
-      { name: "Sign In", path: "/signin", pro: false },
-      { name: "Sign Up", path: "/signup", pro: false },
-    ],
+    icon: <AboutIcon />,
+    name: "About",
+    path: "/about",
   },
 ];
 
@@ -96,7 +113,6 @@ const AppSidebar: React.FC = () => {
   );
   const subMenuRefs = useRef<Record<string, HTMLDivElement | null>>({});
 
-  // const isActive = (path: string) => location.pathname === path;
   const isActive = useCallback(
     (path: string) => location.pathname === path,
     [location.pathname]
@@ -341,7 +357,7 @@ const AppSidebar: React.FC = () => {
               </h2>
               {renderMenuItems(navItems, "main")}
             </div>
-            <div className="">
+            <div>
               <h2
                 className={`mb-4 text-xs uppercase flex leading-[20px] text-gray-400 ${
                   !isExpanded && !isHovered
