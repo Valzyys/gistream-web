@@ -23,6 +23,7 @@ import { ScrollToTop } from "./components/common/ScrollToTop";
 import Home from "./pages/Dashboard/Home";
 import LivePage from "./pages/Live";
 import LiveStream from "./pages/LiveStream";
+import AboutGiStream from "./pages/About";
 
 export default function App() {
   return (
@@ -46,6 +47,7 @@ export default function App() {
             <Route path="/profile" element={<UserProfiles />} />
             <Route path="/jadwal" element={<Calendar />} />
             <Route path="/blank" element={<Blank />} />
+            <Route path="/about" element={<AboutGiStream />} />
 
             {/* Forms */}
             <Route path="/form-elements" element={<FormElements />} />
