@@ -2,7 +2,7 @@ import { useEffect, useState, useRef, useCallback } from "react";
 import { useParams, useNavigate } from "react-router";
 import Hls from "hls.js";
 
-const API_BASE  = "https://v2.jkt48connect.com/api/jkt48connect";
+//const API_BASE  = "https://v2.jkt48connect.com/api/jkt48connect";
 const API_KEY   = "JKTCONNECT";
 const PLAY_HOST = "https://play.jkt48connect.com";
 const LIVE_API  = "https://v2.jkt48connect.com/api/jkt48/live?apikey=JKTCONNECT";
