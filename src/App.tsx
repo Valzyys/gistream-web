@@ -26,6 +26,7 @@ import LiveStream from "./pages/LiveStream";
 import AboutGiStream from "./pages/About";
 import ReplayPage from "./pages/Replay";
 import ReplayPlayerPage from "./pages/ReplayDetail";
+import RecentDetailPage from "./pages/RecentPage";
 
 export default function App() {
   return (
@@ -45,6 +46,7 @@ export default function App() {
             {/* Live */}
             <Route path="/live" element={<LivePage />} />
             <Route path="/replay" element={<ReplayPage />} />
+            <Route path="/recent/:data_id" element={<RecentDetailPage />} />
 
             {/* Others Page */}
             <Route path="/profile" element={<UserProfiles />} />
