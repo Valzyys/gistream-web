@@ -5,6 +5,7 @@ import PageMeta from "../components/common/PageMeta";
 // ── API ───────────────────────────────────────────────────────────────────────
 const IDN_PLUS_API = "https://v2.jkt48connect.com/api/jkt48/idnplus?apikey=JKTCONNECT";
 const LIVE_API     = "https://v2.jkt48connect.com/api/jkt48/live?apikey=JKTCONNECT";
+const RECENT_API   = "https://v2.jkt48connect.com/api/jkt48/recent?apikey=JKTCONNECT";
 
 const DEFAULT_IMG =
   "https://res.cloudinary.com/haymzm4wp/image/upload/v1760105848/bi5ej2hgh0cc2uowu5xr.jpg";
@@ -43,6 +44,43 @@ interface MemberLiveShow {
     quality: number;
     url:     string;
   }[];
+}
+
+interface RecentLiveShow {
+  _id:       string;
+  data_id:   string;
+  type:      string;
+  points:    number;
+  total_gift: string;
+  idn?: {
+    id:       string;
+    username: string;
+    slug:     string;
+    title:    string;
+    image:    string;
+  };
+  member: {
+    name:        string;
+    nickname?:   string;
+    img_alt:     string;
+    img:         string;
+    url:         string;
+    is_graduate: boolean;
+    is_official: boolean;
+  };
+  live_info: {
+    duration: number;
+    viewers: {
+      num:           number;
+      is_excitement: boolean;
+    };
+    date: {
+      start: string;
+      end:   string;
+    };
+  };
+  gift_rate:  number;
+  room_id:    number;
 }
 
 // ── Normalize IDN ─────────────────────────────────────────────────────────────
@@ -86,13 +124,30 @@ function useLiveDuration(liveAt: number) {
   return duration;
 }
 
+// ── Format Duration (ms → "1j 23m" string) ───────────────────────────────────
+function formatDurationMs(ms: number): string {
+  const totalSec = Math.floor(ms / 1000);
+  const h = Math.floor(totalSec / 3600);
+  const m = Math.floor((totalSec % 3600) / 60);
+  const s = totalSec % 60;
+  if (h > 0) return `${h}j ${String(m).padStart(2, "0")}m`;
+  return `${String(m).padStart(2, "0")}m ${String(s).padStart(2, "0")}d`;
+}
+
+// ── Format Viewer ──────────────────────────────────────────────────────────────
+function formatViewer(n: number): string {
+  if (n >= 1_000_000) return (n / 1_000_000).toFixed(1) + "jt";
+  if (n >= 1000) return (n / 1000).toFixed(1) + "k";
+  return String(n);
+}
+
 // ── IDN Live Card ─────────────────────────────────────────────────────────────
 function IdnLiveCard({ show }: { show: IdnLiveShow }) {
   const navigate  = useNavigate();
   const duration  = useLiveDuration(show.liveAt);
   const [hovered, setHovered] = useState(false);
 
-  const formatViewer = (n: number) =>
+  const fmt = (n: number) =>
     n >= 1000 ? (n / 1000).toFixed(1) + "k" : String(n);
 
   return (
@@ -181,7 +236,7 @@ function IdnLiveCard({ show }: { show: IdnLiveShow }) {
             <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z" />
             <circle cx="12" cy="12" r="3" />
           </svg>
-          {formatViewer(show.viewCount)}
+          {fmt(show.viewCount)}
         </div>
 
         {/* Duration */}
@@ -486,6 +541,253 @@ function MemberLiveCard({ show }: { show: MemberLiveShow }) {
   );
 }
 
+// ── Recent Live Card ──────────────────────────────────────────────────────────
+function RecentLiveCard({ show }: { show: RecentLiveShow }) {
+  const navigate  = useNavigate();
+  const [hovered, setHovered] = useState(false);
+
+  const isIdn      = show.type === "idn";
+  const accentColor = isIdn ? "#465FFF" : "#DC1F2E";
+  const accentBg    = isIdn ? "rgba(70,95,255,0.08)"  : "rgba(220,31,46,0.08)";
+  const accentHover = isIdn
+    ? "linear-gradient(135deg, #465FFF, #6b7fff)"
+    : "linear-gradient(135deg, #DC1F2E, #ff4757)";
+
+  const endTime  = show.live_info?.date?.end
+    ? new Date(show.live_info.date.end).toLocaleString("id-ID", {
+        day:    "2-digit",
+        month:  "short",
+        hour:   "2-digit",
+        minute: "2-digit",
+      })
+    : "-";
+
+  const durationStr = show.live_info?.duration
+    ? formatDurationMs(show.live_info.duration)
+    : "-";
+
+  const viewerCount = show.live_info?.viewers?.num ?? 0;
+  const isExcitement = show.live_info?.viewers?.is_excitement ?? false;
+
+  const thumbnail = isIdn && show.idn?.image ? show.idn.image : (show.member.img_alt || show.member.img);
+  const title     = isIdn && show.idn?.title ? show.idn.title : show.member.name;
+
+  return (
+    <div
+      onClick={() => navigate(`/recent/${show.data_id}`)}
+      style={{
+        background:    "#fff",
+        border:        `1px solid ${hovered ? `${accentColor}55` : "#e5e7eb"}`,
+        borderRadius:  14,
+        overflow:      "hidden",
+        display:       "flex",
+        alignItems:    "center",
+        gap:           12,
+        padding:       "12px 14px",
+        transition:    "all 0.2s",
+        transform:     hovered ? "translateY(-2px)" : "translateY(0)",
+        boxShadow:     hovered
+          ? `0 8px 24px ${accentColor}22`
+          : "0 1px 4px rgba(0,0,0,0.05)",
+        cursor:        "pointer",
+      }}
+      className="dark:bg-white/[0.03] dark:border-gray-800"
+      onMouseEnter={() => setHovered(true)}
+      onMouseLeave={() => setHovered(false)}
+    >
+      {/* Thumbnail / Avatar */}
+      <div style={{ position: "relative", flexShrink: 0 }}>
+        <img
+          src={thumbnail}
+          alt={show.member.name}
+          style={{
+            width:        52,
+            height:       52,
+            borderRadius: isIdn ? 10 : "50%",
+            objectFit:    "cover",
+            border:       `2px solid ${accentColor}40`,
+            display:      "block",
+            transition:   "transform 0.2s",
+            transform:    hovered ? "scale(1.05)" : "scale(1)",
+          }}
+          onError={(e) => { (e.target as HTMLImageElement).src = DEFAULT_IMG; }}
+        />
+        {/* Finished indicator */}
+        <span style={{
+          position:     "absolute",
+          bottom:       -2,
+          right:        -2,
+          width:        14,
+          height:       14,
+          borderRadius: "50%",
+          background:   "#6b7280",
+          border:       "2px solid #fff",
+          display:      "flex",
+          alignItems:   "center",
+          justifyContent: "center",
+        }}>
+          <svg width="7" height="7" viewBox="0 0 24 24" fill="#fff">
+            <rect x="6" y="4" width="4" height="16" rx="1" />
+            <rect x="14" y="4" width="4" height="16" rx="1" />
+          </svg>
+        </span>
+      </div>
+
+      {/* Info */}
+      <div style={{ flex: 1, minWidth: 0, display: "flex", flexDirection: "column", gap: 3 }}>
+        {/* Name */}
+        <div style={{ display: "flex", alignItems: "center", gap: 5 }}>
+          <span style={{
+            fontSize:     13,
+            fontWeight:   700,
+            color:        "#111827",
+            overflow:     "hidden",
+            textOverflow: "ellipsis",
+            whiteSpace:   "nowrap",
+          }} className="dark:text-white">
+            {show.member.nickname || show.member.name}
+          </span>
+          {show.member.is_official && (
+            <span style={{
+              fontSize:   9,
+              fontWeight: 700,
+              padding:    "1px 5px",
+              borderRadius: 999,
+              background: "rgba(59,130,246,0.12)",
+              color:      "#3b82f6",
+              border:     "1px solid rgba(59,130,246,0.2)",
+              flexShrink: 0,
+            }}>
+              OFFICIAL
+            </span>
+          )}
+          {show.member.is_graduate && (
+            <span style={{
+              fontSize:   9,
+              fontWeight: 700,
+              padding:    "1px 5px",
+              borderRadius: 999,
+              background: "rgba(156,163,175,0.15)",
+              color:      "#9ca3af",
+              border:     "1px solid rgba(156,163,175,0.25)",
+              flexShrink: 0,
+            }}>
+              GRAD
+            </span>
+          )}
+        </div>
+
+        {/* Title (for IDN) */}
+        {isIdn && show.idn?.title && (
+          <span style={{
+            fontSize:     11,
+            color:        "#6b7280",
+            overflow:     "hidden",
+            textOverflow: "ellipsis",
+            whiteSpace:   "nowrap",
+          }} className="dark:text-gray-400">
+            {show.idn.title}
+          </span>
+        )}
+
+        {/* Meta row */}
+        <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+          {/* Type badge */}
+          <span style={{
+            fontSize:     9,
+            fontWeight:   700,
+            padding:      "2px 6px",
+            borderRadius: 999,
+            background:   accentBg,
+            color:        accentColor,
+            border:       `1px solid ${accentColor}33`,
+            textTransform: "uppercase",
+          }}>
+            {show.type === "idn" ? "IDN Live" : show.type}
+          </span>
+
+          {/* Duration */}
+          <span style={{
+            display:    "inline-flex",
+            alignItems: "center",
+            gap:        3,
+            fontSize:   10,
+            color:      "#9ca3af",
+            fontVariantNumeric: "tabular-nums",
+          }}>
+            <svg width="9" height="9" viewBox="0 0 24 24" fill="none"
+              stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <circle cx="12" cy="12" r="10" />
+              <polyline points="12 6 12 12 16 14" />
+            </svg>
+            {durationStr}
+          </span>
+
+          {/* Viewer */}
+          <span style={{
+            display:    "inline-flex",
+            alignItems: "center",
+            gap:        3,
+            fontSize:   10,
+            color:      isExcitement ? "#f59e0b" : "#9ca3af",
+            fontVariantNumeric: "tabular-nums",
+          }}>
+            <svg width="9" height="9" viewBox="0 0 24 24" fill="none"
+              stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z" />
+              <circle cx="12" cy="12" r="3" />
+            </svg>
+            {formatViewer(viewerCount)}
+            {isExcitement && " 🔥"}
+          </span>
+
+          {/* End time */}
+          <span style={{
+            fontSize:   10,
+            color:      "#9ca3af",
+            marginLeft: "auto",
+          }}>
+            {endTime}
+          </span>
+        </div>
+      </div>
+
+      {/* Gift & Points */}
+      <div style={{
+        flexShrink:     0,
+        display:        "flex",
+        flexDirection:  "column",
+        alignItems:     "flex-end",
+        gap:            4,
+        minWidth:       80,
+      }}>
+        <span style={{
+          fontSize:   12,
+          fontWeight: 700,
+          color:      "#10b981",
+          whiteSpace: "nowrap",
+        }}>
+          {show.total_gift}
+        </span>
+        <div style={{
+          display:    "inline-flex",
+          alignItems: "center",
+          gap:        3,
+          padding:    "2px 7px",
+          borderRadius: 999,
+          background: "rgba(245,158,11,0.1)",
+          border:     "1px solid rgba(245,158,11,0.2)",
+        }}>
+          <span style={{ fontSize: 9 }}>⭐</span>
+          <span style={{ fontSize: 10, fontWeight: 700, color: "#d97706" }}>
+            {show.points.toLocaleString("id-ID")} pts
+          </span>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 // ── Empty State ───────────────────────────────────────────────────────────────
 function EmptyState({ message }: { message: string }) {
   return (
@@ -524,11 +826,13 @@ function SectionHeader({
   count,
   color = "#DC1F2E",
   icon,
+  showLiveIndicator = true,
 }: {
-  title:  string;
-  count:  number;
-  color?: string;
-  icon:   React.ReactNode;
+  title:               string;
+  count:               number;
+  color?:              string;
+  icon:                React.ReactNode;
+  showLiveIndicator?:  boolean;
 }) {
   return (
     <div style={{
@@ -571,14 +875,14 @@ function SectionHeader({
               color,
               border:       `1px solid ${color}28`,
             }}>
-              {count} Live
+              {count} {showLiveIndicator ? "Live" : "Data"}
             </span>
           )}
         </h2>
       </div>
 
       {/* Animated live indicator */}
-      {count > 0 && (
+      {count > 0 && showLiveIndicator && (
         <div style={{
           marginLeft:  "auto",
           display:     "flex",
@@ -605,11 +909,13 @@ function SectionHeader({
 
 // ── Main Page ─────────────────────────────────────────────────────────────────
 const LivePage: React.FC = () => {
-  const [idnShows,     setIdnShows]     = useState<IdnLiveShow[]>([]);
-  const [memberShows,  setMemberShows]  = useState<MemberLiveShow[]>([]);
-  const [loadingIdn,   setLoadingIdn]   = useState(true);
-  const [loadingMember,setLoadingMember]= useState(true);
-  const [lastUpdated,  setLastUpdated]  = useState<Date | null>(null);
+  const [idnShows,      setIdnShows]      = useState<IdnLiveShow[]>([]);
+  const [memberShows,   setMemberShows]   = useState<MemberLiveShow[]>([]);
+  const [recentShows,   setRecentShows]   = useState<RecentLiveShow[]>([]);
+  const [loadingIdn,    setLoadingIdn]    = useState(true);
+  const [loadingMember, setLoadingMember] = useState(true);
+  const [loadingRecent, setLoadingRecent] = useState(true);
+  const [lastUpdated,   setLastUpdated]   = useState<Date | null>(null);
 
   const fetchIdnPlus = async () => {
     try {
@@ -633,8 +939,6 @@ const LivePage: React.FC = () => {
       const res  = await fetch(LIVE_API);
       const json = await res.json();
       if (Array.isArray(json)) {
-        // Filter hanya yang bukan group (member individual)
-        // atau sesuaikan kebutuhan
         setMemberShows(json);
       }
     } catch (e) {
@@ -644,15 +948,31 @@ const LivePage: React.FC = () => {
     }
   };
 
+  const fetchRecentLive = async () => {
+    try {
+      const res  = await fetch(RECENT_API);
+      const json = await res.json();
+      // API bisa mengembalikan array langsung atau { data: [...] }
+      const arr = Array.isArray(json) ? json : Array.isArray(json?.data) ? json.data : [];
+      setRecentShows(arr);
+    } catch (e) {
+      console.error("Error fetching Recent Live:", e);
+    } finally {
+      setLoadingRecent(false);
+    }
+  };
+
   useEffect(() => {
     fetchIdnPlus();
     fetchMemberLive();
+    fetchRecentLive();
     setLastUpdated(new Date());
 
     // Auto-refresh setiap 60 detik
     const interval = setInterval(() => {
       fetchIdnPlus();
       fetchMemberLive();
+      fetchRecentLive();
       setLastUpdated(new Date());
     }, 60_000);
 
@@ -661,7 +981,7 @@ const LivePage: React.FC = () => {
 
   const totalLive = idnShows.length + memberShows.length;
 
-    return (
+  return (
     <>
       <PageMeta
         title="Live Sekarang | JKT48Connect"
@@ -741,8 +1061,10 @@ const LivePage: React.FC = () => {
                 onClick={() => {
                   setLoadingIdn(true);
                   setLoadingMember(true);
+                  setLoadingRecent(true);
                   fetchIdnPlus();
                   fetchMemberLive();
+                  fetchRecentLive();
                   setLastUpdated(new Date());
                 }}
                 style={{
@@ -877,6 +1199,62 @@ const LivePage: React.FC = () => {
               </div>
             )}
           </div>
+
+          {/* Divider */}
+          <div style={{
+            height:     1,
+            background: "linear-gradient(to right, transparent, #e5e7eb, transparent)",
+          }} className="dark:bg-gradient-to-r dark:from-transparent dark:via-gray-700 dark:to-transparent" />
+
+          {/* ══ Section 3: Recent Live ══ */}
+          <div>
+            <SectionHeader
+              title="Recent Live"
+              count={recentShows.length}
+              color="#10b981"
+              showLiveIndicator={false}
+              icon={
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none"
+                  stroke="#10b981" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                  <circle cx="12" cy="12" r="10" />
+                  <polyline points="12 6 12 12 16 14" />
+                </svg>
+              }
+            />
+
+            {loadingRecent ? (
+              <div style={{
+                display:        "flex",
+                alignItems:     "center",
+                justifyContent: "center",
+                gap:            10,
+                padding:        "32px 0",
+              }}>
+                <div style={{
+                  width:        28,
+                  height:       28,
+                  border:       "3px solid rgba(16,185,129,0.15)",
+                  borderTop:    "3px solid #10b981",
+                  borderRadius: "50%",
+                  animation:    "spin 0.8s linear infinite",
+                }} />
+                <span style={{ fontSize: 13, color: "#9ca3af" }}>Memuat Recent Live...</span>
+              </div>
+            ) : recentShows.length === 0 ? (
+              <EmptyState message="Tidak ada data recent live saat ini." />
+            ) : (
+              <div style={{
+                display:             "grid",
+                gridTemplateColumns: "repeat(auto-fill, minmax(340px, 1fr))",
+                gap:                 10,
+              }}>
+                {recentShows.map((show) => (
+                  <RecentLiveCard key={show._id} show={show} />
+                ))}
+              </div>
+            )}
+          </div>
+
         </div>
 
         {/* ── Footer ── */}
@@ -909,6 +1287,13 @@ const LivePage: React.FC = () => {
                 background: "#465FFF", display: "inline-block",
               }} />
               Member Live
+            </span>
+            <span style={{ display: "flex", alignItems: "center", gap: 5, fontSize: 11, color: "#9ca3af" }}>
+              <span style={{
+                width: 8, height: 8, borderRadius: "50%",
+                background: "#10b981", display: "inline-block",
+              }} />
+              Recent Live
             </span>
           </div>
         </div>
