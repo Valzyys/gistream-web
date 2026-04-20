@@ -549,9 +549,9 @@ function RecentLiveCard({ show }: { show: RecentLiveShow }) {
   const isIdn      = show.type === "idn";
   const accentColor = isIdn ? "#465FFF" : "#DC1F2E";
   const accentBg    = isIdn ? "rgba(70,95,255,0.08)"  : "rgba(220,31,46,0.08)";
-  const accentHover = isIdn
-    ? "linear-gradient(135deg, #465FFF, #6b7fff)"
-    : "linear-gradient(135deg, #DC1F2E, #ff4757)";
+  //const accentHover = isIdn
+    //? "linear-gradient(135deg, #465FFF, #6b7fff)"
+    //: "linear-gradient(135deg, #DC1F2E, #ff4757)";
 
   const endTime  = show.live_info?.date?.end
     ? new Date(show.live_info.date.end).toLocaleString("id-ID", {
@@ -570,7 +570,7 @@ function RecentLiveCard({ show }: { show: RecentLiveShow }) {
   const isExcitement = show.live_info?.viewers?.is_excitement ?? false;
 
   const thumbnail = isIdn && show.idn?.image ? show.idn.image : (show.member.img_alt || show.member.img);
-  const title     = isIdn && show.idn?.title ? show.idn.title : show.member.name;
+ // const title     = isIdn && show.idn?.title ? show.idn.title : show.member.name;
 
   return (
     <div
