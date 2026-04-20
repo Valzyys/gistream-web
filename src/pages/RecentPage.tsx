@@ -92,7 +92,7 @@ const getFanAvatarUrl = (avatar_id: number): string =>
     : `https://stg.showroom-live.com/assets/img/avatar/${avatar_id}.png`;
 
 const getScreenshotUrl = (folder: string, ts: number, format: string) =>
-  `https://img.crstlnz.my.id/${encodeURIComponent(folder).replace(/%2F/g, "/")}/${ts}.${format}`;
+  `https://screenshot.jkt48connect.com/${encodeURIComponent(folder).replace(/%2F/g, "/")}/${ts}.${format}`;
 
 const formatDuration = (ms: number) => {
   const h = Math.floor(ms / 3_600_000);
