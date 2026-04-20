@@ -8,13 +8,108 @@ const SHOWS_API = "https://asset.gstreamlive.com/shows";
 const DEFAULT_IMG =
   "https://res.cloudinary.com/haymzm4wp/image/upload/v1760105848/bi5ej2hgh0cc2uowu5xr.jpg";
 
+// ── Badge definitions ─────────────────────────────────────────────────────────
+type BadgeType = "PENGUMUMAN" | "GRADUATION" | "SPECIAL" | "SHONICHI";
+
+const BADGE_STYLES: Record<BadgeType, { bg: string; color: string; border: string; dot: string }> = {
+  PENGUMUMAN: {
+    bg:     "rgba(239,68,68,0.12)",
+    color:  "#dc2626",
+    border: "rgba(239,68,68,0.3)",
+    dot:    "#ef4444",
+  },
+  GRADUATION: {
+    bg:     "rgba(168,85,247,0.12)",
+    color:  "#9333ea",
+    border: "rgba(168,85,247,0.3)",
+    dot:    "#a855f7",
+  },
+  SPECIAL: {
+    bg:     "rgba(245,158,11,0.12)",
+    color:  "#d97706",
+    border: "rgba(245,158,11,0.3)",
+    dot:    "#f59e0b",
+  },
+  SHONICHI: {
+    bg:     "rgba(34,197,94,0.12)",
+    color:  "#16a34a",
+    border: "rgba(34,197,94,0.3)",
+    dot:    "#22c55e",
+  },
+};
+
+// ── Hardcoded badge assignments ───────────────────────────────────────────────
+// Tambahkan entri di sini untuk memberi badge pada show tertentu.
+// Satu show bisa memiliki lebih dari satu badge.
+// Format: { [id]: BadgeType[] }
+const SHOW_BADGES: Record<string, BadgeType[]> = {
+  "80de4db8": ["PENGUMUMAN"],
+  "97967092": ["SHONICHI", "SPECIAL"],
+  "7ee3b844": ["SHONICHI", "SPECIAL"],
+  // Contoh lain:
+  // "80de4db8": ["GRADUATION"],
+  // "2b9bd584": ["PENGUMUMAN", "SPECIAL"],
+};
+
 // ── Types ─────────────────────────────────────────────────────────────────────
 interface ReplayShow {
-  id:        string;
-  title:     string;
-  image_url: string | null;
-  lineup:    string[];
-  url:       string;
+  id:         string;
+  title:      string;
+  image_url:  string | null;
+  lineup:     string[];
+  show_date?: string;
+  url:        string;
+}
+
+// ── Date parser ───────────────────────────────────────────────────────────────
+const BULAN: Record<string, number> = {
+  januari: 0, februari: 1, maret: 2, april: 3, mei: 4, juni: 5,
+  juli: 6, agustus: 7, september: 8, oktober: 9, november: 10, desember: 11,
+};
+
+function parseShowDate(show_date?: string): Date {
+  if (!show_date) return new Date(0);
+  const m = show_date.match(/(\d{1,2})\s+([A-Za-z]+)\s+(\d{4})/);
+  if (!m) return new Date(0);
+  const day   = parseInt(m[1], 10);
+  const month = BULAN[m[2].toLowerCase()];
+  const year  = parseInt(m[3], 10);
+  if (month === undefined) return new Date(0);
+  const timeMatch = show_date.match(/(\d{1,2})\.(\d{2})\s*WIB/);
+  const hours   = timeMatch ? parseInt(timeMatch[1], 10) : 0;
+  const minutes = timeMatch ? parseInt(timeMatch[2], 10) : 0;
+  return new Date(year, month, day, hours, minutes);
+}
+
+function processShows(raw: ReplayShow[]): ReplayShow[] {
+  return [...raw].sort(
+    (a, b) => parseShowDate(b.show_date).getTime() - parseShowDate(a.show_date).getTime(),
+  );
+}
+
+// ── Badge component ───────────────────────────────────────────────────────────
+function ShowBadge({ type }: { type: BadgeType }) {
+  const s = BADGE_STYLES[type];
+  return (
+    <span style={{
+      display:       "inline-flex",
+      alignItems:    "center",
+      gap:           4,
+      padding:       "2px 7px",
+      borderRadius:  999,
+      fontSize:      9,
+      fontWeight:    800,
+      letterSpacing: "0.06em",
+      background:    s.bg,
+      color:         s.color,
+      border:        `1px solid ${s.border}`,
+      whiteSpace:    "nowrap",
+      flexShrink:    0,
+    }}>
+      <span style={{ width: 5, height: 5, borderRadius: "50%", background: s.dot, flexShrink: 0 }} />
+      {type}
+    </span>
+  );
 }
 
 // ── Replay Card ───────────────────────────────────────────────────────────────
@@ -22,6 +117,7 @@ function ReplayCard({ show }: { show: ReplayShow }) {
   const navigate = useNavigate();
   const [hovered, setHovered] = useState(false);
 
+  const badges        = SHOW_BADGES[show.id] ?? [];
   const visibleLineup = show.lineup.slice(0, 6);
   const extraCount    = show.lineup.length - visibleLineup.length;
 
@@ -105,7 +201,7 @@ function ReplayCard({ show }: { show: ReplayShow }) {
           </div>
         </div>
 
-        {/* REPLAY badge */}
+        {/* Top-left: REPLAY badge */}
         <div style={{
           position:       "absolute",
           top:            10,
@@ -130,7 +226,7 @@ function ReplayCard({ show }: { show: ReplayShow }) {
           REPLAY
         </div>
 
-        {/* Member count */}
+        {/* Top-right: member count */}
         {show.lineup.length > 0 && (
           <div style={{
             position:       "absolute",
@@ -155,6 +251,38 @@ function ReplayCard({ show }: { show: ReplayShow }) {
             {show.lineup.length} Member
           </div>
         )}
+
+        {/* Bottom-left: show date */}
+        {show.show_date && (
+          <div style={{
+            position:       "absolute",
+            bottom:         8,
+            left:           10,
+            display:        "inline-flex",
+            alignItems:     "center",
+            gap:            4,
+            padding:        "3px 8px",
+            borderRadius:   999,
+            fontSize:       10,
+            fontWeight:     600,
+            background:     "rgba(0,0,0,0.65)",
+            backdropFilter: "blur(6px)",
+            color:          "rgba(255,255,255,0.85)",
+            maxWidth:       "calc(100% - 20px)",
+            overflow:       "hidden",
+            whiteSpace:     "nowrap",
+            textOverflow:   "ellipsis",
+          }}>
+            <svg width="9" height="9" viewBox="0 0 24 24" fill="none"
+              stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <rect x="3" y="4" width="18" height="18" rx="2" ry="2" />
+              <line x1="16" y1="2" x2="16" y2="6" />
+              <line x1="8" y1="2" x2="8" y2="6" />
+              <line x1="3" y1="10" x2="21" y2="10" />
+            </svg>
+            {show.show_date}
+          </div>
+        )}
       </div>
 
       {/* Body */}
@@ -162,9 +290,16 @@ function ReplayCard({ show }: { show: ReplayShow }) {
         padding:       "14px 16px 16px",
         display:       "flex",
         flexDirection: "column",
-        gap:           10,
+        gap:           8,
         flex:          1,
       }}>
+        {/* Badges row — tampil di atas judul jika ada */}
+        {badges.length > 0 && (
+          <div style={{ display: "flex", flexWrap: "wrap", gap: 4 }}>
+            {badges.map((b) => <ShowBadge key={b} type={b} />)}
+          </div>
+        )}
+
         {/* Title */}
         <h3 style={{
           margin:          0,
@@ -337,13 +472,72 @@ function EmptyState() {
   );
 }
 
+// ── Badge filter button ───────────────────────────────────────────────────────
+function BadgeFilterBtn({
+  type, active, onClick,
+}: {
+  type:    BadgeType | "SEMUA";
+  active:  boolean;
+  onClick: () => void;
+}) {
+  if (type === "SEMUA") {
+    return (
+      <button onClick={onClick} style={{
+        padding:      "5px 12px",
+        borderRadius: 999,
+        border:       `1px solid ${active ? "rgba(220,31,46,0.4)" : "#e5e7eb"}`,
+        background:   active ? "rgba(220,31,46,0.08)" : "#fff",
+        color:        active ? "#DC1F2E" : "#6b7280",
+        fontSize:     11,
+        fontWeight:   700,
+        cursor:       "pointer",
+        transition:   "all 0.15s",
+        letterSpacing: "0.04em",
+      }} className={active ? "" : "dark:bg-white/[0.03] dark:border-gray-700 dark:text-gray-400"}>
+        SEMUA
+      </button>
+    );
+  }
+  const s = BADGE_STYLES[type];
+  return (
+    <button onClick={onClick} style={{
+      display:       "inline-flex",
+      alignItems:    "center",
+      gap:           5,
+      padding:       "5px 12px",
+      borderRadius:  999,
+      border:        `1px solid ${active ? s.border : "#e5e7eb"}`,
+      background:    active ? s.bg : "#fff",
+      color:         active ? s.color : "#6b7280",
+      fontSize:      11,
+      fontWeight:    700,
+      cursor:        "pointer",
+      transition:    "all 0.15s",
+      letterSpacing: "0.04em",
+    }} className={active ? "" : "dark:bg-white/[0.03] dark:border-gray-700 dark:text-gray-400"}>
+      <span style={{
+        width: 6, height: 6, borderRadius: "50%",
+        background: active ? s.dot : "#9ca3af",
+        flexShrink: 0,
+        transition: "background 0.15s",
+      }} />
+      {type}
+    </button>
+  );
+}
+
 // ── Main Page ─────────────────────────────────────────────────────────────────
+const ALL_BADGE_FILTERS: (BadgeType | "SEMUA")[] = [
+  "SEMUA", "SHONICHI", "SPECIAL", "GRADUATION", "PENGUMUMAN",
+];
+
 const ReplayPage: React.FC = () => {
-  const [shows,       setShows]       = useState<ReplayShow[]>([]);
-  const [loading,     setLoading]     = useState(true);
-  const [error,       setError]       = useState<string | null>(null);
-  const [lastUpdated, setLastUpdated] = useState<Date | null>(null);
-  const [search,      setSearch]      = useState("");
+  const [shows,        setShows]        = useState<ReplayShow[]>([]);
+  const [loading,      setLoading]      = useState(true);
+  const [error,        setError]        = useState<string | null>(null);
+  const [lastUpdated,  setLastUpdated]  = useState<Date | null>(null);
+  const [search,       setSearch]       = useState("");
+  const [badgeFilter,  setBadgeFilter]  = useState<BadgeType | "SEMUA">("SEMUA");
 
   const fetchShows = async () => {
     try {
@@ -351,7 +545,7 @@ const ReplayPage: React.FC = () => {
       const res  = await fetch(SHOWS_API);
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const json: ReplayShow[] = await res.json();
-      setShows(json);
+      setShows(processShows(json));
       setLastUpdated(new Date());
     } catch (e: any) {
       setError(e.message || "Gagal memuat data");
@@ -360,16 +554,20 @@ const ReplayPage: React.FC = () => {
     }
   };
 
-  useEffect(() => {
-    fetchShows();
-  }, []);
+  useEffect(() => { fetchShows(); }, []);
 
   const filtered = shows.filter((s) => {
     const q = search.toLowerCase();
-    return (
+    const matchSearch =
       s.title.toLowerCase().includes(q) ||
-      s.lineup.some((m) => m.toLowerCase().includes(q))
-    );
+      s.lineup.some((m) => m.toLowerCase().includes(q)) ||
+      (s.show_date ?? "").toLowerCase().includes(q);
+
+    const matchBadge =
+      badgeFilter === "SEMUA" ||
+      (SHOW_BADGES[s.id] ?? []).includes(badgeFilter);
+
+    return matchSearch && matchBadge;
   });
 
   return (
@@ -407,7 +605,7 @@ const ReplayPage: React.FC = () => {
                   Replay Theater
                 </h1>
                 <p style={{ margin: 0, fontSize: 12, color: "#9ca3af", marginTop: 2 }}>
-                  {loading ? "Memuat..." : `${shows.length} show tersedia`}
+                  {loading ? "Memuat..." : `${shows.length} show tersedia · diurutkan terbaru`}
                 </p>
               </div>
             </div>
@@ -423,7 +621,7 @@ const ReplayPage: React.FC = () => {
                 </svg>
                 <input
                   type="text"
-                  placeholder="Cari judul / member..."
+                  placeholder="Cari judul / member / tanggal..."
                   value={search}
                   onChange={(e) => setSearch(e.target.value)}
                   style={{
@@ -437,7 +635,7 @@ const ReplayPage: React.FC = () => {
                     color:         "#111827",
                     fontSize:      12,
                     outline:       "none",
-                    width:         200,
+                    width:         220,
                   }}
                   className="dark:bg-white/[0.04] dark:border-gray-700 dark:text-white dark:placeholder-gray-500"
                 />
@@ -477,13 +675,27 @@ const ReplayPage: React.FC = () => {
             </div>
           </div>
 
-          {search && !loading && (
-            <p style={{ margin: "12px 0 0", fontSize: 12, color: "#9ca3af" }}>
+          {/* Badge filter row */}
+          <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginTop: 14 }}>
+            {ALL_BADGE_FILTERS.map((b) => (
+              <BadgeFilterBtn
+                key={b}
+                type={b}
+                active={badgeFilter === b}
+                onClick={() => setBadgeFilter(b)}
+              />
+            ))}
+          </div>
+
+          {(search || badgeFilter !== "SEMUA") && !loading && (
+            <p style={{ margin: "10px 0 0", fontSize: 12, color: "#9ca3af" }}>
               Menampilkan{" "}
               <strong style={{ color: "#374151" }} className="dark:text-gray-200">
                 {filtered.length}
               </strong>{" "}
-              hasil untuk "{search}"
+              hasil
+              {search && ` untuk "${search}"`}
+              {badgeFilter !== "SEMUA" && ` · filter: ${badgeFilter}`}
             </p>
           )}
         </div>
@@ -571,7 +783,7 @@ const ReplayPage: React.FC = () => {
               <strong style={{ color: "#6b7280" }} className="dark:text-gray-300">
                 {shows.length}
               </strong>{" "}
-              show ditampilkan
+              show · diurutkan terbaru
             </p>
             <p style={{ margin: 0, fontSize: 11, color: "#d1d5db" }} className="dark:text-gray-600">
               Klik kartu untuk menonton replay
@@ -579,7 +791,6 @@ const ReplayPage: React.FC = () => {
           </div>
         )}
 
-        {/* ── Keyframes ── */}
         <style>{`
           @keyframes shimmer {
             0%   { background-position: -200% 0; }
