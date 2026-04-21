@@ -32,20 +32,14 @@ interface HlsLevel {
 // ── Download Modal ────────────────────────────────────────────────────────────
 function DownloadModal({
   show,
-  levels,
   onClose,
 }: {
   show:    ReplayShow;
-  levels:  HlsLevel[];
   onClose: () => void;
 }) {
-  const [downloading,    setDownloading]    = useState(false);
-  const [progress,       setProgress]       = useState(0);
-  const [downloadError,  setDownloadError]  = useState("");
-  const [selectedLevel,  setSelectedLevel]  = useState<number>(
-    levels.length > 0 ? levels[0].index : 0
-  );
-  const abortRef = useRef<AbortController | null>(null);
+  const [downloading,   setDownloading]   = useState(false);
+  const [progress,      setProgress]      = useState(0);
+  const [downloadError, setDownloadError] = useState("");
 
   // Tutup saat klik backdrop
   const handleBackdrop = (e: React.MouseEvent<HTMLDivElement>) => {
@@ -61,165 +55,58 @@ function DownloadModal({
 
   const handleDownload = async () => {
     setDownloadError("");
-    const src = show.url;
+    const src   = show.url;
     const isHls = src.includes(".m3u8") || src.includes("m3u8");
 
-    if (!isHls) {
-      // Non-HLS: download biasa via anchor
+    if (isHls) {
+      // Langsung download file .m3u8 saja — cepat & instan
       try {
         setDownloading(true);
         setProgress(30);
-        const res  = await fetch(src);
-        const blob = await res.blob();
+        const res = await fetch(src);
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        const blob    = await res.blob();
         setProgress(90);
         const blobUrl = URL.createObjectURL(blob);
         const a       = document.createElement("a");
-        const ext     = src.split(".").pop()?.split("?")[0] || "mp4";
         a.href        = blobUrl;
-        a.download    = `${show.title.replace(/[^a-zA-Z0-9]/g, "_")}_${show.id}.${ext}`;
+        a.download    = `${show.title.replace(/[^a-zA-Z0-9]/g, "_")}_${show.id}.m3u8`;
         document.body.appendChild(a);
         a.click();
         document.body.removeChild(a);
         setTimeout(() => URL.revokeObjectURL(blobUrl), 5000);
         setProgress(100);
         setTimeout(() => { setDownloading(false); setProgress(0); onClose(); }, 800);
-      } catch {
-        setDownloadError("Gagal mengunduh file.");
+      } catch (err: any) {
+        setDownloadError(`Gagal: ${err.message || "Terjadi kesalahan"}`);
         setDownloading(false);
+        setProgress(0);
       }
       return;
     }
 
-    // ── HLS Download Flow ───────────────────────────────────────────────────
+    // Non-HLS: download biasa via anchor
     try {
       setDownloading(true);
-      setProgress(3);
-
-      const ctrl = new AbortController();
-      abortRef.current = ctrl;
-
-      // Step 1: Fetch master playlist
-      const masterRes = await fetch(src, { signal: ctrl.signal });
-      if (!masterRes.ok) throw new Error("Gagal mengambil master playlist");
-      const masterText = await masterRes.text();
-      const baseUrl    = src.substring(0, src.lastIndexOf("/") + 1);
-      setProgress(6);
-
-      // Step 2: Parse rendition URLs dari master playlist
-      let renditionUrl = "";
-
-      if (masterText.includes("#EXT-X-STREAM-INF")) {
-        const lines = masterText.split("\n").map(l => l.trim()).filter(Boolean);
-        const renditions: { bandwidth: number; url: string }[] = [];
-
-        for (let i = 0; i < lines.length; i++) {
-          if (lines[i].startsWith("#EXT-X-STREAM-INF")) {
-            const bwMatch = lines[i].match(/BANDWIDTH=(\d+)/);
-            const bw = bwMatch ? parseInt(bwMatch[1]) : 0;
-            const nextLine = lines[i + 1];
-            if (nextLine && !nextLine.startsWith("#")) {
-              const url = nextLine.startsWith("http") ? nextLine : baseUrl + nextLine;
-              renditions.push({ bandwidth: bw, url });
-            }
-          }
-        }
-
-        if (renditions.length === 0) throw new Error("Tidak ada rendisi ditemukan di master playlist");
-
-        // Sort descending by bandwidth (index 0 = kualitas tertinggi)
-        renditions.sort((a, b) => b.bandwidth - a.bandwidth);
-
-        // levels[] di-sort descending by height — mapping index sinkron dengan renditions[]
-        const idx = selectedLevel >= 0 && selectedLevel < renditions.length
-          ? selectedLevel
-          : 0;
-
-        renditionUrl = renditions[idx].url;
-      } else {
-        // Sudah media playlist langsung (bukan master)
-        renditionUrl = src;
-      }
-
-      setProgress(10);
-
-      // Step 3: Fetch media playlist (rendition)
-      const mediaRes = await fetch(renditionUrl, { signal: ctrl.signal });
-      if (!mediaRes.ok) throw new Error("Gagal mengambil media playlist");
-      const mediaText = await mediaRes.text();
-      const rendBase  = renditionUrl.substring(0, renditionUrl.lastIndexOf("/") + 1);
-      setProgress(13);
-
-      // Step 4: Parse segment URLs
-      const segLines = mediaText
-        .split("\n")
-        .map(l => l.trim())
-        .filter(l => l && !l.startsWith("#"));
-
-      const segUrls = segLines.map(l =>
-        l.startsWith("http") ? l : rendBase + l
-      );
-
-      if (segUrls.length === 0) throw new Error("Tidak ada segmen ditemukan di playlist");
-
-      // Step 5: Download semua segmen
-      const chunks: Uint8Array[] = [];
-      const total = segUrls.length;
-
-      for (let i = 0; i < total; i++) {
-        if (ctrl.signal.aborted) return;
-        const segRes = await fetch(segUrls[i], { signal: ctrl.signal });
-        if (!segRes.ok) throw new Error(`Segmen ${i + 1}/${total} gagal (HTTP ${segRes.status})`);
-        const buf = await segRes.arrayBuffer();
-        chunks.push(new Uint8Array(buf));
-        // Progress: 13% → 97% selama download segmen
-        setProgress(13 + Math.round(((i + 1) / total) * 84));
-      }
-
-      setProgress(97);
-
-      // Step 6: Gabungkan semua chunk
-      const totalLen = chunks.reduce((acc, c) => acc + c.length, 0);
-      const merged   = new Uint8Array(totalLen);
-      let offset = 0;
-      for (const chunk of chunks) {
-        merged.set(chunk, offset);
-        offset += chunk.length;
-      }
-
-      setProgress(99);
-
-      // Step 7: Trigger download langsung sebagai .ts
-      const blob    = new Blob([merged], { type: "video/mp2t" });
+      setProgress(30);
+      const res     = await fetch(src);
+      const blob    = await res.blob();
+      setProgress(90);
       const blobUrl = URL.createObjectURL(blob);
       const a       = document.createElement("a");
+      const ext     = src.split(".").pop()?.split("?")[0] || "mp4";
       a.href        = blobUrl;
-      a.download    = `${show.title.replace(/[^a-zA-Z0-9]/g, "_")}_${show.id}.ts`;
+      a.download    = `${show.title.replace(/[^a-zA-Z0-9]/g, "_")}_${show.id}.${ext}`;
       document.body.appendChild(a);
       a.click();
       document.body.removeChild(a);
-      setTimeout(() => URL.revokeObjectURL(blobUrl), 10_000);
-
+      setTimeout(() => URL.revokeObjectURL(blobUrl), 5000);
       setProgress(100);
-      setTimeout(() => {
-        setDownloading(false);
-        setProgress(0);
-        onClose();
-      }, 1200);
-
-    } catch (err: any) {
-      if (err.name === "AbortError") return;
-      console.error("Download error:", err);
-      setDownloadError(`Gagal: ${err.message || "Terjadi kesalahan saat download"}`);
+      setTimeout(() => { setDownloading(false); setProgress(0); onClose(); }, 800);
+    } catch {
+      setDownloadError("Gagal mengunduh file.");
       setDownloading(false);
-      setProgress(0);
     }
-  };
-
-  const cancelDownload = () => {
-    abortRef.current?.abort();
-    setDownloading(false);
-    setProgress(0);
-    setDownloadError("");
   };
 
   const isHls = show.url.includes(".m3u8") || show.url.includes("m3u8");
@@ -271,48 +158,14 @@ function DownloadModal({
             </div>
           </div>
 
-          {/* Quality selector */}
-          {isHls && levels.length > 1 && !downloading && (
-            <div>
-              <p className="text-[11px] font-bold text-gray-500 dark:text-gray-400 uppercase tracking-wider mb-2">
-                Kualitas Download
-              </p>
-              <div className="flex flex-col gap-1.5">
-                {levels.map((lvl) => (
-                  <button
-                    key={lvl.index}
-                    onClick={() => setSelectedLevel(lvl.index)}
-                    className={`w-full flex items-center justify-between px-4 py-2.5 rounded-xl border text-sm cursor-pointer transition-all ${
-                      selectedLevel === lvl.index
-                        ? "border-red-400 dark:border-red-500 bg-red-50 dark:bg-red-500/10 text-red-600 dark:text-red-400 font-bold"
-                        : "border-gray-200 dark:border-gray-700 bg-transparent text-gray-600 dark:text-gray-400 hover:bg-gray-50 dark:hover:bg-gray-800/50"
-                    }`}
-                  >
-                    <span className="flex items-center gap-2">
-                      {lvl.height >= 1080 && (
-                        <span className="text-[9px] font-black px-1.5 py-0.5 rounded bg-amber-100 dark:bg-amber-500/20 text-amber-600 dark:text-amber-400 border border-amber-200 dark:border-amber-500/30">HD</span>
-                      )}
-                      {lvl.name}
-                    </span>
-                    <span className="text-[11px] opacity-50 font-mono">
-                      {lvl.bitrate >= 1_000_000
-                        ? (lvl.bitrate / 1_000_000).toFixed(1) + " Mbps"
-                        : Math.round(lvl.bitrate / 1000) + " Kbps"}
-                    </span>
-                  </button>
-                ))}
-              </div>
-            </div>
-          )}
-
           {/* Info HLS */}
           {isHls && !downloading && (
-            <div className="flex items-start gap-2.5 px-4 py-3 rounded-xl bg-amber-50 dark:bg-amber-500/10 border border-amber-200 dark:border-amber-500/20">
-              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#d97706" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="flex-shrink-0 mt-0.5">
+            <div className="flex items-start gap-2.5 px-4 py-3 rounded-xl bg-blue-50 dark:bg-blue-500/10 border border-blue-200 dark:border-blue-500/20">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#3b82f6" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="flex-shrink-0 mt-0.5">
                 <circle cx="12" cy="12" r="10" /><line x1="12" y1="8" x2="12" y2="12" /><line x1="12" y1="16" x2="12.01" y2="16" />
               </svg>
-              <p className="text-[11px] text-amber-700 dark:text-amber-400 leading-relaxed">
-                Video ini berformat HLS. Semua segmen akan diunduh dan digabungkan langsung di browser. Proses mungkin memakan waktu beberapa menit tergantung durasi dan koneksi internet.
+              <p className="text-[11px] text-blue-700 dark:text-blue-400 leading-relaxed">
+                File <strong>.m3u8</strong> playlist akan diunduh. Buka dengan <strong>VLC</strong> atau video player lain yang mendukung HLS untuk memutar video.
               </p>
             </div>
           )}
@@ -322,32 +175,18 @@ function DownloadModal({
             <div className="flex flex-col gap-3">
               <div className="flex items-center justify-between">
                 <span className="text-sm font-semibold text-gray-700 dark:text-gray-300">
-                  {progress < 6  ? "Memuat master playlist..." :
-                   progress < 10 ? "Memilih kualitas stream..." :
-                   progress < 13 ? "Memuat media playlist..." :
-                   progress < 97 ? `Mengunduh segmen... ${progress}%` :
-                   progress === 97 ? "Menggabungkan video..." :
-                   progress === 99 ? "Menyiapkan file..." :
-                   "Selesai! ✓"}
+                  {progress < 90 ? "Mengunduh..." :
+                   progress === 100 ? "Selesai! ✓" :
+                   "Menyiapkan file..."}
                 </span>
                 <span className="text-sm font-bold text-red-500">{progress}%</span>
               </div>
-
               <div className="w-full h-2 bg-gray-100 dark:bg-gray-800 rounded-full overflow-hidden">
                 <div
                   className="h-full bg-gradient-to-r from-red-500 to-red-400 rounded-full transition-all duration-300"
                   style={{ width: `${progress}%` }}
                 />
               </div>
-
-              {progress < 100 && (
-                <button
-                  onClick={cancelDownload}
-                  className="w-full py-2.5 rounded-xl border border-gray-200 dark:border-gray-700 bg-transparent text-gray-500 dark:text-gray-400 text-xs font-semibold cursor-pointer hover:bg-gray-50 dark:hover:bg-gray-800/50 transition-colors"
-                >
-                  Batalkan
-                </button>
-              )}
             </div>
           )}
 
@@ -373,7 +212,7 @@ function DownloadModal({
                   <polyline points="7 10 12 15 17 10" />
                   <line x1="12" y1="15" x2="12" y2="3" />
                 </svg>
-                Unduh Video
+                Unduh File .m3u8
               </button>
 
               {/* Alternatif: buka URL langsung */}
@@ -805,9 +644,6 @@ const ReplayPlayerPage: React.FC = () => {
   const [verified,       setVerified]       = useState(false);
   const [checkingAccess, setCheckingAccess] = useState(true);
   const [showDownload,   setShowDownload]   = useState(false);
-  const [playerLevels,   setPlayerLevels]   = useState<HlsLevel[]>([]);
-
-  const hlsPageRef = useRef<Hls | null>(null);
 
   // Check membership bypass OR existing localStorage
   useEffect(() => {
@@ -845,41 +681,6 @@ const ReplayPlayerPage: React.FC = () => {
   }, [id]);
 
   useEffect(() => { fetchShow(); }, [fetchShow]);
-
-  // Fetch HLS levels untuk DownloadModal quality selector
-  useEffect(() => {
-    if (!show?.url || !verified) return;
-    setPlayerLevels([]);
-
-    if (!Hls.isSupported()) return;
-
-    const hls = new Hls({ enableWorker: false, startLevel: -1 });
-    hlsPageRef.current = hls;
-
-    const dummyVideo = document.createElement("video");
-    hls.loadSource(show.url);
-    hls.attachMedia(dummyVideo);
-
-    hls.on(Hls.Events.MANIFEST_PARSED, (_, data) => {
-      const parsed: HlsLevel[] = data.levels.map((lvl, idx) => ({
-        index:   idx,
-        height:  lvl.height  || 0,
-        width:   lvl.width   || 0,
-        bitrate: lvl.bitrate || 0,
-        name:    lvl.name    || (lvl.height ? `${lvl.height}p` : `Level ${idx}`),
-      }));
-      parsed.sort((a, b) => b.height - a.height);
-      setPlayerLevels(parsed);
-      hls.destroy();
-      hlsPageRef.current = null;
-    });
-
-    hls.on(Hls.Events.ERROR, (_, data) => {
-      if (data.fatal) { hls.destroy(); hlsPageRef.current = null; }
-    });
-
-    return () => { hls.destroy(); hlsPageRef.current = null; };
-  }, [show?.url, verified]);
 
   // ── Checking access spinner ──
   if (checkingAccess) {
@@ -952,7 +753,6 @@ const ReplayPlayerPage: React.FC = () => {
       {showDownload && (
         <DownloadModal
           show={show}
-          levels={playerLevels}
           onClose={() => setShowDownload(false)}
         />
       )}
