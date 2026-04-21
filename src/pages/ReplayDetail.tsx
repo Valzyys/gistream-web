@@ -29,6 +29,361 @@ interface HlsLevel {
   name:       string;
 }
 
+// ── Download Modal ────────────────────────────────────────────────────────────
+function DownloadModal({
+  show,
+  levels,
+  onClose,
+}: {
+  show:    ReplayShow;
+  levels:  HlsLevel[];
+  onClose: () => void;
+}) {
+  const [downloading,    setDownloading]    = useState(false);
+  const [progress,       setProgress]       = useState(0);
+  const [downloadError,  setDownloadError]  = useState("");
+  const [selectedLevel,  setSelectedLevel]  = useState<number>(
+    levels.length > 0 ? levels[0].index : -1
+  );
+  const abortRef = useRef<AbortController | null>(null);
+
+  // Tutup saat klik backdrop
+  const handleBackdrop = (e: React.MouseEvent<HTMLDivElement>) => {
+    if (e.target === e.currentTarget) onClose();
+  };
+
+  // Tutup dengan Escape
+  useEffect(() => {
+    const handler = (e: KeyboardEvent) => { if (e.key === "Escape") onClose(); };
+    document.addEventListener("keydown", handler);
+    return () => document.removeEventListener("keydown", handler);
+  }, [onClose]);
+
+  /**
+   * Strategi download:
+   * 1. Coba fetch blob langsung (works jika server CORS-friendly & file kecil)
+   * 2. Jika HLS multi-segment → buka di tab baru (pengguna bisa save-as dari browser)
+   * 3. Jika URL bukan .m3u8 → anchor download biasa
+   */
+  const handleDownload = async () => {
+    setDownloadError("");
+    const src = show.url;
+
+    // Untuk HLS → buka ffmpeg.wasm atau fallback ke tab baru
+    const isHls = src.includes(".m3u8") || src.includes("m3u8");
+
+    if (isHls) {
+      // Coba ambil manifest dulu untuk resolve URL segment pertama
+      // Fallback: buka halaman download eksternal atau tab baru
+      try {
+        setDownloading(true);
+        setProgress(5);
+
+        const ctrl = new AbortController();
+        abortRef.current = ctrl;
+
+        // Ambil manifest
+        const manifestRes = await fetch(src, { signal: ctrl.signal });
+        if (!manifestRes.ok) throw new Error("Gagal mengambil manifest");
+        const manifest = await manifestRes.text();
+        setProgress(10);
+
+        // Parse master/media playlist untuk dapat segment URL
+        const baseUrl = src.substring(0, src.lastIndexOf("/") + 1);
+
+        // Jika master playlist → ambil stream sesuai level yang dipilih
+        if (manifest.includes("#EXT-X-STREAM-INF")) {
+          const lines = manifest.split("\n").map(l => l.trim()).filter(Boolean);
+          let streamUrls: string[] = [];
+          for (let i = 0; i < lines.length; i++) {
+            if (lines[i].startsWith("#EXT-X-STREAM-INF")) {
+              const nextLine = lines[i + 1];
+              if (nextLine && !nextLine.startsWith("#")) {
+                streamUrls.push(nextLine.startsWith("http") ? nextLine : baseUrl + nextLine);
+              }
+            }
+          }
+          // Pilih stream sesuai selectedLevel (index dari levels array yang sudah sorted)
+          const targetIdx = Math.min(selectedLevel < 0 ? 0 : selectedLevel, streamUrls.length - 1);
+          const chosenStreamUrl = streamUrls[targetIdx] || streamUrls[0];
+
+          if (chosenStreamUrl) {
+            // Buka stream M3U8 di tab baru — pengguna bisa pakai browser/IDM untuk download
+            window.open(chosenStreamUrl, "_blank");
+            setDownloading(false);
+            setProgress(0);
+            onClose();
+            return;
+          }
+        }
+
+        // Media playlist langsung → coba download via blob
+        const segLines = manifest.split("\n").map(l => l.trim()).filter(l => l && !l.startsWith("#"));
+        const segUrls  = segLines.map(l => l.startsWith("http") ? l : baseUrl + l);
+
+        if (segUrls.length === 0) {
+          throw new Error("Tidak ada segment ditemukan di playlist");
+        }
+
+        // Download semua segment lalu gabungkan
+        const chunks: Uint8Array[] = [];
+        const total = segUrls.length;
+
+        for (let i = 0; i < total; i++) {
+          if (ctrl.signal.aborted) return;
+          const segRes = await fetch(segUrls[i], { signal: ctrl.signal });
+          if (!segRes.ok) throw new Error(`Segment ${i + 1} gagal`);
+          const buf = await segRes.arrayBuffer();
+          chunks.push(new Uint8Array(buf));
+          setProgress(10 + Math.round(((i + 1) / total) * 88));
+        }
+
+        setProgress(99);
+
+        // Gabungkan semua chunk
+        const totalLen = chunks.reduce((acc, c) => acc + c.length, 0);
+        const merged   = new Uint8Array(totalLen);
+        let offset = 0;
+        for (const chunk of chunks) {
+          merged.set(chunk, offset);
+          offset += chunk.length;
+        }
+
+        // Buat blob dan trigger download
+        const blob    = new Blob([merged], { type: "video/mp2t" });
+        const blobUrl = URL.createObjectURL(blob);
+        const a       = document.createElement("a");
+        a.href        = blobUrl;
+        a.download    = `${show.title.replace(/[^a-zA-Z0-9]/g, "_")}_${show.id}.ts`;
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        setTimeout(() => URL.revokeObjectURL(blobUrl), 5000);
+
+        setProgress(100);
+        setTimeout(() => {
+          setDownloading(false);
+          setProgress(0);
+          onClose();
+        }, 1000);
+
+      } catch (err: any) {
+        if (err.name === "AbortError") return;
+        // Fallback: buka URL langsung di tab baru
+        setDownloadError("Download otomatis gagal. Membuka stream di tab baru...");
+        setTimeout(() => {
+          window.open(src, "_blank");
+          setDownloading(false);
+          setProgress(0);
+          setDownloadError("");
+          onClose();
+        }, 1500);
+      }
+      return;
+    }
+
+    // Non-HLS: download biasa via anchor
+    try {
+      setDownloading(true);
+      setProgress(30);
+      const res  = await fetch(src);
+      const blob = await res.blob();
+      setProgress(90);
+      const blobUrl = URL.createObjectURL(blob);
+      const a       = document.createElement("a");
+      const ext     = src.split(".").pop()?.split("?")[0] || "mp4";
+      a.href        = blobUrl;
+      a.download    = `${show.title.replace(/[^a-zA-Z0-9]/g, "_")}_${show.id}.${ext}`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      setTimeout(() => URL.revokeObjectURL(blobUrl), 5000);
+      setProgress(100);
+      setTimeout(() => { setDownloading(false); setProgress(0); onClose(); }, 800);
+    } catch {
+      setDownloadError("Gagal mengunduh. Coba buka di tab baru.");
+      setDownloading(false);
+    }
+  };
+
+  const cancelDownload = () => {
+    abortRef.current?.abort();
+    setDownloading(false);
+    setProgress(0);
+    setDownloadError("");
+  };
+
+  const isHls = show.url.includes(".m3u8") || show.url.includes("m3u8");
+
+  return (
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm px-4"
+      onClick={handleBackdrop}
+    >
+      <div className="w-full max-w-[440px] rounded-2xl border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-900 shadow-2xl overflow-hidden">
+
+        {/* Header */}
+        <div className="flex items-center justify-between px-6 py-4 border-b border-gray-100 dark:border-gray-800">
+          <div className="flex items-center gap-2.5">
+            <div className="w-8 h-8 rounded-xl bg-red-50 dark:bg-red-500/10 flex items-center justify-center">
+              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="#DC1F2E" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
+                <polyline points="7 10 12 15 17 10" />
+                <line x1="12" y1="15" x2="12" y2="3" />
+              </svg>
+            </div>
+            <span className="text-sm font-bold text-gray-900 dark:text-white">Unduh Video</span>
+          </div>
+          <button
+            onClick={onClose}
+            disabled={downloading}
+            className="w-7 h-7 rounded-lg border-0 bg-gray-100 dark:bg-gray-800 text-gray-500 dark:text-gray-400 flex items-center justify-center cursor-pointer hover:bg-gray-200 dark:hover:bg-gray-700 transition-colors disabled:opacity-40"
+          >
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+              <line x1="18" y1="6" x2="6" y2="18" /><line x1="6" y1="6" x2="18" y2="18" />
+            </svg>
+          </button>
+        </div>
+
+        {/* Body */}
+        <div className="px-6 py-5 flex flex-col gap-4">
+
+          {/* Show info */}
+          <div className="flex items-center gap-3 p-3 rounded-xl bg-gray-50 dark:bg-gray-800/50 border border-gray-100 dark:border-gray-800">
+            <img
+              src={show.image_url || DEFAULT_IMG}
+              alt={show.title}
+              className="w-12 h-12 rounded-xl object-cover flex-shrink-0 border border-gray-200 dark:border-gray-700"
+              onError={(e) => { (e.target as HTMLImageElement).src = DEFAULT_IMG; }}
+            />
+            <div className="min-w-0">
+              <p className="text-sm font-bold text-gray-900 dark:text-white truncate">{show.title}</p>
+              <p className="text-[11px] text-gray-400 font-mono mt-0.5">{show.id}</p>
+            </div>
+          </div>
+
+          {/* Quality selector (hanya tampil jika HLS dan ada multiple levels) */}
+          {isHls && levels.length > 1 && !downloading && (
+            <div>
+              <p className="text-[11px] font-bold text-gray-500 dark:text-gray-400 uppercase tracking-wider mb-2">
+                Kualitas Download
+              </p>
+              <div className="flex flex-col gap-1.5">
+                {levels.map((lvl) => (
+                  <button
+                    key={lvl.index}
+                    onClick={() => setSelectedLevel(lvl.index)}
+                    className={`w-full flex items-center justify-between px-4 py-2.5 rounded-xl border text-sm cursor-pointer transition-all ${
+                      selectedLevel === lvl.index
+                        ? "border-red-400 dark:border-red-500 bg-red-50 dark:bg-red-500/10 text-red-600 dark:text-red-400 font-bold"
+                        : "border-gray-200 dark:border-gray-700 bg-transparent text-gray-600 dark:text-gray-400 hover:bg-gray-50 dark:hover:bg-gray-800/50"
+                    }`}
+                  >
+                    <span className="flex items-center gap-2">
+                      {lvl.height >= 1080 && (
+                        <span className="text-[9px] font-black px-1.5 py-0.5 rounded bg-amber-100 dark:bg-amber-500/20 text-amber-600 dark:text-amber-400 border border-amber-200 dark:border-amber-500/30">HD</span>
+                      )}
+                      {lvl.name}
+                    </span>
+                    <span className="text-[11px] opacity-50 font-mono">
+                      {lvl.bitrate >= 1_000_000
+                        ? (lvl.bitrate / 1_000_000).toFixed(1) + " Mbps"
+                        : Math.round(lvl.bitrate / 1000) + " Kbps"}
+                    </span>
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* Info HLS */}
+          {isHls && !downloading && (
+            <div className="flex items-start gap-2.5 px-4 py-3 rounded-xl bg-amber-50 dark:bg-amber-500/10 border border-amber-200 dark:border-amber-500/20">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#d97706" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="flex-shrink-0 mt-0.5">
+                <circle cx="12" cy="12" r="10" /><line x1="12" y1="8" x2="12" y2="12" /><line x1="12" y1="16" x2="12.01" y2="16" />
+              </svg>
+              <p className="text-[11px] text-amber-700 dark:text-amber-400 leading-relaxed">
+                Video ini berformat HLS. Download akan menggabungkan semua segmen video. Proses mungkin memakan waktu beberapa menit tergantung durasi dan koneksi internet.
+              </p>
+            </div>
+          )}
+
+          {/* Progress bar */}
+          {downloading && (
+            <div className="flex flex-col gap-3">
+              <div className="flex items-center justify-between">
+                <span className="text-sm font-semibold text-gray-700 dark:text-gray-300">
+                  {progress < 10 ? "Memuat playlist..." :
+                   progress < 99 ? `Mengunduh segmen... ${progress}%` :
+                   progress === 99 ? "Menggabungkan video..." :
+                   "Selesai! ✓"}
+                </span>
+                <span className="text-sm font-bold text-red-500">{progress}%</span>
+              </div>
+
+              <div className="w-full h-2 bg-gray-100 dark:bg-gray-800 rounded-full overflow-hidden">
+                <div
+                  className="h-full bg-gradient-to-r from-red-500 to-red-400 rounded-full transition-all duration-300"
+                  style={{ width: `${progress}%` }}
+                />
+              </div>
+
+              {progress < 100 && (
+                <button
+                  onClick={cancelDownload}
+                  className="w-full py-2.5 rounded-xl border border-gray-200 dark:border-gray-700 bg-transparent text-gray-500 dark:text-gray-400 text-xs font-semibold cursor-pointer hover:bg-gray-50 dark:hover:bg-gray-800/50 transition-colors"
+                >
+                  Batalkan
+                </button>
+              )}
+            </div>
+          )}
+
+          {/* Error */}
+          {downloadError && (
+            <div className="flex items-center gap-2.5 px-4 py-3 rounded-xl bg-red-50 dark:bg-red-500/10 border border-red-200 dark:border-red-500/20 text-red-600 dark:text-red-400 text-xs font-medium">
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="flex-shrink-0">
+                <circle cx="12" cy="12" r="10" /><line x1="12" y1="8" x2="12" y2="12" /><line x1="12" y1="16" x2="12.01" y2="16" />
+              </svg>
+              {downloadError}
+            </div>
+          )}
+
+          {/* Action buttons */}
+          {!downloading && (
+            <div className="flex flex-col gap-2 pt-1">
+              <button
+                onClick={handleDownload}
+                className="flex items-center justify-center gap-2 w-full py-3.5 rounded-xl border-0 bg-red-500 hover:bg-red-600 text-white text-sm font-bold cursor-pointer shadow-lg shadow-red-500/25 hover:shadow-red-500/40 hover:-translate-y-0.5 transition-all duration-200"
+              >
+                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                  <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
+                  <polyline points="7 10 12 15 17 10" />
+                  <line x1="12" y1="15" x2="12" y2="3" />
+                </svg>
+                Unduh Video
+              </button>
+
+              {/* Alternatif: buka URL langsung */}
+              <button
+                onClick={() => window.open(show.url, "_blank")}
+                className="flex items-center justify-center gap-2 w-full py-3 rounded-xl border border-gray-200 dark:border-gray-700 bg-transparent text-gray-600 dark:text-gray-400 text-sm font-semibold cursor-pointer hover:bg-gray-50 dark:hover:bg-gray-800/50 transition-colors"
+              >
+                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                  <path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6" />
+                  <polyline points="15 3 21 3 21 9" />
+                  <line x1="10" y1="14" x2="21" y2="3" />
+                </svg>
+                Buka di Tab Baru
+              </button>
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 // ── Plyr + hls.js Player ──────────────────────────────────────────────────────
 function ReplayPlyrPlayer({
   src,
@@ -75,7 +430,6 @@ function ReplayPlyrPlayer({
     setCurrentLevel(-1);
     setIsReady(false);
 
-    // Init Plyr first (without quality menu — we build our own)
     const player = new Plyr(video, {
       controls: [
         "play-large",
@@ -113,7 +467,7 @@ function ReplayPlyrPlayer({
       maxMaxBufferLength: 120,
       maxBufferSize:      80 * 1000 * 1000,
       backBufferLength:   60,
-      startLevel:         -1,          // start with auto
+      startLevel:         -1,
       abrEwmaDefaultEstimate: 500_000,
       abrBandWidthFactor:     0.8,
       abrBandWidthUpFactor:   0.7,
@@ -138,7 +492,6 @@ function ReplayPlyrPlayer({
         bitrate: lvl.bitrate || 0,
         name:    lvl.name    || (lvl.height ? `${lvl.height}p` : `Level ${idx}`),
       }));
-      // Sort highest quality first
       parsed.sort((a, b) => b.height - a.height);
       setLevels(parsed);
       setIsReady(true);
@@ -174,7 +527,7 @@ function ReplayPlyrPlayer({
 
   const switchLevel = (index: number) => {
     if (!hlsRef.current) return;
-    hlsRef.current.currentLevel = index; // -1 = auto
+    hlsRef.current.currentLevel = index;
     setCurrentLevel(index);
     setShowQuality(false);
   };
@@ -190,9 +543,10 @@ function ReplayPlyrPlayer({
     return Math.round(bps / 1000) + " Kbps";
   };
 
+  // Expose levels ke parent via prop (tidak perlu, parent punya sendiri)
+  // Kita export levels via ref agar DownloadModal bisa akses
   return (
     <div className="relative w-full rounded-2xl overflow-hidden bg-black shadow-2xl group">
-      {/* Plyr custom theme overrides */}
       <style>{`
         .plyr--video .plyr__controls {
           background: linear-gradient(transparent, rgba(0,0,0,0.75));
@@ -206,64 +560,31 @@ function ReplayPlyrPlayer({
           background: #DC1F2E !important;
           transform: scale(1.08);
         }
-        .plyr--full-ui input[type=range] {
-          color: #DC1F2E;
-        }
-        .plyr__progress__buffer {
-          color: rgba(255,255,255,0.25);
-        }
+        .plyr--full-ui input[type=range] { color: #DC1F2E; }
+        .plyr__progress__buffer { color: rgba(255,255,255,0.25); }
         .plyr__control.plyr__tab-focus,
         .plyr__control:hover,
-        .plyr__control[aria-expanded=true] {
-          background: rgba(220,31,46,0.85) !important;
-        }
+        .plyr__control[aria-expanded=true] { background: rgba(220,31,46,0.85) !important; }
         .plyr--video .plyr__control.plyr__tab-focus,
         .plyr--video .plyr__control:hover,
-        .plyr--video .plyr__control[aria-expanded=true] {
-          background: rgba(220,31,46,0.85) !important;
+        .plyr--video .plyr__control[aria-expanded=true] { background: rgba(220,31,46,0.85) !important; }
+        .plyr__tooltip { background: rgba(0,0,0,0.85); color: #fff; border-radius: 6px; font-size: 11px; font-weight: 600; }
+        .plyr__tooltip::before { border-top-color: rgba(0,0,0,0.85); }
+        .plyr, .plyr--video, .plyr__video-wrapper, .plyr video {
+          width: 100% !important; height: 100% !important;
+          max-height: none !important; position: absolute !important;
+          top: 0 !important; left: 0 !important;
         }
-        .plyr__tooltip {
-          background: rgba(0,0,0,0.85);
-          color: #fff;
-          border-radius: 6px;
-          font-size: 11px;
-          font-weight: 600;
-        }
-        .plyr__tooltip::before {
-          border-top-color: rgba(0,0,0,0.85);
-        }
-        .plyr,
-        .plyr--video,
-        .plyr__video-wrapper,
-        .plyr video {
-          width: 100% !important;
-          height: 100% !important;
-          max-height: none !important;
-          position: absolute !important;
-          top: 0 !important;
-          left: 0 !important;
-        }
-        .plyr__video-wrapper {
-          padding-bottom: 0 !important;
-        }
+        .plyr__video-wrapper { padding-bottom: 0 !important; }
       `}</style>
 
       <div className="relative w-full" style={{ paddingBottom: "56.25%" }}>
-        <video
-          ref={videoRef}
-          className="plyr-video-el"
-          crossOrigin="anonymous"
-          playsInline
-          poster={poster}
-        />
+        <video ref={videoRef} className="plyr-video-el" crossOrigin="anonymous" playsInline poster={poster} />
       </div>
 
-      {/* Quality switcher — sits above Plyr controls */}
+      {/* Quality switcher */}
       {isReady && levels.length > 1 && (
-        <div
-          ref={qualityPanelRef}
-          className="absolute bottom-14 right-3 z-30"
-        >
+        <div ref={qualityPanelRef} className="absolute bottom-14 right-3 z-30">
           <button
             onClick={() => setShowQuality((p) => !p)}
             className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-black/80 backdrop-blur-sm text-white text-[11px] font-bold cursor-pointer border border-white/10 hover:bg-black/90 transition-colors select-none"
@@ -278,8 +599,6 @@ function ReplayPlyrPlayer({
           {showQuality && (
             <div className="absolute bottom-[calc(100%+8px)] right-0 bg-gray-900/97 backdrop-blur-xl border border-white/10 rounded-2xl p-2 min-w-[200px] shadow-2xl">
               <p className="text-[9px] font-bold text-white/30 px-2 pb-1.5 uppercase tracking-widest">Kualitas</p>
-
-              {/* Auto option */}
               <button
                 onClick={() => switchLevel(-1)}
                 className={`w-full px-3 py-2 rounded-xl border-0 text-[12px] cursor-pointer text-left flex items-center justify-between mb-0.5 transition-colors ${currentLevel === -1 ? "bg-red-500/20 text-red-400 font-bold" : "bg-transparent text-white/70 hover:bg-white/5"}`}
@@ -287,8 +606,6 @@ function ReplayPlyrPlayer({
                 <span>⚡ Auto</span>
                 <span className="text-[10px] opacity-50">Adaptif</span>
               </button>
-
-              {/* Manual levels */}
               {levels.map((lvl) => {
                 const isActive = currentLevel === lvl.index;
                 return (
@@ -324,11 +641,6 @@ function ReplayPlyrPlayer({
 }
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
-
-/**
- * Cek membership dari localStorage/sessionStorage.
- * Sama persis seperti getSession() di LiveStream.tsx
- */
 const getSession = () => {
   try {
     const d = JSON.parse(
@@ -377,7 +689,6 @@ function VerificationGate({
     setLoading(true);
     setError("");
     try {
-      // ── 1. Cek membership monthly terlebih dahulu ─────────────────────────
       const hasMembership = await checkMonthlyMembership();
       if (hasMembership) {
         localStorage.setItem(
@@ -388,7 +699,6 @@ function VerificationGate({
         return;
       }
 
-      // ── 2. Cek apakah kode ada untuk email ini (tanpa cek expiry/usage) ───
       const res  = await fetch(
         `https://v2.jkt48connect.com/api/codes/list?email=${encodeURIComponent(email.trim())}&apikey=${API_KEY}`
       );
@@ -396,7 +706,6 @@ function VerificationGate({
 
       if (!data.status) { setError("Email tidak ditemukan"); setLoading(false); return; }
 
-      // Support struktur baru (data.codes) maupun lama (data.wotatokens)
       const codes: any[] = data.data?.codes || data.data?.wotatokens || [];
       const found = codes.find(
         (t) => t.code?.toLowerCase() === code.trim().toLowerCase()
@@ -404,7 +713,6 @@ function VerificationGate({
 
       if (!found) { setError("Kode tidak ditemukan untuk email ini"); setLoading(false); return; }
 
-      // Kode ditemukan — simpan sesi & beri akses
       localStorage.setItem(
         "replay_verification",
         JSON.stringify({ email: email.trim(), code: code.trim(), ts: Date.now() })
@@ -420,54 +728,31 @@ function VerificationGate({
   return (
     <div className="min-h-[60vh] flex items-center justify-center px-4 py-10">
       <div className="w-full max-w-[420px]">
-        {/* Icon */}
         <div className="text-center mb-8">
           <div className="inline-flex items-center justify-center w-16 h-16 rounded-2xl bg-red-50 dark:bg-red-500/10 border border-red-200 dark:border-red-500/20 mb-4">
-            <svg width="28" height="28" viewBox="0 0 24 24" fill="none"
-              stroke="#DC1F2E" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round">
+            <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="#DC1F2E" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round">
               <rect x="3" y="11" width="18" height="11" rx="2" ry="2" />
               <path d="M7 11V7a5 5 0 0 1 10 0v4" />
             </svg>
           </div>
-          <h3 className="text-2xl font-bold text-gray-800 dark:text-white/90 mb-1.5">
-            Akses Replay
-          </h3>
+          <h3 className="text-2xl font-bold text-gray-800 dark:text-white/90 mb-1.5">Akses Replay</h3>
           <p className="text-sm text-gray-500 dark:text-gray-400">
             Masukkan email dan kode untuk menonton replay show theater
           </p>
         </div>
 
-        {/* Form */}
         <div className="bg-gray-50 dark:bg-gray-800/50 rounded-2xl border border-gray-200 dark:border-gray-700 p-6 mb-3">
           <form onSubmit={verify} className="flex flex-col gap-4">
             <div>
-              <label className="block text-xs font-semibold text-gray-600 dark:text-gray-400 mb-1.5 uppercase tracking-wide">
-                Email
-              </label>
-              <input
-                type="email"
-                value={email}
-                onChange={(e) => { setEmail(e.target.value); setError(""); }}
-                placeholder="email@example.com"
-                required
-                className="w-full px-4 py-3 rounded-xl border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-900/50 text-gray-900 dark:text-white text-sm outline-none focus:ring-2 focus:ring-red-500/30 focus:border-red-400 dark:focus:border-red-500 placeholder:text-gray-400 transition-all"
-              />
+              <label className="block text-xs font-semibold text-gray-600 dark:text-gray-400 mb-1.5 uppercase tracking-wide">Email</label>
+              <input type="email" value={email} onChange={(e) => { setEmail(e.target.value); setError(""); }} placeholder="email@example.com" required
+                className="w-full px-4 py-3 rounded-xl border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-900/50 text-gray-900 dark:text-white text-sm outline-none focus:ring-2 focus:ring-red-500/30 focus:border-red-400 dark:focus:border-red-500 placeholder:text-gray-400 transition-all" />
             </div>
-
             <div>
-              <label className="block text-xs font-semibold text-gray-600 dark:text-gray-400 mb-1.5 uppercase tracking-wide">
-                Kode Akses
-              </label>
-              <input
-                type="text"
-                value={code}
-                onChange={(e) => { setCode(e.target.value); setError(""); }}
-                placeholder="Masukkan kode akses"
-                required
-                className="w-full px-4 py-3 rounded-xl border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-900/50 text-gray-900 dark:text-white text-sm outline-none focus:ring-2 focus:ring-red-500/30 focus:border-red-400 dark:focus:border-red-500 placeholder:text-gray-400 tracking-widest transition-all"
-              />
+              <label className="block text-xs font-semibold text-gray-600 dark:text-gray-400 mb-1.5 uppercase tracking-wide">Kode Akses</label>
+              <input type="text" value={code} onChange={(e) => { setCode(e.target.value); setError(""); }} placeholder="Masukkan kode akses" required
+                className="w-full px-4 py-3 rounded-xl border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-900/50 text-gray-900 dark:text-white text-sm outline-none focus:ring-2 focus:ring-red-500/30 focus:border-red-400 dark:focus:border-red-500 placeholder:text-gray-400 tracking-widest transition-all" />
             </div>
-
             {error && (
               <div className="flex items-center gap-2.5 px-4 py-3 rounded-xl bg-red-50 dark:bg-red-500/10 border border-red-200 dark:border-red-500/20 text-red-600 dark:text-red-400 text-xs font-medium">
                 <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="flex-shrink-0">
@@ -476,33 +761,19 @@ function VerificationGate({
                 {error}
               </div>
             )}
-
-            <button
-              type="submit"
-              disabled={loading}
-              className={`flex items-center justify-center gap-2 px-4 py-3.5 rounded-xl border-0 text-sm font-bold text-white transition-all duration-200 mt-1 ${loading ? "bg-red-400 cursor-not-allowed" : "bg-red-500 hover:bg-red-600 cursor-pointer shadow-lg shadow-red-500/25 hover:shadow-red-500/40 hover:-translate-y-0.5"}`}
-            >
+            <button type="submit" disabled={loading}
+              className={`flex items-center justify-center gap-2 px-4 py-3.5 rounded-xl border-0 text-sm font-bold text-white transition-all duration-200 mt-1 ${loading ? "bg-red-400 cursor-not-allowed" : "bg-red-500 hover:bg-red-600 cursor-pointer shadow-lg shadow-red-500/25 hover:shadow-red-500/40 hover:-translate-y-0.5"}`}>
               {loading ? (
-                <>
-                  <div className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" />
-                  Memverifikasi...
-                </>
+                <><div className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" />Memverifikasi...</>
               ) : (
-                <>
-                  <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
-                    <polyline points="20 6 9 17 4 12" />
-                  </svg>
-                  Akses Replay
-                </>
+                <><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><polyline points="20 6 9 17 4 12" /></svg>Akses Replay</>
               )}
             </button>
           </form>
         </div>
 
-        <button
-          onClick={onBack}
-          className="w-full py-3 rounded-xl border border-gray-200 dark:border-gray-700 bg-transparent text-gray-500 dark:text-gray-400 text-sm font-medium cursor-pointer hover:bg-gray-50 dark:hover:bg-gray-800/50 transition-colors flex items-center justify-center gap-1.5"
-        >
+        <button onClick={onBack}
+          className="w-full py-3 rounded-xl border border-gray-200 dark:border-gray-700 bg-transparent text-gray-500 dark:text-gray-400 text-sm font-medium cursor-pointer hover:bg-gray-50 dark:hover:bg-gray-800/50 transition-colors flex items-center justify-center gap-1.5">
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
             <polyline points="15 18 9 12 15 6" />
           </svg>
@@ -518,36 +789,32 @@ const ReplayPlayerPage: React.FC = () => {
   const { id }   = useParams<{ id: string }>();
   const navigate = useNavigate();
 
-  const [show,       setShow]       = useState<ReplayShow | null>(null);
-  const [loading,    setLoading]    = useState(true);
-  const [error,      setError]      = useState("");
-  const [verified,   setVerified]   = useState(false);
+  const [show,           setShow]           = useState<ReplayShow | null>(null);
+  const [loading,        setLoading]        = useState(true);
+  const [error,          setError]          = useState("");
+  const [verified,       setVerified]       = useState(false);
   const [checkingAccess, setCheckingAccess] = useState(true);
+  const [showDownload,   setShowDownload]   = useState(false);
+  // levels dari player — diisi saat HLS manifest parsed
+  const [playerLevels,   setPlayerLevels]   = useState<HlsLevel[]>([]);
 
-  // ── Check membership bypass OR existing localStorage verification ──────────
+  // ── Intercept levels dari player child ───────────────────────────────────
+  // Karena ReplayPlyrPlayer tidak expose levels via prop callback,
+  // kita buat wrapper yang mendengarkan HLS events di level page.
+  const hlsPageRef = useRef<Hls | null>(null);
+
+  // Check membership bypass OR existing localStorage
   useEffect(() => {
     const init = async () => {
-      // 1. Monthly membership → bypass gate completely
       const hasMembership = await checkMonthlyMembership();
-      if (hasMembership) {
-        setVerified(true);
-        setCheckingAccess(false);
-        return;
-      }
-
-      // 2. Existing localStorage session
+      if (hasMembership) { setVerified(true); setCheckingAccess(false); return; }
       const stored = localStorage.getItem("replay_verification");
       if (stored) {
         try {
           const parsed = JSON.parse(stored);
-          if (parsed?.code && parsed?.email) {
-            setVerified(true);
-            setCheckingAccess(false);
-            return;
-          }
+          if (parsed?.code && parsed?.email) { setVerified(true); setCheckingAccess(false); return; }
         } catch {}
       }
-
       setCheckingAccess(false);
     };
     init();
@@ -573,6 +840,43 @@ const ReplayPlayerPage: React.FC = () => {
 
   useEffect(() => { fetchShow(); }, [fetchShow]);
 
+  // Fetch HLS levels secara terpisah agar DownloadModal bisa pilih kualitas
+  useEffect(() => {
+    if (!show?.url || !verified) return;
+    setPlayerLevels([]);
+
+    if (!Hls.isSupported()) return;
+
+    const hls = new Hls({ enableWorker: false, startLevel: -1 });
+    hlsPageRef.current = hls;
+
+    // Attach ke video dummy (tidak perlu render) hanya untuk parse manifest
+    const dummyVideo = document.createElement("video");
+    hls.loadSource(show.url);
+    hls.attachMedia(dummyVideo);
+
+    hls.on(Hls.Events.MANIFEST_PARSED, (_, data) => {
+      const parsed: HlsLevel[] = data.levels.map((lvl, idx) => ({
+        index:   idx,
+        height:  lvl.height  || 0,
+        width:   lvl.width   || 0,
+        bitrate: lvl.bitrate || 0,
+        name:    lvl.name    || (lvl.height ? `${lvl.height}p` : `Level ${idx}`),
+      }));
+      parsed.sort((a, b) => b.height - a.height);
+      setPlayerLevels(parsed);
+      // Destroy setelah dapat levels — tidak butuh stream
+      hls.destroy();
+      hlsPageRef.current = null;
+    });
+
+    hls.on(Hls.Events.ERROR, (_, data) => {
+      if (data.fatal) { hls.destroy(); hlsPageRef.current = null; }
+    });
+
+    return () => { hls.destroy(); hlsPageRef.current = null; };
+  }, [show?.url, verified]);
+
   // ── Checking access spinner ──
   if (checkingAccess) {
     return (
@@ -585,7 +889,6 @@ const ReplayPlayerPage: React.FC = () => {
     );
   }
 
-  // ── Loading ──
   if (loading) {
     return (
       <div className="rounded-2xl border border-gray-200 bg-white dark:border-gray-800 dark:bg-white/[0.03] min-h-[60vh] flex items-center justify-center">
@@ -597,7 +900,6 @@ const ReplayPlayerPage: React.FC = () => {
     );
   }
 
-  // ── Error ──
   if (error || !show) {
     return (
       <div className="rounded-2xl border border-gray-200 bg-white dark:border-gray-800 dark:bg-white/[0.03] min-h-[60vh] flex items-center justify-center px-6">
@@ -609,10 +911,8 @@ const ReplayPlayerPage: React.FC = () => {
           </div>
           <h3 className="text-lg font-bold text-gray-800 dark:text-white/90 mb-2">Show Tidak Ditemukan</h3>
           <p className="text-sm text-gray-500 dark:text-gray-400 mb-6">{error || "Show dengan ID ini tidak tersedia."}</p>
-          <button
-            onClick={() => navigate("/replay")}
-            className="px-5 py-2.5 rounded-xl border-0 bg-red-500 text-white text-sm font-bold cursor-pointer hover:bg-red-600 shadow-lg shadow-red-500/25 transition-all hover:-translate-y-0.5"
-          >
+          <button onClick={() => navigate("/replay")}
+            className="px-5 py-2.5 rounded-xl border-0 bg-red-500 text-white text-sm font-bold cursor-pointer hover:bg-red-600 shadow-lg shadow-red-500/25 transition-all hover:-translate-y-0.5">
             Kembali ke Replay
           </button>
         </div>
@@ -620,20 +920,13 @@ const ReplayPlayerPage: React.FC = () => {
     );
   }
 
-  // ── Verification gate ──
   if (!verified) {
     return (
       <div className="rounded-2xl border border-gray-200 bg-white dark:border-gray-800 dark:bg-white/[0.03] overflow-hidden">
         <PageMeta title={`Replay: ${show.title} | JKT48Connect`} description={`Tonton replay ${show.title}`} />
-
-        {/* Show preview header */}
         <div className="relative h-32 overflow-hidden">
-          <img
-            src={show.image_url || DEFAULT_IMG}
-            alt={show.title}
-            className="w-full h-full object-cover"
-            onError={(e) => { (e.target as HTMLImageElement).src = DEFAULT_IMG; }}
-          />
+          <img src={show.image_url || DEFAULT_IMG} alt={show.title} className="w-full h-full object-cover"
+            onError={(e) => { (e.target as HTMLImageElement).src = DEFAULT_IMG; }} />
           <div className="absolute inset-0 bg-gradient-to-b from-black/30 to-black/80" />
           <div className="absolute bottom-4 left-5 right-5">
             <p className="text-white font-bold text-base leading-tight line-clamp-1">{show.title}</p>
@@ -642,28 +935,30 @@ const ReplayPlayerPage: React.FC = () => {
             )}
           </div>
         </div>
-
-        <VerificationGate
-          onVerified={() => setVerified(true)}
-          onBack={() => navigate("/replay")}
-        />
+        <VerificationGate onVerified={() => setVerified(true)} onBack={() => navigate("/replay")} />
       </div>
     );
   }
 
-  // ── Player ──
   return (
     <>
       <PageMeta title={`Replay: ${show.title} | JKT48Connect`} description={`Tonton replay ${show.title}`} />
+
+      {/* Download Modal */}
+      {showDownload && (
+        <DownloadModal
+          show={show}
+          levels={playerLevels}
+          onClose={() => setShowDownload(false)}
+        />
+      )}
 
       <div className="rounded-2xl border border-gray-200 bg-white dark:border-gray-800 dark:bg-white/[0.03] overflow-hidden">
 
         {/* ── Header ── */}
         <div className="px-5 py-4 border-b border-gray-200 dark:border-gray-800 flex items-center gap-3 flex-wrap">
-          <button
-            onClick={() => navigate("/replay")}
-            className="flex items-center gap-1.5 px-3.5 py-2 rounded-xl border border-gray-200 dark:border-gray-700 bg-transparent text-gray-600 dark:text-gray-400 text-xs font-semibold cursor-pointer hover:bg-gray-50 dark:hover:bg-gray-800/50 transition-colors"
-          >
+          <button onClick={() => navigate("/replay")}
+            className="flex items-center gap-1.5 px-3.5 py-2 rounded-xl border border-gray-200 dark:border-gray-700 bg-transparent text-gray-600 dark:text-gray-400 text-xs font-semibold cursor-pointer hover:bg-gray-50 dark:hover:bg-gray-800/50 transition-colors">
             <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
               <polyline points="15 18 9 12 15 6" />
             </svg>
@@ -681,12 +976,23 @@ const ReplayPlayerPage: React.FC = () => {
             {show.title}
           </h1>
 
+          {/* ── Tombol Download ── */}
           <button
-            onClick={() => {
-              localStorage.removeItem("replay_verification");
-              setVerified(false);
-            }}
-            className="ml-auto px-3 py-1.5 rounded-xl border border-gray-200 dark:border-gray-700 bg-transparent text-gray-500 dark:text-gray-400 text-[11px] font-semibold cursor-pointer hover:bg-gray-50 dark:hover:bg-gray-800/50 transition-colors"
+            onClick={() => setShowDownload(true)}
+            className="flex items-center gap-1.5 px-3.5 py-2 rounded-xl border border-gray-200 dark:border-gray-700 bg-transparent text-gray-600 dark:text-gray-400 text-xs font-semibold cursor-pointer hover:bg-gray-50 dark:hover:bg-gray-800/50 transition-colors"
+            title="Unduh Video"
+          >
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
+              <polyline points="7 10 12 15 17 10" />
+              <line x1="12" y1="15" x2="12" y2="3" />
+            </svg>
+            Unduh
+          </button>
+
+          <button
+            onClick={() => { localStorage.removeItem("replay_verification"); setVerified(false); }}
+            className="px-3 py-1.5 rounded-xl border border-gray-200 dark:border-gray-700 bg-transparent text-gray-500 dark:text-gray-400 text-[11px] font-semibold cursor-pointer hover:bg-gray-50 dark:hover:bg-gray-800/50 transition-colors"
           >
             Logout
           </button>
@@ -706,20 +1012,13 @@ const ReplayPlayerPage: React.FC = () => {
 
               {/* Show info */}
               <div className="rounded-2xl border border-gray-200 dark:border-gray-800 bg-gray-50 dark:bg-gray-800/30 p-5">
-                <p className="text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-3">
-                  Detail Show
-                </p>
+                <p className="text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-3">Detail Show</p>
                 <div className="flex gap-4 items-start">
-                  <img
-                    src={show.image_url || DEFAULT_IMG}
-                    alt={show.title}
+                  <img src={show.image_url || DEFAULT_IMG} alt={show.title}
                     className="w-16 h-16 rounded-xl object-cover flex-shrink-0 border border-gray-200 dark:border-gray-700"
-                    onError={(e) => { (e.target as HTMLImageElement).src = DEFAULT_IMG; }}
-                  />
+                    onError={(e) => { (e.target as HTMLImageElement).src = DEFAULT_IMG; }} />
                   <div className="flex-1 min-w-0">
-                    <h2 className="text-base font-bold text-gray-800 dark:text-white/90 mb-2 leading-snug">
-                      {show.title}
-                    </h2>
+                    <h2 className="text-base font-bold text-gray-800 dark:text-white/90 mb-2 leading-snug">{show.title}</h2>
                     <div className="flex items-center gap-2 flex-wrap">
                       <span className="text-[10px] font-mono font-bold px-2 py-1 rounded-lg bg-gray-200 dark:bg-gray-700 text-gray-500 dark:text-gray-400">
                         ID: {show.id}
@@ -729,6 +1028,18 @@ const ReplayPlayerPage: React.FC = () => {
                           {show.lineup.length} Member
                         </span>
                       )}
+                      {/* Download badge */}
+                      <button
+                        onClick={() => setShowDownload(true)}
+                        className="flex items-center gap-1 text-[10px] font-bold px-2 py-1 rounded-lg bg-gray-100 dark:bg-gray-700 text-gray-500 dark:text-gray-400 border border-gray-200 dark:border-gray-600 cursor-pointer hover:bg-gray-200 dark:hover:bg-gray-600 transition-colors"
+                      >
+                        <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                          <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
+                          <polyline points="7 10 12 15 17 10" />
+                          <line x1="12" y1="15" x2="12" y2="3" />
+                        </svg>
+                        Unduh
+                      </button>
                     </div>
                   </div>
                 </div>
@@ -768,17 +1079,13 @@ const ReplayPlayerPage: React.FC = () => {
                           <circle cx="12" cy="7" r="4" />
                         </svg>
                       </div>
-                      <p className="text-sm font-semibold text-gray-400 dark:text-gray-500">
-                        Lineup belum tersedia
-                      </p>
+                      <p className="text-sm font-semibold text-gray-400 dark:text-gray-500">Lineup belum tersedia</p>
                     </div>
                   ) : (
                     <div className="flex flex-col gap-1.5">
                       {show.lineup.map((name, idx) => (
-                        <div
-                          key={idx}
-                          className="flex items-center gap-3 px-3 py-2.5 rounded-xl hover:bg-gray-50 dark:hover:bg-white/[0.03] transition-colors group"
-                        >
+                        <div key={idx}
+                          className="flex items-center gap-3 px-3 py-2.5 rounded-xl hover:bg-gray-50 dark:hover:bg-white/[0.03] transition-colors group">
                           <div className="w-7 h-7 rounded-full bg-gradient-to-br from-red-400 to-red-600 flex items-center justify-center flex-shrink-0 text-white font-bold text-[10px] shadow-sm shadow-red-500/20">
                             {name.charAt(0).toUpperCase()}
                           </div>
