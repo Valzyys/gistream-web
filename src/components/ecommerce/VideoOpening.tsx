@@ -42,7 +42,7 @@ export default function VideoOpening() {
         </div>
 
         {/* Video */}
-        <div className="relative mt-4 overflow-hidden rounded-xl" style={{ height: 330 }}>
+        <div className="relative mt-4 overflow-hidden rounded-xl" style={{ aspectRatio: "16/9" }}>
           <video
             src={VIDEO_URL}
             autoPlay
