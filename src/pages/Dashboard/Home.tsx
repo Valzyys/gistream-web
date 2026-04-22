@@ -11,18 +11,19 @@ export default function Home() {
   return (
     <>
       <PageMeta
-  title="GiStream | Platform Nonton Live Theater JKT48"
-  description="GiStream adalah platform unofficial untuk menonton live stream theater JKT48 dengan harga terjangkau, tersedia di Android dan Website, didukung oleh JKT48Connect."
-/>
+        title="GiStream | Platform Nonton Live Theater JKT48"
+        description="GiStream adalah platform unofficial untuk menonton live stream theater JKT48 dengan harga terjangkau, tersedia di Android dan Website, didukung oleh JKT48Connect."
+      />
       <div className="grid grid-cols-12 gap-4 md:gap-6">
         
-        <div className="col-span-12 xl:col-span-5">
+        {/* 🎬 VideoOpening FULL WIDTH di paling atas */}
+        <div className="col-span-12">
           <VideoOpening />
         </div>
-        
+
+        {/* Metrics + Chart */}
         <div className="col-span-12 space-y-6 xl:col-span-7">
           <EcommerceMetrics />
-
           <MonthlySalesChart />
         </div>
 
