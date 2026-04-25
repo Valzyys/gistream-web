@@ -45,7 +45,8 @@ const BADGE_STYLES: Record<BadgeType, { bg: string; color: string; border: strin
 const SHOW_BADGES: Record<string, BadgeType[]> = {
   "80de4db8": ["PENGUMUMAN"],
   "97967092": ["SHONICHI", "SPECIAL"],
-  "7ee3b844": ["SHONICHI", "SPECIAL"],
+  "7ee3b844": ["SHONICHI", "SPECIAL"], 
+  "a9252016": ["SHONICHI", "SPECIAL"], 
   // Contoh lain:
   // "80de4db8": ["GRADUATION"],
   // "2b9bd584": ["PENGUMUMAN", "SPECIAL"],
