@@ -552,7 +552,7 @@ const GUIDE_SECTIONS: GuideSection[] = [
 export default function GuidePage() {
   const [search, setSearch] = useState("");
   const [activeId, setActiveId] = useState(GUIDE_SECTIONS[0]?.id ?? "");
-  const sectionRefs = useRef<Record<string, HTMLDivElement | null>>({});
+ // const sectionRefs = useRef<Record<string, HTMLDivElement | null>>({});
 
   // Scroll spy
   useEffect(() => {
