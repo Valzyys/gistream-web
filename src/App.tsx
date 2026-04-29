@@ -35,7 +35,7 @@ export default function App() {
       <Router>
         <ScrollToTop />
         <Routes>
-          {/* Dashboard Layout */}
+          {/* Dashboard Laayout */}
           <Route element={<AppLayout />}>
             <Route index path="/" element={<Home />} />
             <Route path="/member" element={<MembersPage />} />
