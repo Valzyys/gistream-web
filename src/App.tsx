@@ -27,6 +27,7 @@ import AboutGiStream from "./pages/About";
 import ReplayPage from "./pages/Replay";
 import ReplayPlayerPage from "./pages/ReplayDetail";
 import RecentDetailPage from "./pages/RecentPage";
+import GuidePage from "./pages/Guide";
 
 export default function App() {
   return (
@@ -53,6 +54,7 @@ export default function App() {
             <Route path="/jadwal" element={<Calendar />} />
             <Route path="/blank" element={<Blank />} />
             <Route path="/about" element={<AboutGiStream />} />
+            <Route path="/guide" element={<GuidePage />} />
 
             {/* Forms */}
             <Route path="/form-elements" element={<FormElements />} />
