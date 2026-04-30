@@ -29,6 +29,7 @@ import ReplayPlayerPage from "./pages/ReplayDetail";
 import RecentDetailPage from "./pages/RecentPage";
 import GuidePage from "./pages/Guide";
 import PMAccessPage from "./pages/Pm";
+import PMChatPage from "./pages/PmChat";
 
 export default function App() {
   return (
@@ -57,6 +58,7 @@ export default function App() {
             <Route path="/about" element={<AboutGiStream />} />
             <Route path="/guide" element={<GuidePage />} /> 
             <Route path="/pm" element={<PMAccessPage />} />
+            <Route path="/pm/chat/:id" element={<PMChatPage />} />
 
             {/* Forms */}
             <Route path="/form-elements" element={<FormElements />} />
