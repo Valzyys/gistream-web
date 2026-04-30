@@ -57,9 +57,7 @@ export default function App() {
             <Route path="/blank" element={<Blank />} />
             <Route path="/about" element={<AboutGiStream />} />
             <Route path="/guide" element={<GuidePage />} /> 
-            <Route path="/pm" element={<PMAccessPage />} />
-            <Route path="/pm/chat/:id" element={<PMChatPage />} />
-
+            
             {/* Forms */}
             <Route path="/form-elements" element={<FormElements />} />
 
