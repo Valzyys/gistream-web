@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, useCallback } from "react";
-import { useParams, useNavigate, Link } from "react-router";
+import { useParams, useNavigate } from "react-router";
 import PageMeta from "../components/common/PageMeta";
 
 // ─── Auth helper ──────────────────────────────────────────────────────────────
