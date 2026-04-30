@@ -112,7 +112,7 @@ const SkeletonCard = () => (
 );
 
 // ─── Member Card ───────────────────────────────────────────────────────────────
-const MemberCard = ({ member, userId }: { member: AccessMember; userId: string }) => {
+const MemberCard = ({ member }: { member: AccessMember }) => {
   const navigate = useNavigate();
   const isActive = member.is_active && member.days_remaining > 0;
 
@@ -168,7 +168,7 @@ const MemberCard = ({ member, userId }: { member: AccessMember; userId: string }
           {isActive ? (
             <span className="inline-flex items-center gap-1 text-[11px] font-semibold text-emerald-600 dark:text-emerald-400">
               <IconClock />
-              Aktif {member.days_remaining}h {member.hours_remaining}j lagi
+              Aktif {member.days_remaining}h lagi
             </span>
           ) : (
             <span className="text-[11px] font-semibold text-red-500">Expired</span>
@@ -376,8 +376,8 @@ export default function PMAccessPage() {
             </div>
           ) : (
             members.map((member) => (
-              <MemberCard key={member.identifier} member={member} userId={userId!} />
-            ))
+  <MemberCard key={member.identifier} member={member} />
+))
           )}
         </div>
 
