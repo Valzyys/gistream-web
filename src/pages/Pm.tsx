@@ -177,18 +177,18 @@ const MemberCard = ({ member, userId }: { member: AccessMember; userId: string }
       </div>
 
       {/* Read button */}
-      <button
-        onClick={() => navigate(`/pm/${member.identifier}?user_id=${userId}`)}
-        disabled={!isActive}
-        className={`shrink-0 inline-flex items-center gap-2 px-4 py-2.5 rounded-xl text-[12px] font-bold transition-all duration-150 ${
-          isActive
-            ? "bg-[#DC1F2E] hover:bg-[#c41929] active:scale-95 text-white"
-            : "bg-gray-100 dark:bg-gray-800 text-gray-400 dark:text-gray-600 cursor-not-allowed"
-        }`}
-      >
-        <IconMessageSquare size={13} />
-        Baca Pesan
-      </button>
+<button
+  onClick={() => navigate(`/pm/chat/${member.identifier}`)}
+  disabled={!isActive}
+  className={`shrink-0 inline-flex items-center gap-2 px-4 py-2.5 rounded-xl text-[12px] font-bold transition-all duration-150 ${
+    isActive
+      ? "bg-[#DC1F2E] hover:bg-[#c41929] active:scale-95 text-white"
+      : "bg-gray-100 dark:bg-gray-800 text-gray-400 dark:text-gray-600 cursor-not-allowed"
+  }`}
+>
+  <IconMessageSquare size={13} />
+  Baca Pesan
+</button>
     </div>
   );
 };
