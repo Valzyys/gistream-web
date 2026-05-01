@@ -11,6 +11,7 @@ const DEFAULT_IMG =
   "https://res.cloudinary.com/haymzm4wp/image/upload/v1760105848/bi5ej2hgh0cc2uowu5xr.jpg";
 
 const ALLOWED_THEATER_TYPES = ["SHOW", "EVENT"];
+const TELEGRAM_BOT_URL = "https://t.me/gistream_bot";
 
 // ── Types ────────────────────────────────────────────────────────────────────
 interface NormalizedShow {
@@ -102,6 +103,21 @@ function useCountdown(target: number | null, active: boolean) {
   }, [target, active]);
 
   return cd;
+}
+
+// ── Telegram Icon ────────────────────────────────────────────────────────────
+function TelegramIcon({ size = 14 }: { size?: number }) {
+  return (
+    <svg
+      width={size}
+      height={size}
+      viewBox="0 0 24 24"
+      fill="currentColor"
+      xmlns="http://www.w3.org/2000/svg"
+    >
+      <path d="M11.944 0A12 12 0 0 0 0 12a12 12 0 0 0 12 12 12 12 0 0 0 12-12A12 12 0 0 0 12 0a12 12 0 0 0-.056 0zm4.962 7.224c.1-.002.321.023.465.14a.506.506 0 0 1 .171.325c.016.093.036.306.02.472-.18 1.898-.962 6.502-1.36 8.627-.168.9-.499 1.201-.82 1.23-.696.065-1.225-.46-1.9-.902-1.056-.693-1.653-1.124-2.678-1.8-1.185-.78-.417-1.21.258-1.91.177-.184 3.247-2.977 3.307-3.23.007-.032.014-.15-.056-.212s-.174-.041-.249-.024c-.106.024-1.793 1.14-5.061 3.345-.48.33-.913.49-1.302.48-.428-.008-1.252-.241-1.865-.44-.752-.245-1.349-.374-1.297-.789.027-.216.325-.437.893-.663 3.498-1.524 5.83-2.529 6.998-3.014 3.332-1.386 4.025-1.627 4.476-1.635z" />
+    </svg>
+  );
 }
 
 // ── Show Card ────────────────────────────────────────────────────────────────
@@ -249,21 +265,20 @@ function ShowCard({ show }: { show: NormalizedShow }) {
           )}
 
           {/* Price badge (idn) */}
-          {/* Price badge (idn) */}
-{show.source === "idn" && show.price !== undefined && (
-  <span style={{
-    display: "inline-flex", alignItems: "center", gap: 4,
-    fontSize: 10, fontWeight: 700,
-    padding: "3px 9px", borderRadius: 999,
-    background: "rgba(255,215,0,0.12)",
-    color: "#92400e",
-    border: "1px solid rgba(255,215,0,0.3)",
-  }}
-    className="dark:text-yellow-400"
-  >
-    🎟️ Rp 7.000
-  </span>
-)}
+          {show.source === "idn" && show.price !== undefined && (
+            <span style={{
+              display: "inline-flex", alignItems: "center", gap: 4,
+              fontSize: 10, fontWeight: 700,
+              padding: "3px 9px", borderRadius: 999,
+              background: "rgba(255,215,0,0.12)",
+              color: "#92400e",
+              border: "1px solid rgba(255,215,0,0.3)",
+            }}
+              className="dark:text-yellow-400"
+            >
+              🎟️ Rp 7.000
+            </span>
+          )}
         </div>
 
         {/* Birthday members */}
@@ -335,7 +350,7 @@ function ShowCard({ show }: { show: NormalizedShow }) {
           </div>
         )}
 
-                {/* Meta info */}
+        {/* Meta info */}
         <div style={{ display: "flex", flexDirection: "column", gap: 5, marginTop: "auto" }}>
           {show.scheduledAt && (
             <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
@@ -386,6 +401,44 @@ function ShowCard({ show }: { show: NormalizedShow }) {
             </div>
           )}
         </div>
+
+        {/* ── Buy Button ── */}
+        <a
+          href={TELEGRAM_BOT_URL}
+          target="_blank"
+          rel="noopener noreferrer"
+          style={{
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            gap: 7,
+            marginTop: 6,
+            padding: "9px 16px",
+            borderRadius: 10,
+            fontSize: 13,
+            fontWeight: 700,
+            textDecoration: "none",
+            cursor: "pointer",
+            transition: "all 0.15s",
+            background: "linear-gradient(135deg, #229ED9 0%, #1a8bbf 100%)",
+            color: "#fff",
+            border: "none",
+            boxShadow: "0 2px 8px rgba(34,158,217,0.30)",
+            letterSpacing: "0.01em",
+          }}
+          className="buy-btn"
+          onMouseEnter={(e) => {
+            (e.currentTarget as HTMLAnchorElement).style.transform = "translateY(-1px)";
+            (e.currentTarget as HTMLAnchorElement).style.boxShadow = "0 4px 14px rgba(34,158,217,0.42)";
+          }}
+          onMouseLeave={(e) => {
+            (e.currentTarget as HTMLAnchorElement).style.transform = "translateY(0)";
+            (e.currentTarget as HTMLAnchorElement).style.boxShadow = "0 2px 8px rgba(34,158,217,0.30)";
+          }}
+        >
+          <TelegramIcon size={15} />
+          Beli Tiket via Telegram
+        </a>
       </div>
     </div>
   );
@@ -397,6 +450,210 @@ const filterTabs: { key: FilterType; label: string; icon: string }[] = [
   { key: "live", label: "Live", icon: "" },
   { key: "scheduled", label: "Scheduled", icon: "" },
 ];
+
+// ── Purchase Info Section ────────────────────────────────────────────────────
+function PurchaseInfoSection() {
+  return (
+    <div style={{
+      margin: "0 24px 24px",
+      borderRadius: 14,
+      overflow: "hidden",
+      border: "1px solid rgba(34,158,217,0.2)",
+    }}>
+      {/* Header strip */}
+      <div style={{
+        padding: "12px 16px",
+        background: "linear-gradient(135deg, #229ED9 0%, #1a8bbf 100%)",
+        display: "flex",
+        alignItems: "center",
+        gap: 8,
+      }}>
+        <div style={{
+          width: 28, height: 28,
+          borderRadius: 8,
+          background: "rgba(255,255,255,0.2)",
+          display: "flex", alignItems: "center", justifyContent: "center",
+          flexShrink: 0,
+        }}>
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none"
+            stroke="#fff" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
+            <circle cx="12" cy="12" r="10" />
+            <line x1="12" y1="8" x2="12" y2="12" />
+            <line x1="12" y1="16" x2="12.01" y2="16" />
+          </svg>
+        </div>
+        <span style={{ fontSize: 13, fontWeight: 700, color: "#fff", letterSpacing: "0.01em" }}>
+          Cara Pembelian Tiket
+        </span>
+      </div>
+
+      {/* Body */}
+      <div style={{
+        padding: "16px",
+        background: "rgba(34,158,217,0.04)",
+        display: "flex",
+        flexDirection: "column",
+        gap: 12,
+      }}
+        className="dark:bg-[rgba(34,158,217,0.06)]"
+      >
+        <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+
+          {/* Option 1 — Telegram */}
+          <div style={{
+            display: "flex", alignItems: "flex-start", gap: 12,
+            padding: "12px 14px",
+            borderRadius: 10,
+            background: "#fff",
+            border: "1px solid rgba(34,158,217,0.15)",
+            boxShadow: "0 1px 4px rgba(0,0,0,0.05)",
+          }}
+            className="dark:bg-white/[0.04] dark:border-[rgba(34,158,217,0.2)]"
+          >
+            <div style={{
+              width: 36, height: 36, flexShrink: 0,
+              borderRadius: 10,
+              background: "linear-gradient(135deg, #229ED9 0%, #1a8bbf 100%)",
+              display: "flex", alignItems: "center", justifyContent: "center",
+            }}>
+              <TelegramIcon size={18} />
+            </div>
+            <div style={{ flex: 1 }}>
+              <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 4 }}>
+                <span style={{
+                  fontSize: 13, fontWeight: 700,
+                  color: "#111827",
+                }}
+                  className="dark:text-white"
+                >
+                  Bot Telegram
+                </span>
+                <span style={{
+                  fontSize: 10, fontWeight: 700,
+                  padding: "2px 7px", borderRadius: 999,
+                  background: "rgba(34,158,217,0.1)",
+                  color: "#0e7dad",
+                  border: "1px solid rgba(34,158,217,0.25)",
+                }}
+                  className="dark:text-blue-300"
+                >
+                  Otomatis
+                </span>
+              </div>
+              <p style={{ margin: 0, fontSize: 12, color: "#6b7280", lineHeight: 1.5 }}
+                className="dark:text-gray-400"
+              >
+                Kirim perintah{" "}
+                <code style={{
+                  padding: "1px 6px", borderRadius: 5,
+                  background: "rgba(34,158,217,0.1)",
+                  color: "#0e7dad",
+                  fontSize: 11, fontWeight: 700,
+                  fontFamily: "monospace",
+                }}>/buy</code>
+                {" "}di bot Telegram kami untuk pembelian tiket secara otomatis.
+              </p>
+              <a
+                href={TELEGRAM_BOT_URL}
+                target="_blank"
+                rel="noopener noreferrer"
+                style={{
+                  display: "inline-flex", alignItems: "center", gap: 5,
+                  marginTop: 8,
+                  padding: "5px 11px",
+                  borderRadius: 7,
+                  fontSize: 11, fontWeight: 700,
+                  textDecoration: "none",
+                  background: "linear-gradient(135deg, #229ED9 0%, #1a8bbf 100%)",
+                  color: "#fff",
+                  boxShadow: "0 2px 6px rgba(34,158,217,0.3)",
+                }}
+              >
+                <TelegramIcon size={12} />
+                @gistream_bot
+              </a>
+            </div>
+          </div>
+
+          {/* Option 2 — App */}
+          <div style={{
+            display: "flex", alignItems: "flex-start", gap: 12,
+            padding: "12px 14px",
+            borderRadius: 10,
+            background: "#fff",
+            border: "1px solid rgba(70,95,255,0.15)",
+            boxShadow: "0 1px 4px rgba(0,0,0,0.05)",
+          }}
+            className="dark:bg-white/[0.04] dark:border-[rgba(70,95,255,0.2)]"
+          >
+            <div style={{
+              width: 36, height: 36, flexShrink: 0,
+              borderRadius: 10,
+              background: "linear-gradient(135deg, #465FFF 0%, #3a4fd4 100%)",
+              display: "flex", alignItems: "center", justifyContent: "center",
+            }}>
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none"
+                stroke="#fff" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <rect x="5" y="2" width="14" height="20" rx="2" ry="2" />
+                <line x1="12" y1="18" x2="12.01" y2="18" />
+              </svg>
+            </div>
+            <div style={{ flex: 1 }}>
+              <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 4 }}>
+                <span style={{
+                  fontSize: 13, fontWeight: 700,
+                  color: "#111827",
+                }}
+                  className="dark:text-white"
+                >
+                  Aplikasi JKT48Connect
+                </span>
+                <span style={{
+                  fontSize: 10, fontWeight: 700,
+                  padding: "2px 7px", borderRadius: 999,
+                  background: "rgba(70,95,255,0.1)",
+                  color: "#465FFF",
+                  border: "1px solid rgba(70,95,255,0.2)",
+                }}
+                  className="dark:text-indigo-400"
+                >
+                  All-in-One
+                </span>
+              </div>
+              <p style={{ margin: 0, fontSize: 12, color: "#6b7280", lineHeight: 1.5 }}
+                className="dark:text-gray-400"
+              >
+                Punya aplikasi JKT48Connect? Beli tiket langsung dari aplikasi dan tonton show{" "}
+                <strong style={{ color: "#465FFF" }} className="dark:text-indigo-400">
+                  tanpa perlu berpindah platform
+                </strong>
+                . Pengalaman menonton lebih nyaman!
+              </p>
+              <div style={{
+                display: "inline-flex", alignItems: "center", gap: 5,
+                marginTop: 8,
+                padding: "5px 11px",
+                borderRadius: 7,
+                fontSize: 11, fontWeight: 700,
+                background: "rgba(70,95,255,0.08)",
+                color: "#465FFF",
+                border: "1px solid rgba(70,95,255,0.2)",
+              }}
+                className="dark:text-indigo-400"
+              >
+                <svg width="12" height="12" viewBox="0 0 24 24" fill="none"
+                  stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                  <polyline points="20 6 9 17 4 12" />
+                </svg>
+                Beli & tonton langsung di aplikasi
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
 
 // ── Main Page ────────────────────────────────────────────────────────────────
 const ShowSchedulePage: React.FC = () => {
@@ -628,7 +885,7 @@ const ShowSchedulePage: React.FC = () => {
           </div>
         </div>
 
-                {/* ── Content ── */}
+        {/* ── Content ── */}
         <div style={{ padding: 24 }}>
           {loading ? (
             /* Loading */
@@ -711,6 +968,9 @@ const ShowSchedulePage: React.FC = () => {
           )}
         </div>
 
+        {/* ── Purchase Info Section ── */}
+        {!loading && <PurchaseInfoSection />}
+
         {/* ── Footer ── */}
         {!loading && filtered.length > 0 && (
           <div style={{
@@ -769,6 +1029,9 @@ const ShowSchedulePage: React.FC = () => {
           .show-schedule-card:hover {
             transform: translateY(-2px);
             box-shadow: 0 8px 24px rgba(0,0,0,0.10);
+          }
+          .buy-btn:hover {
+            filter: brightness(1.05);
           }
         `}</style>
       </div>
