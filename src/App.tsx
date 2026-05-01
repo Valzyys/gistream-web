@@ -28,8 +28,7 @@ import ReplayPage from "./pages/Replay";
 import ReplayPlayerPage from "./pages/ReplayDetail";
 import RecentDetailPage from "./pages/RecentPage";
 import GuidePage from "./pages/Guide";
-import PMAccessPage from "./pages/Pm";
-import PMChatPage from "./pages/PmChat";
+
 
 export default function App() {
   return (
