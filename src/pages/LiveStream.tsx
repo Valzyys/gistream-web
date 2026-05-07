@@ -733,30 +733,19 @@ const loadMemberStream = useCallback(async () => {
     setLoading(false); 
   }
 }, [playbackId]);
-  // ── Quality controls ──────────────────────────────────────────────────────────
-  const handleQualityChange = (q: QualityOption | null) => {
-    setCurrentQuality(q);
-    if (!q) return;
-    setHlsUrl(q.manual_url);
-    setMemberHlsUrl(q.manual_url);
-  };
-
-  const handleModeChange = (mode: "auto" | "manual") => {
-    setQualityMode(mode);
-    if (mode === "auto") {
-      const slug =
-        idnShow?.showId ||
-        idnShow?.slug ||
-        memberShow?.identifier ||
-        memberShow?.slug ||
-        memberShow?.url_key ||
-        playbackId;
-      const autoUrl = `${PLAY_HOST}/live/idn/${slug}/master.m3u8`;
-      setHlsUrl(autoUrl);
-      setMemberHlsUrl(autoUrl);
-      setCurrentQuality(null);
-    }
-  };
+ const handleQualityChange = (q: QualityOption | null) => {
+  setCurrentQuality(q);
+  if (!q) {
+    // Auto mode: gunakan auto_url dari qualities.json
+    const autoUrl = "https://play.jkt48connect.com/live/idn/special-show-jkt48-with-pocky-260421172032/master.m3u8";
+    setHlsUrl(autoUrl);
+    setMemberHlsUrl(autoUrl);
+    return;
+  }
+  // Manual: WAJIB pakai playlist_url bukan manual_url
+  setHlsUrl(q.playlist_url);
+  setMemberHlsUrl(q.playlist_url);
+};
 
   const initChat = useCallback(async () => {
     setIsChatLoggingIn(true);
