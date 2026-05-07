@@ -16,17 +16,7 @@ const TEMP_QUALITIES_URL = `https://play.jkt48connect.com/live/idn/${TEMP_SLUG}/
 const TEMP_MASTER_URL    = `https://play.jkt48connect.com/live/idn/${TEMP_SLUG}/master.m3u8`;
 // ─────────────────────────────────────────────────────────────────────────────
 
-const getSession = () => {
-  try {
-    const d = JSON.parse(
-      sessionStorage.getItem("userLogin") ||
-      localStorage.getItem("userLogin") ||
-      "null"
-    );
-    if (d && d.isLoggedIn && d.token) return d;
-    return null;
-  } catch { return null; }
-};
+
 
 const isIdnSlug = (param: string) => {
   if (!param) return false;
@@ -519,7 +509,7 @@ function LiveStream() {
   const [hlsUrl,         setHlsUrl]         = useState("");
   const [memberShow,     setMemberShow]     = useState<any>(null);
   const [memberHlsUrl,   setMemberHlsUrl]   = useState("");
-  const [memberRoomId,   setMemberRoomId]   = useState<number | null>(null);
+ // const [memberRoomId,   setMemberRoomId]   = useState<number | null>(null);
   const [loading,        setLoading]        = useState(true);
   const [error,          setError]          = useState("");
   const [members]                           = useState<any[]>([]);
