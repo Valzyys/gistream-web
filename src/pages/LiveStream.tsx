@@ -634,29 +634,23 @@ function LiveStream() {
   };
 
   // ── UPDATED: loadIdnStream — cek slug di IDN API dulu, lalu fetch qualities ─
-  const loadIdnStream = useCallback(async () => {
+const loadIdnStream = useCallback(async () => {
     setLoading(true); setError("");
     try {
-      // 1. Cek slug di IDN API
       const idnRes = await fetch(IDN_API);
       const idnData = await idnRes.json();
-      if (!idnData || idnData.status !== 200 || !Array.isArray(idnData.data)) {
-        setError("Gagal mengambil data IDN Plus"); setLoading(false); return;
-      }
+      if (!idnData || idnData.status !== 200 || !Array.isArray(idnData.data)) { setError("Gagal mengambil data IDN Plus"); setLoading(false); return; }
       const show = idnData.data.find((s: any) => s.slug === playbackId && s.status === "live");
       if (!show) { setError("Show tidak ditemukan atau sudah berakhir"); setLoading(false); return; }
       setIdnShow(show);
 
-      // 2. Fetch qualities dari play.jkt48connect.com menggunakan slug (tanpa showId)
+      // ── NEW: fetch qualities dulu dari play.jkt48connect.com ──────────────
       const qualRes = await fetch(`${PLAY_HOST}/live/idn/${show.slug}/qualities.json`);
       const qualData = await qualRes.json();
-      if (qualData.success && Array.isArray(qualData.qualities)) {
-        setQualities(qualData.qualities);
-      }
-      // 3. Gunakan auto_url dari response, fallback ke manual construct
+      if (qualData.success && Array.isArray(qualData.qualities)) setQualities(qualData.qualities);
+      // Gunakan auto_url dari qualities response, fallback ke manual construct
       setHlsUrl(qualData.auto_url || `${PLAY_HOST}/live/idn/${show.slug}/master.m3u8`);
 
-      // 4. Fetch lineup theater (best-effort)
       try {
         const theaterRes = await fetch(`https://v2.jkt48connect.com/api/jkt48/theater?apikey=${API_KEY}`);
         const theaterData = await theaterRes.json();
@@ -676,7 +670,6 @@ function LiveStream() {
       setLoading(false);
     } catch { setError("Terjadi kesalahan saat memuat stream."); setLoading(false); }
   }, [playbackId]);
-
   const loadMemberStream = useCallback(async () => {
     setLoading(true); setError("");
     try {
