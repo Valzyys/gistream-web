@@ -62,7 +62,6 @@ interface SRComment {
   user_id: number;
 }
 
-// ── Showroom comment polling hook ─────────────────────────────────────────────
 function useShowroomComments(roomId: number | null) {
   const [comments, setComments] = useState<SRComment[]>([]);
   const [loading, setLoading]   = useState(true);
@@ -116,7 +115,6 @@ function useShowroomComments(roomId: number | null) {
   return { comments, loading, error, lastPoll, retry: fetchComments };
 }
 
-// ── HLS Player ────────────────────────────────────────────────────────────────
 function HlsPlayer({
   src, title, qualities, onQualityChange, currentQuality, qualityMode, onModeChange, isIdn,
 }: {
@@ -142,9 +140,7 @@ function HlsPlayer({
   useEffect(() => {
     const video = videoRef.current;
     if (!video || !src) return;
-
     destroyHls();
-
     if (!Hls.isSupported()) {
       if (video.canPlayType("application/vnd.apple.mpegurl")) {
         video.src = src;
@@ -153,65 +149,39 @@ function HlsPlayer({
       }
       return;
     }
-
     const hls = new Hls({
       enableWorker: true,
-
-      // ── CRITICAL: disable lowLatencyMode for standard HLS ─────────────────
-      // lowLatencyMode:true only helps LL-HLS streams; for regular HLS it
-      // causes the player to use segment counts that are too small, starving
-      // the buffer and causing constant stalls.
       lowLatencyMode: false,
-
-      // ── Buffer: give enough headroom so network jitter doesn't stall ──────
-      maxBufferLength:    30,           // try to hold 30s of video ahead
-      maxMaxBufferLength: 60,           // hard ceiling
-      maxBufferSize:      60 * 1000 * 1000, // 60 MB
-
-      // Back-buffer: keep 30s behind so seeking back is instant; clear older
+      maxBufferLength: 30,
+      maxMaxBufferLength: 60,
+      maxBufferSize: 60 * 1000 * 1000,
       backBufferLength: 30,
-
-      // ── Live sync: sensible latency, not razor-thin ───────────────────────
-      // Use segment-count based config (more portable across segment lengths)
-      liveSyncDurationCount:       3,   // target = 3 segments behind live edge
-      liveMaxLatencyDurationCount: 10,  // if > 10 segments behind → jump
-      liveDurationInfinity:        true,
-
-      // ── Fragment loading: generous timeouts, retry fast ───────────────────
-      fragLoadingTimeOut:             10000,
-      fragLoadingMaxRetry:            6,
-      fragLoadingRetryDelay:          1000,
-      fragLoadingMaxRetryTimeout:     8000,
-
-      // ── Manifest / level loading ──────────────────────────────────────────
-      manifestLoadingTimeOut:         10000,
-      manifestLoadingMaxRetry:        4,
-      manifestLoadingRetryDelay:      1000,
-      levelLoadingTimeOut:            10000,
-      levelLoadingMaxRetry:           4,
-      levelLoadingRetryDelay:         1000,
-
-      // ── ABR: prefer stability, be slow to upgrade ─────────────────────────
-      startLevel:              qualityMode === "auto" ? -1 : undefined,
-      abrEwmaDefaultEstimate:  500_000,  // conservative; let real BW measurement drive
-      abrBandWidthFactor:      0.8,      // only use 80% of measured BW when choosing level
-      abrBandWidthUpFactor:    0.7,      // upgrade quality only when clearly stable
-      abrEwmaFastLive:         3.0,
-      abrEwmaSlowLive:         9.0,
-
-      // ── Stall nudge ───────────────────────────────────────────────────────
-      nudgeOffset:    0.3,
-      nudgeMaxRetry:  5,
+      liveSyncDurationCount: 3,
+      liveMaxLatencyDurationCount: 10,
+      liveDurationInfinity: true,
+      fragLoadingTimeOut: 10000,
+      fragLoadingMaxRetry: 6,
+      fragLoadingRetryDelay: 1000,
+      fragLoadingMaxRetryTimeout: 8000,
+      manifestLoadingTimeOut: 10000,
+      manifestLoadingMaxRetry: 4,
+      manifestLoadingRetryDelay: 1000,
+      levelLoadingTimeOut: 10000,
+      levelLoadingMaxRetry: 4,
+      levelLoadingRetryDelay: 1000,
+      startLevel: qualityMode === "auto" ? -1 : undefined,
+      abrEwmaDefaultEstimate: 500_000,
+      abrBandWidthFactor: 0.8,
+      abrBandWidthUpFactor: 0.7,
+      abrEwmaFastLive: 3.0,
+      abrEwmaSlowLive: 9.0,
+      nudgeOffset: 0.3,
+      nudgeMaxRetry: 5,
     });
-
     hlsRef.current = hls;
     hls.loadSource(src);
     hls.attachMedia(video);
-
-    hls.on(Hls.Events.MANIFEST_PARSED, () => {
-      video.play().catch(() => {});
-    });
-
+    hls.on(Hls.Events.MANIFEST_PARSED, () => { video.play().catch(() => {}); });
     hls.on(Hls.Events.LEVEL_SWITCHED, (_, data) => {
       const lvl = hls.levels[data.level];
       if (lvl) {
@@ -224,22 +194,17 @@ function HlsPlayer({
         );
       }
     });
-
     hls.on(Hls.Events.ERROR, (_, data) => {
-      // Let hls.js handle non-fatal errors on its own
       if (!data.fatal) return;
-
       if (data.type === Hls.ErrorTypes.NETWORK_ERROR) {
         hls.startLoad();
       } else if (data.type === Hls.ErrorTypes.MEDIA_ERROR) {
         hls.recoverMediaError();
       } else {
-        // Fully unrecoverable: tear down and reinit after a pause
         destroyHls();
         retryRef.current = setTimeout(() => {
           const v = videoRef.current;
           if (!v) return;
-          // Re-run the whole effect by updating src via the closure
           const newHls = new Hls({ lowLatencyMode: false, maxBufferLength: 30 });
           newHls.loadSource(src);
           newHls.attachMedia(v);
@@ -248,13 +213,11 @@ function HlsPlayer({
         }, 2000);
       }
     });
-
     return destroyHls;
   }, [src, destroyHls]); // eslint-disable-line
 
   return (
     <div className="relative w-full rounded-2xl overflow-hidden bg-black shadow-2xl">
-      {/* Hide timeline / seek bar — keep play, volume, fullscreen */}
       <style>{`
         video.live-player::-webkit-media-controls-timeline,
         video.live-player::-webkit-media-controls-time-remaining-display,
@@ -262,7 +225,6 @@ function HlsPlayer({
           display: none !important;
         }
       `}</style>
-
       <div className={isIdn ? "aspect-video" : ""}>
         <video
           ref={videoRef}
@@ -273,7 +235,6 @@ function HlsPlayer({
           title={title}
         />
       </div>
-
       {qualities.length > 0 && (
         <div className="absolute bottom-12 right-3 z-20">
           <button
@@ -317,7 +278,6 @@ function HlsPlayer({
   );
 }
 
-// ── IDN Chat Panel ────────────────────────────────────────────────────────────
 function IdnChatPanel({
   messages, chatInput, setChatInput, chatUser, isChatLoggingIn, onSend, chatEndRef, navigate,
 }: {
@@ -423,7 +383,6 @@ function IdnChatPanel({
   );
 }
 
-// ── Member/Showroom Chat Panel ────────────────────────────────────────────────
 function MemberChatPanel({
   comments, loading, error, lastPoll, retry,
 }: {
@@ -532,7 +491,6 @@ function MemberChatPanel({
   );
 }
 
-// ── Main ──────────────────────────────────────────────────────────────────────
 function LiveStream() {
   const { playbackId } = useParams<{ playbackId: string }>();
   const navigate       = useNavigate();
@@ -658,187 +616,135 @@ function LiveStream() {
     } catch { setVerifyError("Terjadi kesalahan saat verifikasi. Silakan coba lagi."); setVerifying(false); }
   };
 
-  // ── Shared: fetch qualities dari play.jkt48connect.com ────────────────────────
-const fetchQualities = useCallback(async (slug: string) => {
-  try {
-    const res = await fetch(`${PLAY_HOST}/live/idn/${slug}/qualities.json`);
-    const data = await res.json();
-    if (data.success && Array.isArray(data.qualities)) {
-      setQualities(data.qualities);
-    }
-    setHlsUrl(data.auto_url || `${PLAY_HOST}/live/idn/${slug}/master.m3u8`);
-    return data;
-  } catch {
-    setHlsUrl(`${PLAY_HOST}/live/idn/${slug}/master.m3u8`);
-    return null;
-  }
-}, []);
-
-const loadIdnStream = useCallback(async () => {
-  setLoading(true); setError("");
-  try {
-    const idnRes = await fetch(IDN_API);
-    const idnData = await idnRes.json();
-    if (!idnData || idnData.status !== 200 || !Array.isArray(idnData.data)) {
-      setError("Gagal mengambil data IDN Plus"); setLoading(false); return;
-    }
-    const show = idnData.data.find((s: any) => s.slug === playbackId && s.status === "live");
-    if (!show) {
-      setError("Show tidak ditemukan atau sudah berakhir"); setLoading(false); return;
-    }
-    setIdnShow(show);
-
-    // Slug untuk qualities: gunakan showId jika ada, fallback ke slug
-    const qualSlug = show.showId || show.slug || playbackId;
-    await fetchQualities(qualSlug);
-
-    // Fetch theater members
+  // ── SINGLE SOURCE OF TRUTH: semua video dari qualities.json ──────────────────
+  const fetchQualities = useCallback(async (slug: string) => {
     try {
-      const theaterRes = await fetch(`https://v2.jkt48connect.com/api/jkt48/theater?apikey=${API_KEY}`);
-      const theaterData = await theaterRes.json();
-      if (theaterData.theater?.length > 0) {
-        const now = Date.now();
-        let nearest = theaterData.theater[0];
-        let minDiff = Math.abs(new Date(nearest.date).getTime() - now);
-        theaterData.theater.forEach((s: any) => {
-          const diff = Math.abs(new Date(s.date).getTime() - now);
-          if (diff < minDiff) { minDiff = diff; nearest = s; }
-        });
-        const detailRes = await fetch(`https://v2.jkt48connect.com/api/jkt48/theater/${nearest.id}?apikey=${API_KEY}`);
-        const detailData = await detailRes.json();
-        if (detailData.shows?.[0]?.members) setMembers(detailData.shows[0].members);
+      const res = await fetch(`${PLAY_HOST}/live/idn/${slug}/qualities.json`);
+      const data = await res.json();
+      if (data.success && Array.isArray(data.qualities)) {
+        setQualities(data.qualities);
       }
-    } catch {}
-
-    setLoading(false);
-  } catch {
-    setError("Terjadi kesalahan saat memuat stream."); setLoading(false);
-  }
-}, [playbackId, fetchQualities]);
-
-const loadMemberStream = useCallback(async () => {
-  setLoading(true); setError("");
-  try {
-    const res = await fetch(LIVE_API);
-    const data = await res.json();
-
-    if (!Array.isArray(data)) {
-      setError("Gagal mengambil data live member"); setLoading(false); return;
+      const autoUrl = data.auto_url || `${PLAY_HOST}/live/idn/${slug}/master.m3u8`;
+      setHlsUrl(autoUrl);
+      setMemberHlsUrl(autoUrl);
+      return data;
+    } catch {
+      const fallback = `${PLAY_HOST}/live/idn/${slug}/master.m3u8`;
+      setHlsUrl(fallback);
+      setMemberHlsUrl(fallback);
+      return null;
     }
+  }, []);
 
-    const show = data.find((s: any) =>
-      s.url_key === playbackId ||
-      s.identifier === playbackId ||
-      s.identifier?.toLowerCase() === playbackId?.toLowerCase() ||
-      s.url_key?.toLowerCase() === playbackId?.toLowerCase()
-    );
-
-    if (!show) {
-      setError(`Member tidak sedang live saat ini`);
-      setLoading(false); return;
-    }
-
-    setMemberShow(show);
-
-    // ── Semua tipe live (showroom/idn) → fetch qualities dari play.jkt48connect.com
-    // Gunakan identifier sebagai slug untuk qualities endpoint
-    const qualSlug = show.identifier || show.slug || show.url_key || playbackId;
-    const qualData = await fetchQualities(qualSlug);
-
-    // Jika qualities berhasil → gunakan auto_url
-    // Jika gagal → fallback ke streaming_url_list dari live API
-    if (!qualData?.success) {
-      const fallbackUrl =
-        show.streaming_url_list?.[0]?.url ||
-        show.stream_url ||
-        null;
-
-      if (!fallbackUrl) {
-        setError("URL stream tidak tersedia"); setLoading(false); return;
+  // ── loadIdnStream: metadata dari IDN API, video HANYA dari qualities.json ────
+  const loadIdnStream = useCallback(async () => {
+    setLoading(true); setError("");
+    try {
+      const idnRes = await fetch(IDN_API);
+      const idnData = await idnRes.json();
+      if (!idnData || idnData.status !== 200 || !Array.isArray(idnData.data)) {
+        setError("Gagal mengambil data IDN Plus"); setLoading(false); return;
       }
-      setMemberHlsUrl(fallbackUrl);
-      setHlsUrl(fallbackUrl);
-    }
+      const show = idnData.data.find((s: any) => s.slug === playbackId && s.status === "live");
+      if (!show) {
+        setError("Show tidak ditemukan atau sudah berakhir"); setLoading(false); return;
+      }
+      setIdnShow(show);
 
-    if (show.room_id) setMemberRoomId(show.room_id);
-    setLoading(false);
-  } catch (e) {
-    setError("Terjadi kesalahan saat memuat stream member."); setLoading(false);
-  }
-}, [playbackId, fetchQualities]);
+      // Video: SELALU dari qualities.json — showId → slug → playbackId
+      const qualSlug = show.showId || show.slug || playbackId;
+      await fetchQualities(qualSlug);
+
+      // Theater members (opsional)
+      try {
+        const theaterRes = await fetch(`https://v2.jkt48connect.com/api/jkt48/theater?apikey=${API_KEY}`);
+        const theaterData = await theaterRes.json();
+        if (theaterData.theater?.length > 0) {
+          const now = Date.now();
+          let nearest = theaterData.theater[0];
+          let minDiff = Math.abs(new Date(nearest.date).getTime() - now);
+          theaterData.theater.forEach((s: any) => {
+            const diff = Math.abs(new Date(s.date).getTime() - now);
+            if (diff < minDiff) { minDiff = diff; nearest = s; }
+          });
+          const detailRes = await fetch(`https://v2.jkt48connect.com/api/jkt48/theater/${nearest.id}?apikey=${API_KEY}`);
+          const detailData = await detailRes.json();
+          if (detailData.shows?.[0]?.members) setMembers(detailData.shows[0].members);
+        }
+      } catch {}
+
+      setLoading(false);
+    } catch {
+      setError("Terjadi kesalahan saat memuat stream."); setLoading(false);
+    }
+  }, [playbackId, fetchQualities]);
+
+  // ── loadMemberStream: metadata dari LIVE API, video HANYA dari qualities.json ─
   const loadMemberStream = useCallback(async () => {
-  setLoading(true); setError("");
-  try {
-    const res = await fetch(LIVE_API);
-    const data = await res.json();
-    
-    if (!Array.isArray(data)) { 
-      setError("Gagal mengambil data live member"); 
-      setLoading(false); 
-      return; 
-    }
+    setLoading(true); setError("");
+    try {
+      const res = await fetch(LIVE_API);
+      const data = await res.json();
 
-    // Flexible matching: url_key, identifier, atau slug
-    const show = data.find((s: any) => 
-      s.url_key === playbackId ||
-      s.identifier === playbackId ||
-      s.slug === playbackId ||
-      s.url_key?.toLowerCase() === playbackId?.toLowerCase() ||
-      s.identifier?.toLowerCase() === playbackId?.toLowerCase()
-    );
-
-    if (!show) { 
-      // Cek apakah ada live sama sekali
-      if (data.length === 0) {
-        setError("Tidak ada member yang sedang live saat ini");
-      } else {
-        setError("Member tidak sedang live saat ini");
+      if (!Array.isArray(data)) {
+        setError("Gagal mengambil data live member"); setLoading(false); return;
       }
-      setLoading(false); 
-      return; 
+
+      const show = data.find((s: any) =>
+        s.url_key === playbackId ||
+        s.identifier === playbackId ||
+        s.identifier?.toLowerCase() === playbackId?.toLowerCase() ||
+        s.url_key?.toLowerCase() === playbackId?.toLowerCase()
+      );
+
+      if (!show) {
+        setError(data.length === 0
+          ? "Tidak ada member yang sedang live saat ini"
+          : "Member tidak sedang live saat ini"
+        );
+        setLoading(false); return;
+      }
+
+      setMemberShow(show);
+
+      // Video: SELALU dari qualities.json — identifier → slug → url_key → playbackId
+      const qualSlug = show.identifier || show.slug || show.url_key || playbackId;
+      await fetchQualities(qualSlug);
+
+      // room_id untuk Showroom chat saja
+      if (show.room_id) setMemberRoomId(show.room_id);
+
+      setLoading(false);
+    } catch {
+      setError("Terjadi kesalahan saat memuat stream member."); setLoading(false);
     }
+  }, [playbackId, fetchQualities]);
 
-    setMemberShow(show);
+  // ── Quality controls ──────────────────────────────────────────────────────────
+  const handleQualityChange = (q: QualityOption | null) => {
+    setCurrentQuality(q);
+    if (!q) return;
+    setHlsUrl(q.manual_url);
+    setMemberHlsUrl(q.manual_url);
+  };
 
-    // Ambil streaming URL — coba beberapa field
-    const streamUrl = 
-      show.streaming_url_list?.[0]?.url || 
-      show.stream_url ||
-      show.playback_url ||
-      null;
-
-    if (!streamUrl) { 
-      setError("URL stream tidak tersedia"); 
-      setLoading(false); 
-      return; 
+  const handleModeChange = (mode: "auto" | "manual") => {
+    setQualityMode(mode);
+    if (mode === "auto") {
+      const slug =
+        idnShow?.showId ||
+        idnShow?.slug ||
+        memberShow?.identifier ||
+        memberShow?.slug ||
+        memberShow?.url_key ||
+        playbackId;
+      const autoUrl = `${PLAY_HOST}/live/idn/${slug}/master.m3u8`;
+      setHlsUrl(autoUrl);
+      setMemberHlsUrl(autoUrl);
+      setCurrentQuality(null);
     }
+  };
 
-    setMemberHlsUrl(streamUrl);
-    if (show.room_id) setMemberRoomId(show.room_id);
-    setLoading(false);
-  } catch (e) { 
-    setError("Terjadi kesalahan saat memuat stream member."); 
-    setLoading(false); 
-  }
-}, [playbackId]);
-
- const handleQualityChange = (q: QualityOption | null) => {
-  setCurrentQuality(q);
-  if (!q) return;
-  setHlsUrl(q.manual_url);
-  setMemberHlsUrl(q.manual_url);
-};
-
-const handleModeChange = (mode: "auto" | "manual") => {
-  setQualityMode(mode);
-  if (mode === "auto") {
-    const slug = idnShow?.showId || idnShow?.slug || memberShow?.identifier || memberShow?.url_key || playbackId;
-    const autoUrl = `${PLAY_HOST}/live/idn/${slug}/master.m3u8`;
-    setHlsUrl(autoUrl);
-    setMemberHlsUrl(autoUrl);
-    setCurrentQuality(null);
-  }
-};
   const initChat = useCallback(async () => {
     setIsChatLoggingIn(true);
     let userData: any = null;
@@ -935,13 +841,15 @@ const handleModeChange = (mode: "auto" | "manual") => {
   const handleLogout = () => {
     localStorage.removeItem("stream_verification");
     setIsVerified(false); setShowVerification(true);
-    setIdnShow(null); setHlsUrl(""); setQualities([]);
+    setIdnShow(null); setHlsUrl(""); setMemberHlsUrl(""); setQualities([]);
     setVerifData({ email: "", code: "" });
   };
 
   const showTitle = isIdn
     ? (idnShow?.title || "Live Stream JKT48")
     : (memberShow?.name || "Live Member JKT48");
+
+  const activeHlsUrl = hlsUrl || memberHlsUrl;
 
   if (isIdn && membershipLoading) {
     return (
@@ -1063,23 +971,22 @@ const handleModeChange = (mode: "auto" | "manual") => {
 
         <div className="grid grid-cols-1 xl:grid-cols-[1fr_360px] gap-6">
           <div className="flex flex-col gap-5">
-            // Di bagian render, ganti kondisi player:
-{(isIdn && hlsUrl) || (isMember && (hlsUrl || memberHlsUrl)) ? (
-  <HlsPlayer
-    src={hlsUrl || memberHlsUrl}
-    title={showTitle}
-    qualities={qualities}
-    onQualityChange={handleQualityChange}
-    currentQuality={currentQuality}
-    qualityMode={qualityMode}
-    onModeChange={handleModeChange}
-    isIdn={isIdn}
-  />
-) : (
-  <div className="aspect-video bg-gray-100 dark:bg-gray-800/50 rounded-2xl flex items-center justify-center border border-gray-200 dark:border-gray-700">
-    <div className="w-10 h-10 border-[3px] border-gray-200 dark:border-gray-700 border-t-red-500 rounded-full animate-spin" />
-  </div>
-)}
+            {activeHlsUrl ? (
+              <HlsPlayer
+                src={activeHlsUrl}
+                title={showTitle}
+                qualities={qualities}
+                onQualityChange={handleQualityChange}
+                currentQuality={currentQuality}
+                qualityMode={qualityMode}
+                onModeChange={handleModeChange}
+                isIdn={isIdn}
+              />
+            ) : (
+              <div className="aspect-video bg-gray-100 dark:bg-gray-800/50 rounded-2xl flex items-center justify-center border border-gray-200 dark:border-gray-700">
+                <div className="w-10 h-10 border-[3px] border-gray-200 dark:border-gray-700 border-t-red-500 rounded-full animate-spin" />
+              </div>
+            )}
 
             {isIdn && idnShow && (
               <div className="rounded-2xl border border-gray-200 dark:border-gray-800 bg-gray-50 dark:bg-gray-800/30 p-5">
