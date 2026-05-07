@@ -658,34 +658,41 @@ function LiveStream() {
     } catch { setVerifyError("Terjadi kesalahan saat verifikasi. Silakan coba lagi."); setVerifying(false); }
   };
 
-  const loadIdnStream = useCallback(async () => {
+  // ── Shared: fetch qualities dari play.jkt48connect.com ────────────────────────
+const fetchQualities = useCallback(async (slug: string) => {
+  try {
+    const res = await fetch(`${PLAY_HOST}/live/idn/${slug}/qualities.json`);
+    const data = await res.json();
+    if (data.success && Array.isArray(data.qualities)) {
+      setQualities(data.qualities);
+    }
+    setHlsUrl(data.auto_url || `${PLAY_HOST}/live/idn/${slug}/master.m3u8`);
+    return data;
+  } catch {
+    setHlsUrl(`${PLAY_HOST}/live/idn/${slug}/master.m3u8`);
+    return null;
+  }
+}, []);
+
+const loadIdnStream = useCallback(async () => {
   setLoading(true); setError("");
   try {
     const idnRes = await fetch(IDN_API);
     const idnData = await idnRes.json();
-    if (!idnData || idnData.status !== 200 || !Array.isArray(idnData.data)) { setError("Gagal mengambil data IDN Plus"); setLoading(false); return; }
+    if (!idnData || idnData.status !== 200 || !Array.isArray(idnData.data)) {
+      setError("Gagal mengambil data IDN Plus"); setLoading(false); return;
+    }
     const show = idnData.data.find((s: any) => s.slug === playbackId && s.status === "live");
-    if (!show) { setError("Show tidak ditemukan atau sudah berakhir"); setLoading(false); return; }
+    if (!show) {
+      setError("Show tidak ditemukan atau sudah berakhir"); setLoading(false); return;
+    }
     setIdnShow(show);
 
-    // ── Fetch qualities dari play.jkt48connect.com ─────────────────────────
-    try {
-      const qualRes = await fetch(
-        `${PLAY_HOST}/live/idn/${show.slug}/qualities.json?showId=${show.showId || ""}`
-      );
-      const qualData = await qualRes.json();
-      if (qualData.success && Array.isArray(qualData.qualities)) {
-        setQualities(qualData.qualities);
-      }
-      // auto_url sudah disediakan langsung oleh endpoint
-      setHlsUrl(
-        qualData.auto_url ||
-        `${PLAY_HOST}/live/idn/${show.slug}/master.m3u8`
-      );
-    } catch {
-      setHlsUrl(`${PLAY_HOST}/live/idn/${show.slug}/master.m3u8`);
-    }
+    // Slug untuk qualities: gunakan showId jika ada, fallback ke slug
+    const qualSlug = show.showId || show.slug || playbackId;
+    await fetchQualities(qualSlug);
 
+    // Fetch theater members
     try {
       const theaterRes = await fetch(`https://v2.jkt48connect.com/api/jkt48/theater?apikey=${API_KEY}`);
       const theaterData = await theaterRes.json();
@@ -704,9 +711,61 @@ function LiveStream() {
     } catch {}
 
     setLoading(false);
-  } catch { setError("Terjadi kesalahan saat memuat stream."); setLoading(false); }
-}, [playbackId]);
+  } catch {
+    setError("Terjadi kesalahan saat memuat stream."); setLoading(false);
+  }
+}, [playbackId, fetchQualities]);
 
+const loadMemberStream = useCallback(async () => {
+  setLoading(true); setError("");
+  try {
+    const res = await fetch(LIVE_API);
+    const data = await res.json();
+
+    if (!Array.isArray(data)) {
+      setError("Gagal mengambil data live member"); setLoading(false); return;
+    }
+
+    const show = data.find((s: any) =>
+      s.url_key === playbackId ||
+      s.identifier === playbackId ||
+      s.identifier?.toLowerCase() === playbackId?.toLowerCase() ||
+      s.url_key?.toLowerCase() === playbackId?.toLowerCase()
+    );
+
+    if (!show) {
+      setError(`Member tidak sedang live saat ini`);
+      setLoading(false); return;
+    }
+
+    setMemberShow(show);
+
+    // ── Semua tipe live (showroom/idn) → fetch qualities dari play.jkt48connect.com
+    // Gunakan identifier sebagai slug untuk qualities endpoint
+    const qualSlug = show.identifier || show.slug || show.url_key || playbackId;
+    const qualData = await fetchQualities(qualSlug);
+
+    // Jika qualities berhasil → gunakan auto_url
+    // Jika gagal → fallback ke streaming_url_list dari live API
+    if (!qualData?.success) {
+      const fallbackUrl =
+        show.streaming_url_list?.[0]?.url ||
+        show.stream_url ||
+        null;
+
+      if (!fallbackUrl) {
+        setError("URL stream tidak tersedia"); setLoading(false); return;
+      }
+      setMemberHlsUrl(fallbackUrl);
+      setHlsUrl(fallbackUrl);
+    }
+
+    if (show.room_id) setMemberRoomId(show.room_id);
+    setLoading(false);
+  } catch (e) {
+    setError("Terjadi kesalahan saat memuat stream member."); setLoading(false);
+  }
+}, [playbackId, fetchQualities]);
   const loadMemberStream = useCallback(async () => {
   setLoading(true); setError("");
   try {
@@ -763,18 +822,20 @@ function LiveStream() {
   }
 }, [playbackId]);
 
-  const handleQualityChange = (q: QualityOption | null) => {
+ const handleQualityChange = (q: QualityOption | null) => {
   setCurrentQuality(q);
-  if (!q || !idnShow) return;
-  // manual_url sudah lengkap dari qualities endpoint
+  if (!q) return;
   setHlsUrl(q.manual_url);
+  setMemberHlsUrl(q.manual_url);
 };
 
 const handleModeChange = (mode: "auto" | "manual") => {
   setQualityMode(mode);
-  if (mode === "auto" && idnShow) {
-    // Kembali ke master/auto URL
-    setHlsUrl(`${PLAY_HOST}/live/idn/${idnShow.slug}/master.m3u8`);
+  if (mode === "auto") {
+    const slug = idnShow?.showId || idnShow?.slug || memberShow?.identifier || memberShow?.url_key || playbackId;
+    const autoUrl = `${PLAY_HOST}/live/idn/${slug}/master.m3u8`;
+    setHlsUrl(autoUrl);
+    setMemberHlsUrl(autoUrl);
     setCurrentQuality(null);
   }
 };
@@ -1002,15 +1063,23 @@ const handleModeChange = (mode: "auto" | "manual") => {
 
         <div className="grid grid-cols-1 xl:grid-cols-[1fr_360px] gap-6">
           <div className="flex flex-col gap-5">
-            {isIdn && hlsUrl ? (
-              <HlsPlayer src={hlsUrl} title={showTitle} qualities={qualities} onQualityChange={handleQualityChange} currentQuality={currentQuality} qualityMode={qualityMode} onModeChange={handleModeChange} isIdn={true} />
-            ) : isMember && memberHlsUrl ? (
-              <HlsPlayer src={memberHlsUrl} title={showTitle} qualities={[]} onQualityChange={() => {}} currentQuality={null} qualityMode="auto" onModeChange={() => {}} isIdn={false} />
-            ) : (
-              <div className="aspect-video bg-gray-100 dark:bg-gray-800/50 rounded-2xl flex items-center justify-center border border-gray-200 dark:border-gray-700">
-                <div className="w-10 h-10 border-[3px] border-gray-200 dark:border-gray-700 border-t-red-500 rounded-full animate-spin" />
-              </div>
-            )}
+            // Di bagian render, ganti kondisi player:
+{(isIdn && hlsUrl) || (isMember && (hlsUrl || memberHlsUrl)) ? (
+  <HlsPlayer
+    src={hlsUrl || memberHlsUrl}
+    title={showTitle}
+    qualities={qualities}
+    onQualityChange={handleQualityChange}
+    currentQuality={currentQuality}
+    qualityMode={qualityMode}
+    onModeChange={handleModeChange}
+    isIdn={isIdn}
+  />
+) : (
+  <div className="aspect-video bg-gray-100 dark:bg-gray-800/50 rounded-2xl flex items-center justify-center border border-gray-200 dark:border-gray-700">
+    <div className="w-10 h-10 border-[3px] border-gray-200 dark:border-gray-700 border-t-red-500 rounded-full animate-spin" />
+  </div>
+)}
 
             {isIdn && idnShow && (
               <div className="rounded-2xl border border-gray-200 dark:border-gray-800 bg-gray-50 dark:bg-gray-800/30 p-5">
