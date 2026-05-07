@@ -25,11 +25,13 @@ const getSession = () => {
   } catch { return null; }
 };
 
+// AFTER — tambah pengecekan lebih ketat: harus ada tanggal DAN panjang > 15 char
 const isIdnSlug = (param: string) => {
   if (!param) return false;
-  return /\d{4}-\d{2}-\d{2}/.test(param);
+  // IDN slug selalu berbentuk: "nama-member-YYYY-MM-DD" atau "title-YYYY-MM-DD-..."
+  // Showroom url_key biasanya pendek tanpa tanggal, misal: "nabilazahrasr"
+  return /\d{4}-\d{2}-\d{2}/.test(param) && param.length > 15;
 };
-
 interface QualityOption {
   index:           number;
   name:            string;
@@ -670,22 +672,69 @@ const loadIdnStream = useCallback(async () => {
       setLoading(false);
     } catch { setError("Terjadi kesalahan saat memuat stream."); setLoading(false); }
   }, [playbackId]);
-  const loadMemberStream = useCallback(async () => {
-    setLoading(true); setError("");
-    try {
-      const res = await fetch(LIVE_API);
-      const data = await res.json();
-      if (!Array.isArray(data)) { setError("Gagal mengambil data live member"); setLoading(false); return; }
-      const show = data.find((s: any) => s.url_key === playbackId);
-      if (!show) { setError("Member tidak sedang live saat ini"); setLoading(false); return; }
-      setMemberShow(show);
-      const streamUrl = show.streaming_url_list?.[0]?.url || null;
-      if (!streamUrl) { setError("URL stream tidak tersedia"); setLoading(false); return; }
-      setMemberHlsUrl(streamUrl);
-      if (show.room_id) setMemberRoomId(show.room_id);
+  // AFTER — ganti loadMemberStream
+const loadMemberStream = useCallback(async () => {
+  setLoading(true);
+  setError("");
+  try {
+    const res = await fetch(LIVE_API);
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const data = await res.json();
+
+    if (!Array.isArray(data)) {
+      setError("Format data live tidak valid. Silakan coba lagi.");
       setLoading(false);
-    } catch { setError("Terjadi kesalahan saat memuat stream member."); setLoading(false); }
-  }, [playbackId]);
+      return;
+    }
+
+    // Cari berdasarkan url_key atau name (case-insensitive fallback)
+    const show =
+      data.find((s: any) => s.url_key === playbackId) ||
+      data.find((s: any) =>
+        s.url_key?.toLowerCase() === playbackId?.toLowerCase()
+      );
+
+    if (!show) {
+      // Member tidak live: tampilkan daftar yang sedang live sebagai konteks
+      const liveNames = data
+        .slice(0, 5)
+        .map((s: any) => s.name || s.url_key)
+        .filter(Boolean);
+
+      const hint =
+        liveNames.length > 0
+          ? `Member yang sedang live: ${liveNames.join(", ")}${data.length > 5 ? `, +${data.length - 5} lainnya` : ""}`
+          : "Tidak ada member yang sedang live saat ini.";
+
+      setError(`Member ini tidak sedang live.\n${hint}`);
+      setLoading(false);
+      return;
+    }
+
+    setMemberShow(show);
+
+    const streamUrl =
+      show.streaming_url_list?.[0]?.url ||
+      show.streaming_url_list?.find((u: any) => u.url)?.url ||
+      null;
+
+    if (!streamUrl) {
+      setError("URL stream belum tersedia. Coba refresh dalam beberapa detik.");
+      setLoading(false);
+      return;
+    }
+
+    setMemberHlsUrl(streamUrl);
+    if (show.room_id) setMemberRoomId(show.room_id);
+    setLoading(false);
+  } catch (err: any) {
+    console.error("loadMemberStream error:", err);
+    setError(
+      "Gagal terhubung ke server. Periksa koneksi internet kamu lalu coba lagi."
+    );
+    setLoading(false);
+  }
+}, [playbackId]);
 
   const handleQualityChange = (q: QualityOption | null) => {
     setCurrentQuality(q);
