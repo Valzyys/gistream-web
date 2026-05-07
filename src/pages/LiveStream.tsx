@@ -9,14 +9,21 @@ const supabase = createClient(supabaseUrl, supabaseKey);
 
 const API_BASE  = "https://v2.jkt48connect.com/api/jkt48connect";
 const API_KEY   = "JKTCONNECT";
+const PLAY_HOST = "https://play.jkt48connect.com";
+const IDN_API   = "https://v2.jkt48connect.com/api/jkt48/idnplus?apikey=JKTCONNECT";
+const LIVE_API  = "https://v2.jkt48connect.com/api/jkt48/live?apikey=JKTCONNECT";
 
-// ── TEMPORARY: hardcoded stream ──────────────────────────────────────────────
-const TEMP_SLUG          = "special-show-jkt48-with-pocky-260421172032";
-const TEMP_QUALITIES_URL = `https://play.jkt48connect.com/live/idn/${TEMP_SLUG}/qualities.json`;
-const TEMP_MASTER_URL    = `https://play.jkt48connect.com/live/idn/${TEMP_SLUG}/master.m3u8`;
-// ─────────────────────────────────────────────────────────────────────────────
-
-
+const getSession = () => {
+  try {
+    const d = JSON.parse(
+      sessionStorage.getItem("userLogin") ||
+      localStorage.getItem("userLogin") ||
+      "null"
+    );
+    if (d && d.isLoggedIn && d.token) return d;
+    return null;
+  } catch { return null; }
+};
 
 const isIdnSlug = (param: string) => {
   if (!param) return false;
@@ -55,6 +62,7 @@ interface SRComment {
   user_id: number;
 }
 
+// ── Showroom comment polling hook ─────────────────────────────────────────────
 function useShowroomComments(roomId: number | null) {
   const [comments, setComments] = useState<SRComment[]>([]);
   const [loading, setLoading]   = useState(true);
@@ -108,6 +116,7 @@ function useShowroomComments(roomId: number | null) {
   return { comments, loading, error, lastPoll, retry: fetchComments };
 }
 
+// ── HLS Player ────────────────────────────────────────────────────────────────
 function HlsPlayer({
   src, title, qualities, onQualityChange, currentQuality, qualityMode, onModeChange, isIdn,
 }: {
@@ -130,11 +139,12 @@ function HlsPlayer({
     if (hlsRef.current) { hlsRef.current.destroy(); hlsRef.current = null; }
   }, []);
 
-  // Init HLS — hanya re-run saat src berubah
   useEffect(() => {
     const video = videoRef.current;
     if (!video || !src) return;
+
     destroyHls();
+
     if (!Hls.isSupported()) {
       if (video.canPlayType("application/vnd.apple.mpegurl")) {
         video.src = src;
@@ -143,39 +153,45 @@ function HlsPlayer({
       }
       return;
     }
+
     const hls = new Hls({
       enableWorker: true,
       lowLatencyMode: false,
-      maxBufferLength: 30,
+      maxBufferLength:    30,
       maxMaxBufferLength: 60,
-      maxBufferSize: 60 * 1000 * 1000,
+      maxBufferSize:      60 * 1000 * 1000,
       backBufferLength: 30,
-      liveSyncDurationCount: 3,
+      liveSyncDurationCount:       3,
       liveMaxLatencyDurationCount: 10,
-      liveDurationInfinity: true,
-      fragLoadingTimeOut: 10000,
-      fragLoadingMaxRetry: 6,
-      fragLoadingRetryDelay: 1000,
-      fragLoadingMaxRetryTimeout: 8000,
-      manifestLoadingTimeOut: 10000,
-      manifestLoadingMaxRetry: 4,
-      manifestLoadingRetryDelay: 1000,
-      levelLoadingTimeOut: 10000,
-      levelLoadingMaxRetry: 4,
-      levelLoadingRetryDelay: 1000,
-      startLevel: -1, // selalu auto di awal
-      abrEwmaDefaultEstimate: 500_000,
-      abrBandWidthFactor: 0.8,
-      abrBandWidthUpFactor: 0.7,
-      abrEwmaFastLive: 3.0,
-      abrEwmaSlowLive: 9.0,
-      nudgeOffset: 0.3,
-      nudgeMaxRetry: 5,
+      liveDurationInfinity:        true,
+      fragLoadingTimeOut:             10000,
+      fragLoadingMaxRetry:            6,
+      fragLoadingRetryDelay:          1000,
+      fragLoadingMaxRetryTimeout:     8000,
+      manifestLoadingTimeOut:         10000,
+      manifestLoadingMaxRetry:        4,
+      manifestLoadingRetryDelay:      1000,
+      levelLoadingTimeOut:            10000,
+      levelLoadingMaxRetry:           4,
+      levelLoadingRetryDelay:         1000,
+      startLevel:              qualityMode === "auto" ? -1 : undefined,
+      abrEwmaDefaultEstimate:  500_000,
+      abrBandWidthFactor:      0.8,
+      abrBandWidthUpFactor:    0.7,
+      abrEwmaFastLive:         3.0,
+      abrEwmaSlowLive:         9.0,
+      nudgeOffset:    0.3,
+      nudgeMaxRetry:  5,
     });
+
     hlsRef.current = hls;
     hls.loadSource(src);
     hls.attachMedia(video);
-    hls.on(Hls.Events.MANIFEST_PARSED, () => { video.play().catch(() => {}); });
+
+    hls.on(Hls.Events.MANIFEST_PARSED, () => {
+      video.play().catch(() => {});
+    });
+
     hls.on(Hls.Events.LEVEL_SWITCHED, (_, data) => {
       const lvl = hls.levels[data.level];
       if (lvl) {
@@ -188,6 +204,7 @@ function HlsPlayer({
         );
       }
     });
+
     hls.on(Hls.Events.ERROR, (_, data) => {
       if (!data.fatal) return;
       if (data.type === Hls.ErrorTypes.NETWORK_ERROR) {
@@ -207,18 +224,9 @@ function HlsPlayer({
         }, 2000);
       }
     });
-    return destroyHls;
-  }, [src, destroyHls]);
 
-  // Quality level switching — TANPA ganti src
-  useEffect(() => {
-    if (!hlsRef.current) return;
-    if (qualityMode === "auto") {
-      hlsRef.current.currentLevel = -1;
-    } else if (currentQuality) {
-      hlsRef.current.currentLevel = currentQuality.index;
-    }
-  }, [qualityMode, currentQuality]);
+    return destroyHls;
+  }, [src, destroyHls]); // eslint-disable-line
 
   return (
     <div className="relative w-full rounded-2xl overflow-hidden bg-black shadow-2xl">
@@ -229,6 +237,7 @@ function HlsPlayer({
           display: none !important;
         }
       `}</style>
+
       <div className={isIdn ? "aspect-video" : ""}>
         <video
           ref={videoRef}
@@ -239,6 +248,7 @@ function HlsPlayer({
           title={title}
         />
       </div>
+
       {qualities.length > 0 && (
         <div className="absolute bottom-12 right-3 z-20">
           <button
@@ -282,6 +292,7 @@ function HlsPlayer({
   );
 }
 
+// ── IDN Chat Panel ────────────────────────────────────────────────────────────
 function IdnChatPanel({
   messages, chatInput, setChatInput, chatUser, isChatLoggingIn, onSend, chatEndRef, navigate,
 }: {
@@ -387,6 +398,7 @@ function IdnChatPanel({
   );
 }
 
+// ── Member/Showroom Chat Panel ────────────────────────────────────────────────
 function MemberChatPanel({
   comments, loading, error, lastPoll, retry,
 }: {
@@ -495,6 +507,7 @@ function MemberChatPanel({
   );
 }
 
+// ── Main ──────────────────────────────────────────────────────────────────────
 function LiveStream() {
   const { playbackId } = useParams<{ playbackId: string }>();
   const navigate       = useNavigate();
@@ -502,94 +515,196 @@ function LiveStream() {
   const isIdn    = isIdnSlug(playbackId || "");
   const isMember = !isIdn;
 
-  const [idnShow,        setIdnShow]        = useState<any>(null);
-  const [qualities,      setQualities]      = useState<QualityOption[]>([]);
-  const [qualityMode,    setQualityMode]    = useState<"auto" | "manual">("auto");
-  const [currentQuality, setCurrentQuality] = useState<QualityOption | null>(null);
-  const [hlsUrl,         setHlsUrl]         = useState("");
-  const [memberShow,     setMemberShow]     = useState<any>(null);
-  const [memberHlsUrl,   setMemberHlsUrl]   = useState("");
-const memberRoomId = useState<number>(null);
-  const [loading,        setLoading]        = useState(true);
-  const [error,          setError]          = useState("");
-  const [members]                           = useState<any[]>([]);
+  const [idnShow,           setIdnShow]           = useState<any>(null);
+  const [qualities,         setQualities]         = useState<QualityOption[]>([]);
+  const [qualityMode,       setQualityMode]       = useState<"auto" | "manual">("auto");
+  const [currentQuality,    setCurrentQuality]    = useState<QualityOption | null>(null);
+  const [hlsUrl,            setHlsUrl]            = useState("");
+  const [memberShow,        setMemberShow]        = useState<any>(null);
+  const [memberHlsUrl,      setMemberHlsUrl]      = useState("");
+  const [memberRoomId,      setMemberRoomId]      = useState<number | null>(null);
+  const [membershipLoading, setMembershipLoading] = useState(isIdn);
+  const [hasMembership,     setHasMembership]     = useState(false);
+  const [isVerified,        setIsVerified]        = useState(false);
+  const [showVerification,  setShowVerification]  = useState(false);
+  const [verifData,         setVerifData]         = useState({ email: "", code: "" });
+  const [verifyError,       setVerifyError]       = useState("");
+  const [verifying,         setVerifying]         = useState(false);
+  const [clientIP,          setClientIP]          = useState("");
+  const [loading,           setLoading]           = useState(true);
+  const [error,             setError]             = useState("");
+  const [members,           setMembers]           = useState<any[]>([]);
 
-  const [chatMessages,    setChatMessages]    = useState<ChatMessage[]>([]);
-  const [chatInput,       setChatInput]       = useState("");
-  const [chatUser,        setChatUser]        = useState<any>(null);
-  const [isChatLoggingIn, setIsChatLoggingIn] = useState(true);
+  const [chatMessages,      setChatMessages]      = useState<ChatMessage[]>([]);
+  const [chatInput,         setChatInput]         = useState("");
+  const [chatUser,          setChatUser]          = useState<any>(null);
+  const [isChatLoggingIn,   setIsChatLoggingIn]   = useState(true);
   const chatEndRef = useRef<HTMLDivElement>(null);
   const channelRef = useRef<any>(null);
 
   const { comments: srComments, loading: srLoading, error: srError, lastPoll: srLastPoll, retry: srRetry } =
     useShowroomComments(isMember ? memberRoomId : null);
 
-  // ── TEMPORARY: ambil stream dari qualities.json hardcoded ────────────────────
+  const fetchClientIP = async () => {
+    try {
+      const res = await fetch("https://api.ipify.org?format=json");
+      const data = await res.json();
+      setClientIP(data.ip);
+      return data.ip;
+    } catch { return "unknown"; }
+  };
+
+  const checkMembership = useCallback(async () => {
+    setMembershipLoading(true);
+    const session = getSession();
+    if (!session) { setMembershipLoading(false); return false; }
+    const uid = session.user?.user_id;
+    const token = session.token;
+    if (!uid || !token) { setMembershipLoading(false); return false; }
+    try {
+      const res = await fetch(`${API_BASE}/membership/status/${uid}?apikey=${API_KEY}`, {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      const data = await res.json();
+      if (data.status && data.data?.is_active && data.data?.membership_type === "monthly") {
+        setHasMembership(true); setMembershipLoading(false); return true;
+      }
+    } catch {}
+    setMembershipLoading(false);
+    return false;
+  }, []);
+
+  const checkExistingVerification = async () => {
+    const stored = localStorage.getItem("stream_verification");
+    if (!stored) { setShowVerification(true); return false; }
+    try {
+      const info = JSON.parse(stored);
+      if (!info.verified || !info.timestamp) { localStorage.removeItem("stream_verification"); setShowVerification(true); return false; }
+      const hoursDiff = (Date.now() - info.timestamp) / (1000 * 60 * 60);
+      if (hoursDiff > 5) { localStorage.removeItem("stream_verification"); setShowVerification(true); return false; }
+      const ip = await fetchClientIP();
+      if (info.ip !== ip) { info.ip = ip; localStorage.setItem("stream_verification", JSON.stringify(info)); }
+      setIsVerified(true); setShowVerification(false);
+      setVerifData({ email: info.email, code: info.code });
+      return true;
+    } catch { localStorage.removeItem("stream_verification"); setShowVerification(true); return false; }
+  };
+
+  const verifyAccess = async () => {
+    if (!verifData.email || !verifData.code) { setVerifyError("Email dan code wajib diisi"); return; }
+    setVerifying(true); setVerifyError("");
+    try {
+      const ip = clientIP || (await fetchClientIP());
+      const verifyRes = await fetch("https://v2.jkt48connect.com/api/codes/verify", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ email: verifData.email, code: verifData.code, apikey: "JKTCONNECT" }),
+      });
+      const verifyData = await verifyRes.json();
+      if (!verifyData.status) { setVerifyError(verifyData.message || "Code tidak valid atau sudah kedaluwarsa"); setVerifying(false); return; }
+      const codeData = verifyData.data;
+      if (!codeData.is_active) { setVerifyError("Code ini sudah tidak aktif"); setVerifying(false); return; }
+      const usageCount = parseInt(codeData.usage_count) || 0;
+      const usageLimit = parseInt(codeData.usage_limit) || 1;
+      const hasUsageLeft = usageCount < usageLimit;
+      if (codeData.is_used && !hasUsageLeft) {
+        const listRes = await fetch(`https://v2.jkt48connect.com/api/codes/list?email=${verifData.email}&apikey=JKTCONNECT`);
+        const listData = await listRes.json();
+        if (listData.status && listData.data?.wotatokens) {
+          const userCode = listData.data.wotatokens.find((c: any) => c.code === verifData.code);
+          if (userCode) {
+            if (userCode.ip_address && userCode.ip_address !== "" && userCode.ip_address !== ip) {
+              setVerifyError("Code ini sudah digunakan dari IP address yang berbeda"); setVerifying(false); return;
+            }
+            localStorage.setItem("stream_verification", JSON.stringify({ email: verifData.email, code: verifData.code, ip, timestamp: Date.now(), verified: true }));
+            setIsVerified(true); setShowVerification(false); setVerifying(false); return;
+          }
+        }
+        setVerifyError("Code sudah tidak dapat digunakan"); setVerifying(false); return;
+      }
+      const useRes = await fetch("https://v2.jkt48connect.com/api/codes/use", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ email: verifData.email, code: verifData.code, apikey: "JKTCONNECT" }),
+      });
+      const useData = await useRes.json();
+      if (useData.status) {
+        localStorage.setItem("stream_verification", JSON.stringify({ email: verifData.email, code: verifData.code, ip, timestamp: Date.now(), verified: true }));
+        setIsVerified(true); setShowVerification(false); setVerifying(false);
+      } else { setVerifyError(useData.message || "Gagal menggunakan code"); setVerifying(false); }
+    } catch { setVerifyError("Terjadi kesalahan saat verifikasi. Silakan coba lagi."); setVerifying(false); }
+  };
+
+  // ── UPDATED: loadIdnStream — cek slug di IDN API dulu, lalu fetch qualities ─
   const loadIdnStream = useCallback(async () => {
     setLoading(true); setError("");
     try {
-      const res  = await fetch(TEMP_QUALITIES_URL);
-      const data = await res.json();
-
-      if (!data.success) {
-        setError("Gagal mengambil data stream"); setLoading(false); return;
+      // 1. Cek slug di IDN API
+      const idnRes = await fetch(IDN_API);
+      const idnData = await idnRes.json();
+      if (!idnData || idnData.status !== 200 || !Array.isArray(idnData.data)) {
+        setError("Gagal mengambil data IDN Plus"); setLoading(false); return;
       }
+      const show = idnData.data.find((s: any) => s.slug === playbackId && s.status === "live");
+      if (!show) { setError("Show tidak ditemukan atau sudah berakhir"); setLoading(false); return; }
+      setIdnShow(show);
 
-      setIdnShow({
-        title:       "Special Show JKT48 with Pocky",
-        slug:        data.slug,
-        showId:      data.showId,
-        view_count:  0,
-        image_url:   "",
-        idnliveplus: { description: "Special Show JKT48 × Pocky" },
-      });
+      // 2. Fetch qualities dari play.jkt48connect.com menggunakan slug (tanpa showId)
+      const qualRes = await fetch(`${PLAY_HOST}/live/idn/${show.slug}/qualities.json`);
+      const qualData = await qualRes.json();
+      if (qualData.success && Array.isArray(qualData.qualities)) {
+        setQualities(qualData.qualities);
+      }
+      // 3. Gunakan auto_url dari response, fallback ke manual construct
+      setHlsUrl(qualData.auto_url || `${PLAY_HOST}/live/idn/${show.slug}/master.m3u8`);
 
-      if (Array.isArray(data.qualities)) setQualities(data.qualities);
-
-      // Selalu gunakan master.m3u8 — HLS.js yang handle level
-      setHlsUrl(TEMP_MASTER_URL);
-      setMemberHlsUrl(TEMP_MASTER_URL);
+      // 4. Fetch lineup theater (best-effort)
+      try {
+        const theaterRes = await fetch(`https://v2.jkt48connect.com/api/jkt48/theater?apikey=${API_KEY}`);
+        const theaterData = await theaterRes.json();
+        if (theaterData.theater?.length > 0) {
+          const now = Date.now();
+          let nearest = theaterData.theater[0];
+          let minDiff = Math.abs(new Date(nearest.date).getTime() - now);
+          theaterData.theater.forEach((s: any) => {
+            const diff = Math.abs(new Date(s.date).getTime() - now);
+            if (diff < minDiff) { minDiff = diff; nearest = s; }
+          });
+          const detailRes = await fetch(`https://v2.jkt48connect.com/api/jkt48/theater/${nearest.id}?apikey=${API_KEY}`);
+          const detailData = await detailRes.json();
+          if (detailData.shows?.[0]?.members) setMembers(detailData.shows[0].members);
+        }
+      } catch {}
       setLoading(false);
-    } catch {
-      setError("Terjadi kesalahan saat memuat stream."); setLoading(false);
-    }
-  }, []);
+    } catch { setError("Terjadi kesalahan saat memuat stream."); setLoading(false); }
+  }, [playbackId]);
 
   const loadMemberStream = useCallback(async () => {
     setLoading(true); setError("");
     try {
-      const res  = await fetch(TEMP_QUALITIES_URL);
+      const res = await fetch(LIVE_API);
       const data = await res.json();
-
-      if (!data.success) {
-        setError("Gagal mengambil data stream"); setLoading(false); return;
-      }
-
-      setMemberShow({
-        name:       "Special Show JKT48 with Pocky",
-        type:       "IDN",
-        started_at: new Date().toISOString(),
-        img:        "",
-        img_alt:    "",
-      });
-
-      if (Array.isArray(data.qualities)) setQualities(data.qualities);
-      setMemberHlsUrl(TEMP_MASTER_URL);
+      if (!Array.isArray(data)) { setError("Gagal mengambil data live member"); setLoading(false); return; }
+      const show = data.find((s: any) => s.url_key === playbackId);
+      if (!show) { setError("Member tidak sedang live saat ini"); setLoading(false); return; }
+      setMemberShow(show);
+      const streamUrl = show.streaming_url_list?.[0]?.url || null;
+      if (!streamUrl) { setError("URL stream tidak tersedia"); setLoading(false); return; }
+      setMemberHlsUrl(streamUrl);
+      if (show.room_id) setMemberRoomId(show.room_id);
       setLoading(false);
-    } catch {
-      setError("Terjadi kesalahan saat memuat stream member."); setLoading(false);
-    }
-  }, []);
-  // ─────────────────────────────────────────────────────────────────────────────
+    } catch { setError("Terjadi kesalahan saat memuat stream member."); setLoading(false); }
+  }, [playbackId]);
 
-  // Quality: tidak ganti src, cukup set index — HlsPlayer handle via useEffect
   const handleQualityChange = (q: QualityOption | null) => {
     setCurrentQuality(q);
+    if (!q || !idnShow) return;
+    setHlsUrl(q.manual_url);
   };
 
   const handleModeChange = (mode: "auto" | "manual") => {
     setQualityMode(mode);
-    if (mode === "auto") {
+    if (mode === "auto" && idnShow) {
+      // Gunakan auto_url pattern yang konsisten dengan slug
+      setHlsUrl(`${PLAY_HOST}/live/idn/${idnShow.slug}/master.m3u8`);
       setCurrentQuality(null);
     }
   };
@@ -667,28 +782,110 @@ const memberRoomId = useState<number>(null);
 
   useEffect(() => { chatEndRef.current?.scrollIntoView({ behavior: "smooth" }); }, [chatMessages]);
 
-  // ── Init: langsung load stream tanpa cek membership / verifikasi ─────────────
   useEffect(() => {
     if (isMember) {
       loadMemberStream();
     } else {
-      loadIdnStream();
+      const init = async () => {
+        await fetchClientIP();
+        const hasMember = await checkMembership();
+        if (hasMember) { setIsVerified(true); setShowVerification(false); await loadIdnStream(); }
+        else {
+          const verified = await checkExistingVerification();
+          if (verified) await loadIdnStream();
+          else setLoading(false);
+        }
+      };
+      init();
     }
-  }, []); // eslint-disable-line
-  // ─────────────────────────────────────────────────────────────────────────────
+  }, [isMember]); // eslint-disable-line
+
+  useEffect(() => { if (isIdn && isVerified && !idnShow) loadIdnStream(); }, [isVerified]); // eslint-disable-line
+
+  const handleLogout = () => {
+    localStorage.removeItem("stream_verification");
+    setIsVerified(false); setShowVerification(true);
+    setIdnShow(null); setHlsUrl(""); setQualities([]);
+    setVerifData({ email: "", code: "" });
+  };
 
   const showTitle = isIdn
     ? (idnShow?.title || "Live Stream JKT48")
     : (memberShow?.name || "Live Member JKT48");
 
-  const activeHlsUrl = hlsUrl || memberHlsUrl;
+  if (isIdn && membershipLoading) {
+    return (
+      <div className="min-h-screen rounded-2xl border border-gray-200 bg-white dark:border-gray-800 dark:bg-white/[0.03] flex items-center justify-center">
+        <div className="text-center">
+          <div className="w-10 h-10 border-[3px] border-gray-200 dark:border-gray-700 border-t-red-500 rounded-full animate-spin mx-auto mb-4" />
+          <p className="text-sm font-medium text-gray-500 dark:text-gray-400">Memeriksa akses...</p>
+        </div>
+      </div>
+    );
+  }
+
+  if (isIdn && showVerification && !isVerified) {
+    return (
+      <div className="min-h-screen rounded-2xl border border-gray-200 bg-white px-5 py-7 dark:border-gray-800 dark:bg-white/[0.03] xl:px-10 xl:py-12 flex items-center justify-center">
+        <div className="w-full max-w-[440px]">
+          <div className="text-center mb-8">
+            <div className="inline-flex items-center justify-center w-16 h-16 rounded-2xl bg-red-50 dark:bg-red-500/10 border border-red-200 dark:border-red-500/20 mb-4">
+              <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round" className="text-red-500">
+                <rect x="3" y="11" width="18" height="11" rx="2" ry="2" /><path d="M7 11V7a5 5 0 0 1 10 0v4" />
+              </svg>
+            </div>
+            <h3 className="text-2xl font-bold text-gray-800 dark:text-white/90 mb-1.5">Verifikasi Akses</h3>
+            <p className="text-sm text-gray-500 dark:text-gray-400">Masukkan email dan kode untuk mengakses live stream IDN Plus</p>
+          </div>
+          <div className="bg-gray-50 dark:bg-gray-800/50 rounded-2xl border border-gray-200 dark:border-gray-700 p-6 mb-4">
+            <form onSubmit={(e) => { e.preventDefault(); verifyAccess(); }} className="flex flex-col gap-4">
+              <div>
+                <label className="block text-xs font-semibold text-gray-600 dark:text-gray-400 mb-1.5 uppercase tracking-wide">Email</label>
+                <input type="email" value={verifData.email} onChange={(e) => { setVerifData((p) => ({ ...p, email: e.target.value })); setVerifyError(""); }} placeholder="email@example.com" required className="w-full px-4 py-3 rounded-xl border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-900/50 text-gray-900 dark:text-white text-sm outline-none focus:ring-2 focus:ring-red-500/30 focus:border-red-400 dark:focus:border-red-500 placeholder:text-gray-400 transition-all" />
+              </div>
+              <div>
+                <label className="block text-xs font-semibold text-gray-600 dark:text-gray-400 mb-1.5 uppercase tracking-wide">Verification Code</label>
+                <input type="text" value={verifData.code} onChange={(e) => { setVerifData((p) => ({ ...p, code: e.target.value })); setVerifyError(""); }} placeholder="Masukkan kode verifikasi" required className="w-full px-4 py-3 rounded-xl border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-900/50 text-gray-900 dark:text-white text-sm outline-none focus:ring-2 focus:ring-red-500/30 focus:border-red-400 dark:focus:border-red-500 placeholder:text-gray-400 tracking-widest transition-all" />
+              </div>
+              {verifyError && (
+                <div className="flex items-center gap-2.5 px-4 py-3 rounded-xl bg-red-50 dark:bg-red-500/10 border border-red-200 dark:border-red-500/20 text-red-600 dark:text-red-400 text-xs font-medium">
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="flex-shrink-0"><circle cx="12" cy="12" r="10" /><line x1="12" y1="8" x2="12" y2="12" /><line x1="12" y1="16" x2="12.01" y2="16" /></svg>
+                  {verifyError}
+                </div>
+              )}
+              <button type="submit" disabled={verifying} className={`flex items-center justify-center gap-2 px-4 py-3.5 rounded-xl border-0 text-sm font-bold text-white transition-all duration-200 mt-1 ${verifying ? "bg-red-400 cursor-not-allowed" : "bg-red-500 hover:bg-red-600 cursor-pointer shadow-lg shadow-red-500/25 hover:shadow-red-500/40 hover:-translate-y-0.5"}`}>
+                {verifying ? (<><div className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" />Memverifikasi...</>) : (<><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><polyline points="20 6 9 17 4 12" /></svg>Verifikasi Akses</>)}
+              </button>
+            </form>
+          </div>
+          <div className="bg-gray-50 dark:bg-gray-800/30 rounded-xl border border-gray-200 dark:border-gray-700/50 p-4 mb-3">
+            <p className="text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-2">Informasi</p>
+            <ul className="space-y-1">
+              {["Code verifikasi hanya dapat digunakan sekali", "IP address akan dicatat untuk keamanan", "Akses berlaku selama 5 jam", "Session tetap aktif saat refresh halaman"].map((info, i) => (
+                <li key={i} className="flex items-start gap-2 text-xs text-gray-500 dark:text-gray-400"><span className="text-gray-300 dark:text-gray-600 mt-0.5">•</span>{info}</li>
+              ))}
+            </ul>
+            <div className="mt-3 pt-3 border-t border-gray-200 dark:border-gray-700/50 text-xs text-gray-500 dark:text-gray-400">
+              Punya membership monthly?{" "}<span onClick={() => navigate("/signin")} className="text-red-500 cursor-pointer font-bold hover:underline">Login di sini</span>
+            </div>
+          </div>
+          <button onClick={() => navigate(-1)} className="w-full py-3 rounded-xl border border-gray-200 dark:border-gray-700 bg-transparent text-gray-500 dark:text-gray-400 text-sm font-medium cursor-pointer hover:bg-gray-50 dark:hover:bg-gray-800/50 transition-colors flex items-center justify-center gap-1.5">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="15 18 9 12 15 6" /></svg>
+            Kembali
+          </button>
+        </div>
+      </div>
+    );
+  }
 
   if (loading) {
     return (
       <div className="min-h-screen rounded-2xl border border-gray-200 bg-white dark:border-gray-800 dark:bg-white/[0.03] flex items-center justify-center">
         <div className="text-center">
           <div className="w-10 h-10 border-[3px] border-gray-200 dark:border-gray-700 border-t-red-500 rounded-full animate-spin mx-auto mb-4" />
-          <p className="text-sm font-medium text-gray-500 dark:text-gray-400">Memuat stream...</p>
+          <p className="text-sm font-medium text-gray-500 dark:text-gray-400">
+            {isIdn ? "Memuat IDN Live Plus..." : "Memuat live stream member..."}
+          </p>
         </div>
       </div>
     );
@@ -726,21 +923,20 @@ const memberRoomId = useState<number>(null);
           </div>
           {isIdn && <span className="px-3 py-1.5 rounded-full bg-blue-50 dark:bg-blue-500/10 border border-blue-200 dark:border-blue-500/20 text-blue-600 dark:text-blue-400 text-[11px] font-bold">IDN Live+</span>}
           {isMember && <span className="px-3 py-1.5 rounded-full bg-emerald-50 dark:bg-emerald-500/10 border border-emerald-200 dark:border-emerald-500/20 text-emerald-600 dark:text-emerald-400 text-[11px] font-bold">Member Live</span>}
+          {isIdn && hasMembership && <span className="px-3 py-1.5 rounded-full bg-amber-50 dark:bg-amber-500/10 border border-amber-200 dark:border-amber-500/20 text-amber-600 dark:text-amber-400 text-[11px] font-bold">★ Monthly</span>}
+          {isIdn && idnShow && <span className="text-xs text-gray-500 dark:text-gray-400 font-medium">{idnShow.view_count?.toLocaleString() || 0} penonton</span>}
+          {isMember && memberShow && <span className="text-xs text-gray-500 dark:text-gray-400">{memberShow.type?.toUpperCase()} · Mulai {new Date(memberShow.started_at).toLocaleTimeString("id-ID", { hour: "2-digit", minute: "2-digit" })} WIB</span>}
+          {isIdn && !hasMembership && isVerified && (
+            <button onClick={handleLogout} className="ml-auto px-3 py-1.5 rounded-xl border border-gray-200 dark:border-gray-700 bg-transparent text-gray-500 dark:text-gray-400 text-[11px] font-semibold cursor-pointer hover:bg-gray-50 dark:hover:bg-gray-800/50 transition-colors">Logout</button>
+          )}
         </div>
 
         <div className="grid grid-cols-1 xl:grid-cols-[1fr_360px] gap-6">
           <div className="flex flex-col gap-5">
-            {activeHlsUrl ? (
-              <HlsPlayer
-                src={activeHlsUrl}
-                title={showTitle}
-                qualities={qualities}
-                onQualityChange={handleQualityChange}
-                currentQuality={currentQuality}
-                qualityMode={qualityMode}
-                onModeChange={handleModeChange}
-                isIdn={isIdn}
-              />
+            {isIdn && hlsUrl ? (
+              <HlsPlayer src={hlsUrl} title={showTitle} qualities={qualities} onQualityChange={handleQualityChange} currentQuality={currentQuality} qualityMode={qualityMode} onModeChange={handleModeChange} isIdn={true} />
+            ) : isMember && memberHlsUrl ? (
+              <HlsPlayer src={memberHlsUrl} title={showTitle} qualities={[]} onQualityChange={() => {}} currentQuality={null} qualityMode="auto" onModeChange={() => {}} isIdn={false} />
             ) : (
               <div className="aspect-video bg-gray-100 dark:bg-gray-800/50 rounded-2xl flex items-center justify-center border border-gray-200 dark:border-gray-700">
                 <div className="w-10 h-10 border-[3px] border-gray-200 dark:border-gray-700 border-t-red-500 rounded-full animate-spin" />
@@ -755,6 +951,7 @@ const memberRoomId = useState<number>(null);
                   <div className="flex-1 min-w-0">
                     <h3 className="text-base font-bold text-gray-800 dark:text-white/90 mb-2">{idnShow.title}</h3>
                     <div className="flex flex-wrap gap-3 text-xs text-gray-500 dark:text-gray-400 mb-2">
+                      <span className="flex items-center gap-1"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>{idnShow.view_count?.toLocaleString() || 0}</span>
                       {idnShow.showId && <span>#{idnShow.showId}</span>}
                     </div>
                     {idnShow.idnliveplus?.description && <p className="text-xs leading-relaxed text-gray-500 dark:text-gray-400 m-0 whitespace-pre-line">{idnShow.idnliveplus.description}</p>}
@@ -767,9 +964,7 @@ const memberRoomId = useState<number>(null);
               <div className="rounded-2xl border border-gray-200 dark:border-gray-800 bg-gray-50 dark:bg-gray-800/30 p-5">
                 <p className="text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-3">Detail Member</p>
                 <div className="flex gap-4 items-center">
-                  {(memberShow.img_alt || memberShow.img) && (
-                    <img src={memberShow.img_alt || memberShow.img} alt={memberShow.name} className="w-14 h-14 rounded-full object-cover flex-shrink-0 border-2 border-gray-200 dark:border-gray-700" onError={(e) => { (e.target as HTMLImageElement).style.display = "none"; }} />
-                  )}
+                  <img src={memberShow.img_alt || memberShow.img} alt={memberShow.name} className="w-14 h-14 rounded-full object-cover flex-shrink-0 border-2 border-gray-200 dark:border-gray-700" onError={(e) => { (e.target as HTMLImageElement).style.display = "none"; }} />
                   <div>
                     <h3 className="text-base font-bold text-gray-800 dark:text-white/90 mb-2">{memberShow.name}</h3>
                     <div className="flex gap-2 flex-wrap items-center">
@@ -781,7 +976,7 @@ const memberRoomId = useState<number>(null);
               </div>
             )}
 
-            {members.length > 0 && (
+            {isIdn && members.length > 0 && (
               <div className="rounded-2xl border border-gray-200 dark:border-gray-800 bg-gray-50 dark:bg-gray-800/30 p-5">
                 <p className="text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-4">Lineup Show · {members.length} Member</p>
                 <div className="grid grid-cols-[repeat(auto-fill,minmax(68px,1fr))] gap-3">
