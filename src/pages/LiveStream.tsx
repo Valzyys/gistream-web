@@ -679,8 +679,7 @@ const loadMemberStream = useCallback(async () => {
     const res = await fetch(LIVE_API);
     const data = await res.json();
     if (!Array.isArray(data)) { setError("Gagal mengambil data live member"); setLoading(false); return; }
-    
-    // Cari by url_key, slug, ATAU identifier (karena playbackId bisa salah satunya)
+
     const show = data.find((s: any) =>
       s.url_key === playbackId ||
       s.slug === playbackId ||
@@ -690,28 +689,51 @@ const loadMemberStream = useCallback(async () => {
 
     if (!show) { setError("Member tidak sedang live saat ini"); setLoading(false); return; }
     setMemberShow(show);
-    const streamUrl = show.streaming_url_list?.[0]?.url || null;
-    if (!streamUrl) { setError("URL stream tidak tersedia"); setLoading(false); return; }
-    setMemberHlsUrl(streamUrl);
+
+    // Jika is_group (JKT48 official / theater), fetch qualities dari play.jkt48connect.com
+    if (show.is_group || show.url_key === "jkt48-official") {
+      const identifier = show.identifier || show.slug;
+      try {
+        const qualRes = await fetch(`${PLAY_HOST}/live/idn/${identifier}/qualities.json`);
+        const qualData = await qualRes.json();
+        if (qualData.success && Array.isArray(qualData.qualities)) setQualities(qualData.qualities);
+        setMemberHlsUrl(qualData.auto_url || `${PLAY_HOST}/live/idn/${identifier}/master.m3u8`);
+      } catch {
+        // fallback ke streaming_url_list
+        const streamUrl = show.streaming_url_list?.[0]?.url || null;
+        if (!streamUrl) { setError("URL stream tidak tersedia"); setLoading(false); return; }
+        setMemberHlsUrl(streamUrl);
+      }
+    } else {
+      // Member biasa — pakai streaming_url_list langsung
+      const streamUrl = show.streaming_url_list?.[0]?.url || null;
+      if (!streamUrl) { setError("URL stream tidak tersedia"); setLoading(false); return; }
+      setMemberHlsUrl(streamUrl);
+    }
+
     if (show.room_id) setMemberRoomId(show.room_id);
     setLoading(false);
   } catch { setError("Terjadi kesalahan saat memuat stream member."); setLoading(false); }
 }, [playbackId]);
-
   const handleQualityChange = (q: QualityOption | null) => {
-    setCurrentQuality(q);
-    if (!q || !idnShow) return;
-    setHlsUrl(q.manual_url);
-  };
+  setCurrentQuality(q);
+  if (!q) return;
+  setHlsUrl(q.manual_url);        // untuk IDN
+  setMemberHlsUrl(q.manual_url);  // untuk member group
+};
 
-  const handleModeChange = (mode: "auto" | "manual") => {
-    setQualityMode(mode);
-    if (mode === "auto" && idnShow) {
-      // Gunakan auto_url pattern yang konsisten dengan slug
-      setHlsUrl(`${PLAY_HOST}/live/idn/${idnShow.slug}/master.m3u8`);
-      setCurrentQuality(null);
+const handleModeChange = (mode: "auto" | "manual") => {
+  setQualityMode(mode);
+  if (mode === "auto") {
+    const identifier = idnShow?.slug || memberShow?.identifier || memberShow?.slug;
+    if (identifier) {
+      const url = `${PLAY_HOST}/live/idn/${identifier}/master.m3u8`;
+      setHlsUrl(url);
+      setMemberHlsUrl(url);
     }
-  };
+    setCurrentQuality(null);
+  }
+};
 
   const initChat = useCallback(async () => {
     setIsChatLoggingIn(true);
@@ -938,9 +960,17 @@ const loadMemberStream = useCallback(async () => {
         <div className="grid grid-cols-1 xl:grid-cols-[1fr_360px] gap-6">
           <div className="flex flex-col gap-5">
             {isIdn && hlsUrl ? (
-              <HlsPlayer src={hlsUrl} title={showTitle} qualities={qualities} onQualityChange={handleQualityChange} currentQuality={currentQuality} qualityMode={qualityMode} onModeChange={handleModeChange} isIdn={true} />
-            ) : isMember && memberHlsUrl ? (
-              <HlsPlayer src={memberHlsUrl} title={showTitle} qualities={[]} onQualityChange={() => {}} currentQuality={null} qualityMode="auto" onModeChange={() => {}} isIdn={false} />
+              <HlsPlayer
+  src={memberHlsUrl}
+  title={showTitle}
+  qualities={qualities}
+  onQualityChange={handleQualityChange}
+  currentQuality={currentQuality}
+  qualityMode={qualityMode}
+  onModeChange={handleModeChange}
+  isIdn={!!(memberShow?.is_group || memberShow?.url_key === "jkt48-official")}
+/>
+              <HlsPlayer src={memberHlsUrl} title={showTitle} qualities={qualities} onQualityChange={handleQualityChange} currentQuality={currentQuality} qualityMode={qualityMode} onModeChange={handleModeChange} isIdn={show?.is_group || false} />
             ) : (
               <div className="aspect-video bg-gray-100 dark:bg-gray-800/50 rounded-2xl flex items-center justify-center border border-gray-200 dark:border-gray-700">
                 <div className="w-10 h-10 border-[3px] border-gray-200 dark:border-gray-700 border-t-red-500 rounded-full animate-spin" />
