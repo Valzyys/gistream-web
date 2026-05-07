@@ -636,48 +636,46 @@ function LiveStream() {
     }
   }, []);
 
-  // ── loadIdnStream: metadata dari IDN API, video HANYA dari qualities.json ────
-  const loadIdnStream = useCallback(async () => {
-    setLoading(true); setError("");
-    try {
-      const idnRes = await fetch(IDN_API);
-      const idnData = await idnRes.json();
-      if (!idnData || idnData.status !== 200 || !Array.isArray(idnData.data)) {
-        setError("Gagal mengambil data IDN Plus"); setLoading(false); return;
-      }
-      const show = idnData.data.find((s: any) => s.slug === playbackId && s.status === "live");
-      if (!show) {
-        setError("Show tidak ditemukan atau sudah berakhir"); setLoading(false); return;
-      }
-      setIdnShow(show);
+// ── loadIdnStream: TEMPORARY - hardcoded ke special-show-jkt48-with-pocky ─────
+const loadIdnStream = useCallback(async () => {
+  setLoading(true); setError("");
+  try {
+    const TEMP_SLUG = "special-show-jkt48-with-pocky-260421172032";
+    const TEMP_API  = `https://play.jkt48connect.com/live/idn/${TEMP_SLUG}/qualities.json`;
 
-      // Video: SELALU dari qualities.json — showId → slug → playbackId
-      const qualSlug = show.showId || show.slug || playbackId;
-      await fetchQualities(qualSlug);
+    const res  = await fetch(TEMP_API);
+    const data = await res.json();
 
-      // Theater members (opsional)
-      try {
-        const theaterRes = await fetch(`https://v2.jkt48connect.com/api/jkt48/theater?apikey=${API_KEY}`);
-        const theaterData = await theaterRes.json();
-        if (theaterData.theater?.length > 0) {
-          const now = Date.now();
-          let nearest = theaterData.theater[0];
-          let minDiff = Math.abs(new Date(nearest.date).getTime() - now);
-          theaterData.theater.forEach((s: any) => {
-            const diff = Math.abs(new Date(s.date).getTime() - now);
-            if (diff < minDiff) { minDiff = diff; nearest = s; }
-          });
-          const detailRes = await fetch(`https://v2.jkt48connect.com/api/jkt48/theater/${nearest.id}?apikey=${API_KEY}`);
-          const detailData = await detailRes.json();
-          if (detailData.shows?.[0]?.members) setMembers(detailData.shows[0].members);
-        }
-      } catch {}
-
-      setLoading(false);
-    } catch {
-      setError("Terjadi kesalahan saat memuat stream."); setLoading(false);
+    if (!data.success) {
+      setError("Gagal mengambil data stream"); setLoading(false); return;
     }
-  }, [playbackId, fetchQualities]);
+
+    // Set fake show info agar UI tidak kosong
+    setIdnShow({
+      title:       "Special Show JKT48 with Pocky",
+      slug:        data.slug,
+      showId:      data.showId,
+      view_count:  0,
+      image_url:   "",
+      idnliveplus: { description: "Special Show JKT48 × Pocky" },
+    });
+
+    // Set qualities dari API
+    if (Array.isArray(data.qualities)) {
+      setQualities(data.qualities);
+    }
+
+    // Set HLS URL dari auto_url
+    const autoUrl = data.auto_url;
+    setHlsUrl(autoUrl);
+    setMemberHlsUrl(autoUrl);
+
+    // Theater members (skip untuk temporary)
+    setLoading(false);
+  } catch {
+    setError("Terjadi kesalahan saat memuat stream."); setLoading(false);
+  }
+}, [playbackId]);
 
   // ── loadMemberStream: metadata dari LIVE API, video HANYA dari qualities.json ─
 const loadMemberStream = useCallback(async () => {
