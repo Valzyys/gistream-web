@@ -616,6 +616,14 @@ function LiveStream() {
     } catch { setVerifyError("Terjadi kesalahan saat verifikasi. Silakan coba lagi."); setVerifying(false); }
   };
 
+  const handleModeChange = (mode: "auto" | "manual") => {
+  setQualityMode(mode);
+  if (mode === "auto") {
+    setHlsUrl(`https://play.jkt48connect.com/live/idn/${TEMP_SLUG}/master.m3u8`);
+    setMemberHlsUrl(`https://play.jkt48connect.com/live/idn/${TEMP_SLUG}/master.m3u8`);
+    setCurrentQuality(null);
+  }
+};
   // ── SINGLE SOURCE OF TRUTH: semua video dari qualities.json ──────────────────
   const fetchQualities = useCallback(async (slug: string) => {
     try {
@@ -637,20 +645,19 @@ function LiveStream() {
   }, []);
 
 // ── loadIdnStream: TEMPORARY - hardcoded ke special-show-jkt48-with-pocky ─────
+const TEMP_SLUG = "special-show-jkt48-with-pocky-260421172032";
+const TEMP_QUALITIES_URL = `https://play.jkt48connect.com/live/idn/${TEMP_SLUG}/qualities.json`;
+
 const loadIdnStream = useCallback(async () => {
   setLoading(true); setError("");
   try {
-    const TEMP_SLUG = "special-show-jkt48-with-pocky-260421172032";
-    const TEMP_API  = `https://play.jkt48connect.com/live/idn/${TEMP_SLUG}/qualities.json`;
-
-    const res  = await fetch(TEMP_API);
+    const res  = await fetch(TEMP_QUALITIES_URL);
     const data = await res.json();
 
     if (!data.success) {
       setError("Gagal mengambil data stream"); setLoading(false); return;
     }
 
-    // Set fake show info agar UI tidak kosong
     setIdnShow({
       title:       "Special Show JKT48 with Pocky",
       slug:        data.slug,
@@ -660,91 +667,43 @@ const loadIdnStream = useCallback(async () => {
       idnliveplus: { description: "Special Show JKT48 × Pocky" },
     });
 
-    // Set qualities dari API
-    if (Array.isArray(data.qualities)) {
-      setQualities(data.qualities);
-    }
-
-    // Set HLS URL dari auto_url
-    const autoUrl = data.auto_url;
-    setHlsUrl(autoUrl);
-    setMemberHlsUrl(autoUrl);
-
-    // Theater members (skip untuk temporary)
+    if (Array.isArray(data.qualities)) setQualities(data.qualities);
+    setHlsUrl(data.auto_url);
+    setMemberHlsUrl(data.auto_url);
     setLoading(false);
   } catch {
     setError("Terjadi kesalahan saat memuat stream."); setLoading(false);
   }
-}, [playbackId]);
+}, []);
 
-  // ── loadMemberStream: metadata dari LIVE API, video HANYA dari qualities.json ─
 const loadMemberStream = useCallback(async () => {
   setLoading(true); setError("");
   try {
-    const res = await fetch(LIVE_API);
+    const res  = await fetch(TEMP_QUALITIES_URL);
     const data = await res.json();
-    
-    if (!Array.isArray(data)) { 
-      setError("Gagal mengambil data live member"); 
-      setLoading(false); 
-      return; 
+
+    if (!data.success) {
+      setError("Gagal mengambil data stream"); setLoading(false); return;
     }
 
-    // Flexible matching: url_key, identifier, atau slug
-    const show = data.find((s: any) => 
-      s.url_key === playbackId ||
-      s.identifier === playbackId ||
-      s.slug === playbackId ||
-      s.url_key?.toLowerCase() === playbackId?.toLowerCase() ||
-      s.identifier?.toLowerCase() === playbackId?.toLowerCase()
-    );
+    setMemberShow({
+      name:       "Special Show JKT48 with Pocky",
+      type:       "IDN",
+      started_at: new Date().toISOString(),
+      img:        "",
+      img_alt:    "",
+    });
 
-    if (!show) { 
-      // Cek apakah ada live sama sekali
-      if (data.length === 0) {
-        setError("Tidak ada member yang sedang live saat ini");
-      } else {
-        setError("Member tidak sedang live saat ini");
-      }
-      setLoading(false); 
-      return; 
-    }
-
-    setMemberShow(show);
-
-    // Ambil streaming URL — coba beberapa field
-    const streamUrl = 
-      show.streaming_url_list?.[0]?.url || 
-      show.stream_url ||
-      show.playback_url ||
-      null;
-
-    if (!streamUrl) { 
-      setError("URL stream tidak tersedia"); 
-      setLoading(false); 
-      return; 
-    }
-
-    setMemberHlsUrl(streamUrl);
-    if (show.room_id) setMemberRoomId(show.room_id);
+    if (Array.isArray(data.qualities)) setQualities(data.qualities);
+    setMemberHlsUrl(data.auto_url);
     setLoading(false);
-  } catch (e) { 
-    setError("Terjadi kesalahan saat memuat stream member."); 
-    setLoading(false); 
+  } catch {
+    setError("Terjadi kesalahan saat memuat stream."); setLoading(false);
   }
-}, [playbackId]);
- const handleQualityChange = (q: QualityOption | null) => {
+}, []);
+const handleQualityChange = (q: QualityOption | null) => {
   setCurrentQuality(q);
-  if (!q) {
-    // Auto mode: gunakan auto_url dari qualities.json
-    const autoUrl = "https://play.jkt48connect.com/live/idn/special-show-jkt48-with-pocky-260421172032/master.m3u8";
-    setHlsUrl(autoUrl);
-    setMemberHlsUrl(autoUrl);
-    return;
-  }
-  // Manual: WAJIB pakai playlist_url bukan manual_url
-  setHlsUrl(q.playlist_url);
-  setMemberHlsUrl(q.playlist_url);
+  // Tidak perlu ganti URL — HlsPlayer handle via currentLevel
 };
 
   const initChat = useCallback(async () => {
