@@ -509,7 +509,7 @@ function LiveStream() {
   const [hlsUrl,         setHlsUrl]         = useState("");
   const [memberShow,     setMemberShow]     = useState<any>(null);
   const [memberHlsUrl,   setMemberHlsUrl]   = useState("");
-const chatEndRef = useState<number | null>(null);
+const memberRoomId = useState<number | null>(null);
   const [loading,        setLoading]        = useState(true);
   const [error,          setError]          = useState("");
   const [members]                           = useState<any[]>([]);
