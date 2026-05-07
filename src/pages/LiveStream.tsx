@@ -680,46 +680,61 @@ function LiveStream() {
   }, [playbackId, fetchQualities]);
 
   // ── loadMemberStream: metadata dari LIVE API, video HANYA dari qualities.json ─
-  const loadMemberStream = useCallback(async () => {
-    setLoading(true); setError("");
-    try {
-      const res = await fetch(LIVE_API);
-      const data = await res.json();
-
-      if (!Array.isArray(data)) {
-        setError("Gagal mengambil data live member"); setLoading(false); return;
-      }
-
-      const show = data.find((s: any) =>
-        s.url_key === playbackId ||
-        s.identifier === playbackId ||
-        s.identifier?.toLowerCase() === playbackId?.toLowerCase() ||
-        s.url_key?.toLowerCase() === playbackId?.toLowerCase()
-      );
-
-      if (!show) {
-        setError(data.length === 0
-          ? "Tidak ada member yang sedang live saat ini"
-          : "Member tidak sedang live saat ini"
-        );
-        setLoading(false); return;
-      }
-
-      setMemberShow(show);
-
-      // Video: SELALU dari qualities.json — identifier → slug → url_key → playbackId
-      const qualSlug = show.identifier || show.slug || show.url_key || playbackId;
-      await fetchQualities(qualSlug);
-
-      // room_id untuk Showroom chat saja
-      if (show.room_id) setMemberRoomId(show.room_id);
-
-      setLoading(false);
-    } catch {
-      setError("Terjadi kesalahan saat memuat stream member."); setLoading(false);
+const loadMemberStream = useCallback(async () => {
+  setLoading(true); setError("");
+  try {
+    const res = await fetch(LIVE_API);
+    const data = await res.json();
+    
+    if (!Array.isArray(data)) { 
+      setError("Gagal mengambil data live member"); 
+      setLoading(false); 
+      return; 
     }
-  }, [playbackId, fetchQualities]);
 
+    // Flexible matching: url_key, identifier, atau slug
+    const show = data.find((s: any) => 
+      s.url_key === playbackId ||
+      s.identifier === playbackId ||
+      s.slug === playbackId ||
+      s.url_key?.toLowerCase() === playbackId?.toLowerCase() ||
+      s.identifier?.toLowerCase() === playbackId?.toLowerCase()
+    );
+
+    if (!show) { 
+      // Cek apakah ada live sama sekali
+      if (data.length === 0) {
+        setError("Tidak ada member yang sedang live saat ini");
+      } else {
+        setError("Member tidak sedang live saat ini");
+      }
+      setLoading(false); 
+      return; 
+    }
+
+    setMemberShow(show);
+
+    // Ambil streaming URL — coba beberapa field
+    const streamUrl = 
+      show.streaming_url_list?.[0]?.url || 
+      show.stream_url ||
+      show.playback_url ||
+      null;
+
+    if (!streamUrl) { 
+      setError("URL stream tidak tersedia"); 
+      setLoading(false); 
+      return; 
+    }
+
+    setMemberHlsUrl(streamUrl);
+    if (show.room_id) setMemberRoomId(show.room_id);
+    setLoading(false);
+  } catch (e) { 
+    setError("Terjadi kesalahan saat memuat stream member."); 
+    setLoading(false); 
+  }
+}, [playbackId]);
   // ── Quality controls ──────────────────────────────────────────────────────────
   const handleQualityChange = (q: QualityOption | null) => {
     setCurrentQuality(q);
