@@ -9,9 +9,12 @@ const supabase = createClient(supabaseUrl, supabaseKey);
 
 const API_BASE  = "https://v2.jkt48connect.com/api/jkt48connect";
 const API_KEY   = "JKTCONNECT";
-const PLAY_HOST = "https://play.jkt48connect.com";
-const IDN_API   = "https://v2.jkt48connect.com/api/jkt48/idnplus?apikey=JKTCONNECT";
-const LIVE_API  = "https://v2.jkt48connect.com/api/jkt48/live?apikey=JKTCONNECT";
+
+// ── TEMPORARY: hardcoded stream ──────────────────────────────────────────────
+const TEMP_SLUG          = "special-show-jkt48-with-pocky-260421172032";
+const TEMP_QUALITIES_URL = `https://play.jkt48connect.com/live/idn/${TEMP_SLUG}/qualities.json`;
+const TEMP_MASTER_URL    = `https://play.jkt48connect.com/live/idn/${TEMP_SLUG}/master.m3u8`;
+// ─────────────────────────────────────────────────────────────────────────────
 
 const getSession = () => {
   try {
@@ -137,6 +140,7 @@ function HlsPlayer({
     if (hlsRef.current) { hlsRef.current.destroy(); hlsRef.current = null; }
   }, []);
 
+  // Init HLS — hanya re-run saat src berubah
   useEffect(() => {
     const video = videoRef.current;
     if (!video || !src) return;
@@ -169,7 +173,7 @@ function HlsPlayer({
       levelLoadingTimeOut: 10000,
       levelLoadingMaxRetry: 4,
       levelLoadingRetryDelay: 1000,
-      startLevel: qualityMode === "auto" ? -1 : undefined,
+      startLevel: -1, // selalu auto di awal
       abrEwmaDefaultEstimate: 500_000,
       abrBandWidthFactor: 0.8,
       abrBandWidthUpFactor: 0.7,
@@ -214,7 +218,17 @@ function HlsPlayer({
       }
     });
     return destroyHls;
-  }, [src, destroyHls]); // eslint-disable-line
+  }, [src, destroyHls]);
+
+  // Quality level switching — TANPA ganti src
+  useEffect(() => {
+    if (!hlsRef.current) return;
+    if (qualityMode === "auto") {
+      hlsRef.current.currentLevel = -1;
+    } else if (currentQuality) {
+      hlsRef.current.currentLevel = currentQuality.index;
+    }
+  }, [qualityMode, currentQuality]);
 
   return (
     <div className="relative w-full rounded-2xl overflow-hidden bg-black shadow-2xl">
@@ -506,14 +520,13 @@ function LiveStream() {
   const [memberShow,        setMemberShow]        = useState<any>(null);
   const [memberHlsUrl,      setMemberHlsUrl]      = useState("");
   const [memberRoomId,      setMemberRoomId]      = useState<number | null>(null);
-  const [membershipLoading, setMembershipLoading] = useState(isIdn);
+  const [membershipLoading, setMembershipLoading] = useState(false); // skip membership check
   const [hasMembership,     setHasMembership]     = useState(false);
-  const [isVerified,        setIsVerified]        = useState(false);
-  const [showVerification,  setShowVerification]  = useState(false);
+  const [isVerified,        setIsVerified]        = useState(true);  // skip verification
+  const [showVerification,  setShowVerification]  = useState(false); // skip verification UI
   const [verifData,         setVerifData]         = useState({ email: "", code: "" });
   const [verifyError,       setVerifyError]       = useState("");
   const [verifying,         setVerifying]         = useState(false);
-  const [clientIP,          setClientIP]          = useState("");
   const [loading,           setLoading]           = useState(true);
   const [error,             setError]             = useState("");
   const [members,           setMembers]           = useState<any[]>([]);
@@ -528,183 +541,75 @@ function LiveStream() {
   const { comments: srComments, loading: srLoading, error: srError, lastPoll: srLastPoll, retry: srRetry } =
     useShowroomComments(isMember ? memberRoomId : null);
 
-  const fetchClientIP = async () => {
+  // ── TEMPORARY: ambil stream dari qualities.json hardcoded ────────────────────
+  const loadIdnStream = useCallback(async () => {
+    setLoading(true); setError("");
     try {
-      const res = await fetch("https://api.ipify.org?format=json");
+      const res  = await fetch(TEMP_QUALITIES_URL);
       const data = await res.json();
-      setClientIP(data.ip);
-      return data.ip;
-    } catch { return "unknown"; }
-  };
 
-  const checkMembership = useCallback(async () => {
-    setMembershipLoading(true);
-    const session = getSession();
-    if (!session) { setMembershipLoading(false); return false; }
-    const uid = session.user?.user_id;
-    const token = session.token;
-    if (!uid || !token) { setMembershipLoading(false); return false; }
-    try {
-      const res = await fetch(`${API_BASE}/membership/status/${uid}?apikey=${API_KEY}`, {
-        headers: { Authorization: `Bearer ${token}` },
-      });
-      const data = await res.json();
-      if (data.status && data.data?.is_active && data.data?.membership_type === "monthly") {
-        setHasMembership(true); setMembershipLoading(false); return true;
+      if (!data.success) {
+        setError("Gagal mengambil data stream"); setLoading(false); return;
       }
-    } catch {}
-    setMembershipLoading(false);
-    return false;
+
+      setIdnShow({
+        title:       "Special Show JKT48 with Pocky",
+        slug:        data.slug,
+        showId:      data.showId,
+        view_count:  0,
+        image_url:   "",
+        idnliveplus: { description: "Special Show JKT48 × Pocky" },
+      });
+
+      if (Array.isArray(data.qualities)) setQualities(data.qualities);
+
+      // Selalu gunakan master.m3u8 — HLS.js yang handle level
+      setHlsUrl(TEMP_MASTER_URL);
+      setMemberHlsUrl(TEMP_MASTER_URL);
+      setLoading(false);
+    } catch {
+      setError("Terjadi kesalahan saat memuat stream."); setLoading(false);
+    }
   }, []);
 
-  const checkExistingVerification = async () => {
-    const stored = localStorage.getItem("stream_verification");
-    if (!stored) { setShowVerification(true); return false; }
+  const loadMemberStream = useCallback(async () => {
+    setLoading(true); setError("");
     try {
-      const info = JSON.parse(stored);
-      if (!info.verified || !info.timestamp) { localStorage.removeItem("stream_verification"); setShowVerification(true); return false; }
-      const hoursDiff = (Date.now() - info.timestamp) / (1000 * 60 * 60);
-      if (hoursDiff > 5) { localStorage.removeItem("stream_verification"); setShowVerification(true); return false; }
-      const ip = await fetchClientIP();
-      if (info.ip !== ip) { info.ip = ip; localStorage.setItem("stream_verification", JSON.stringify(info)); }
-      setIsVerified(true); setShowVerification(false);
-      setVerifData({ email: info.email, code: info.code });
-      return true;
-    } catch { localStorage.removeItem("stream_verification"); setShowVerification(true); return false; }
-  };
+      const res  = await fetch(TEMP_QUALITIES_URL);
+      const data = await res.json();
 
-  const verifyAccess = async () => {
-    if (!verifData.email || !verifData.code) { setVerifyError("Email dan code wajib diisi"); return; }
-    setVerifying(true); setVerifyError("");
-    try {
-      const ip = clientIP || (await fetchClientIP());
-      const verifyRes = await fetch("https://v2.jkt48connect.com/api/codes/verify", {
-        method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ email: verifData.email, code: verifData.code, apikey: "JKTCONNECT" }),
-      });
-      const verifyData = await verifyRes.json();
-      if (!verifyData.status) { setVerifyError(verifyData.message || "Code tidak valid atau sudah kedaluwarsa"); setVerifying(false); return; }
-      const codeData = verifyData.data;
-      if (!codeData.is_active) { setVerifyError("Code ini sudah tidak aktif"); setVerifying(false); return; }
-      const usageCount = parseInt(codeData.usage_count) || 0;
-      const usageLimit = parseInt(codeData.usage_limit) || 1;
-      const hasUsageLeft = usageCount < usageLimit;
-      if (codeData.is_used && !hasUsageLeft) {
-        const listRes = await fetch(`https://v2.jkt48connect.com/api/codes/list?email=${verifData.email}&apikey=JKTCONNECT`);
-        const listData = await listRes.json();
-        if (listData.status && listData.data?.wotatokens) {
-          const userCode = listData.data.wotatokens.find((c: any) => c.code === verifData.code);
-          if (userCode) {
-            if (userCode.ip_address && userCode.ip_address !== "" && userCode.ip_address !== ip) {
-              setVerifyError("Code ini sudah digunakan dari IP address yang berbeda"); setVerifying(false); return;
-            }
-            localStorage.setItem("stream_verification", JSON.stringify({ email: verifData.email, code: verifData.code, ip, timestamp: Date.now(), verified: true }));
-            setIsVerified(true); setShowVerification(false); setVerifying(false); return;
-          }
-        }
-        setVerifyError("Code sudah tidak dapat digunakan"); setVerifying(false); return;
+      if (!data.success) {
+        setError("Gagal mengambil data stream"); setLoading(false); return;
       }
-      const useRes = await fetch("https://v2.jkt48connect.com/api/codes/use", {
-        method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ email: verifData.email, code: verifData.code, apikey: "JKTCONNECT" }),
+
+      setMemberShow({
+        name:       "Special Show JKT48 with Pocky",
+        type:       "IDN",
+        started_at: new Date().toISOString(),
+        img:        "",
+        img_alt:    "",
       });
-      const useData = await useRes.json();
-      if (useData.status) {
-        localStorage.setItem("stream_verification", JSON.stringify({ email: verifData.email, code: verifData.code, ip, timestamp: Date.now(), verified: true }));
-        setIsVerified(true); setShowVerification(false); setVerifying(false);
-      } else { setVerifyError(useData.message || "Gagal menggunakan code"); setVerifying(false); }
-    } catch { setVerifyError("Terjadi kesalahan saat verifikasi. Silakan coba lagi."); setVerifying(false); }
+
+      if (Array.isArray(data.qualities)) setQualities(data.qualities);
+      setMemberHlsUrl(TEMP_MASTER_URL);
+      setLoading(false);
+    } catch {
+      setError("Terjadi kesalahan saat memuat stream member."); setLoading(false);
+    }
+  }, []);
+  // ─────────────────────────────────────────────────────────────────────────────
+
+  // Quality: tidak ganti src, cukup set index — HlsPlayer handle via useEffect
+  const handleQualityChange = (q: QualityOption | null) => {
+    setCurrentQuality(q);
   };
 
   const handleModeChange = (mode: "auto" | "manual") => {
-  setQualityMode(mode);
-  if (mode === "auto") {
-    setHlsUrl(`https://play.jkt48connect.com/live/idn/${TEMP_SLUG}/master.m3u8`);
-    setMemberHlsUrl(`https://play.jkt48connect.com/live/idn/${TEMP_SLUG}/master.m3u8`);
-    setCurrentQuality(null);
-  }
-};
-  // ── SINGLE SOURCE OF TRUTH: semua video dari qualities.json ──────────────────
-  const fetchQualities = useCallback(async (slug: string) => {
-    try {
-      const res = await fetch(`${PLAY_HOST}/live/idn/${slug}/qualities.json`);
-      const data = await res.json();
-      if (data.success && Array.isArray(data.qualities)) {
-        setQualities(data.qualities);
-      }
-      const autoUrl = data.auto_url || `${PLAY_HOST}/live/idn/${slug}/master.m3u8`;
-      setHlsUrl(autoUrl);
-      setMemberHlsUrl(autoUrl);
-      return data;
-    } catch {
-      const fallback = `${PLAY_HOST}/live/idn/${slug}/master.m3u8`;
-      setHlsUrl(fallback);
-      setMemberHlsUrl(fallback);
-      return null;
+    setQualityMode(mode);
+    if (mode === "auto") {
+      setCurrentQuality(null);
     }
-  }, []);
-
-// ── loadIdnStream: TEMPORARY - hardcoded ke special-show-jkt48-with-pocky ─────
-const TEMP_SLUG = "special-show-jkt48-with-pocky-260421172032";
-const TEMP_QUALITIES_URL = `https://play.jkt48connect.com/live/idn/${TEMP_SLUG}/qualities.json`;
-
-const loadIdnStream = useCallback(async () => {
-  setLoading(true); setError("");
-  try {
-    const res  = await fetch(TEMP_QUALITIES_URL);
-    const data = await res.json();
-
-    if (!data.success) {
-      setError("Gagal mengambil data stream"); setLoading(false); return;
-    }
-
-    setIdnShow({
-      title:       "Special Show JKT48 with Pocky",
-      slug:        data.slug,
-      showId:      data.showId,
-      view_count:  0,
-      image_url:   "",
-      idnliveplus: { description: "Special Show JKT48 × Pocky" },
-    });
-
-    if (Array.isArray(data.qualities)) setQualities(data.qualities);
-    setHlsUrl(data.auto_url);
-    setMemberHlsUrl(data.auto_url);
-    setLoading(false);
-  } catch {
-    setError("Terjadi kesalahan saat memuat stream."); setLoading(false);
-  }
-}, []);
-
-const loadMemberStream = useCallback(async () => {
-  setLoading(true); setError("");
-  try {
-    const res  = await fetch(TEMP_QUALITIES_URL);
-    const data = await res.json();
-
-    if (!data.success) {
-      setError("Gagal mengambil data stream"); setLoading(false); return;
-    }
-
-    setMemberShow({
-      name:       "Special Show JKT48 with Pocky",
-      type:       "IDN",
-      started_at: new Date().toISOString(),
-      img:        "",
-      img_alt:    "",
-    });
-
-    if (Array.isArray(data.qualities)) setQualities(data.qualities);
-    setMemberHlsUrl(data.auto_url);
-    setLoading(false);
-  } catch {
-    setError("Terjadi kesalahan saat memuat stream."); setLoading(false);
-  }
-}, []);
-const handleQualityChange = (q: QualityOption | null) => {
-  setCurrentQuality(q);
-  // Tidak perlu ganti URL — HlsPlayer handle via currentLevel
-};
+  };
 
   const initChat = useCallback(async () => {
     setIsChatLoggingIn(true);
@@ -779,32 +684,15 @@ const handleQualityChange = (q: QualityOption | null) => {
 
   useEffect(() => { chatEndRef.current?.scrollIntoView({ behavior: "smooth" }); }, [chatMessages]);
 
+  // ── Init: langsung load stream tanpa cek membership / verifikasi ─────────────
   useEffect(() => {
     if (isMember) {
       loadMemberStream();
     } else {
-      const init = async () => {
-        await fetchClientIP();
-        const hasMember = await checkMembership();
-        if (hasMember) { setIsVerified(true); setShowVerification(false); await loadIdnStream(); }
-        else {
-          const verified = await checkExistingVerification();
-          if (verified) await loadIdnStream();
-          else setLoading(false);
-        }
-      };
-      init();
+      loadIdnStream();
     }
-  }, [isMember]); // eslint-disable-line
-
-  useEffect(() => { if (isIdn && isVerified && !idnShow) loadIdnStream(); }, [isVerified]); // eslint-disable-line
-
-  const handleLogout = () => {
-    localStorage.removeItem("stream_verification");
-    setIsVerified(false); setShowVerification(true);
-    setIdnShow(null); setHlsUrl(""); setMemberHlsUrl(""); setQualities([]);
-    setVerifData({ email: "", code: "" });
-  };
+  }, []); // eslint-disable-line
+  // ─────────────────────────────────────────────────────────────────────────────
 
   const showTitle = isIdn
     ? (idnShow?.title || "Live Stream JKT48")
@@ -812,79 +700,12 @@ const handleQualityChange = (q: QualityOption | null) => {
 
   const activeHlsUrl = hlsUrl || memberHlsUrl;
 
-  if (isIdn && membershipLoading) {
-    return (
-      <div className="min-h-screen rounded-2xl border border-gray-200 bg-white dark:border-gray-800 dark:bg-white/[0.03] flex items-center justify-center">
-        <div className="text-center">
-          <div className="w-10 h-10 border-[3px] border-gray-200 dark:border-gray-700 border-t-red-500 rounded-full animate-spin mx-auto mb-4" />
-          <p className="text-sm font-medium text-gray-500 dark:text-gray-400">Memeriksa akses...</p>
-        </div>
-      </div>
-    );
-  }
-
-  if (isIdn && showVerification && !isVerified) {
-    return (
-      <div className="min-h-screen rounded-2xl border border-gray-200 bg-white px-5 py-7 dark:border-gray-800 dark:bg-white/[0.03] xl:px-10 xl:py-12 flex items-center justify-center">
-        <div className="w-full max-w-[440px]">
-          <div className="text-center mb-8">
-            <div className="inline-flex items-center justify-center w-16 h-16 rounded-2xl bg-red-50 dark:bg-red-500/10 border border-red-200 dark:border-red-500/20 mb-4">
-              <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round" className="text-red-500">
-                <rect x="3" y="11" width="18" height="11" rx="2" ry="2" /><path d="M7 11V7a5 5 0 0 1 10 0v4" />
-              </svg>
-            </div>
-            <h3 className="text-2xl font-bold text-gray-800 dark:text-white/90 mb-1.5">Verifikasi Akses</h3>
-            <p className="text-sm text-gray-500 dark:text-gray-400">Masukkan email dan kode untuk mengakses live stream IDN Plus</p>
-          </div>
-          <div className="bg-gray-50 dark:bg-gray-800/50 rounded-2xl border border-gray-200 dark:border-gray-700 p-6 mb-4">
-            <form onSubmit={(e) => { e.preventDefault(); verifyAccess(); }} className="flex flex-col gap-4">
-              <div>
-                <label className="block text-xs font-semibold text-gray-600 dark:text-gray-400 mb-1.5 uppercase tracking-wide">Email</label>
-                <input type="email" value={verifData.email} onChange={(e) => { setVerifData((p) => ({ ...p, email: e.target.value })); setVerifyError(""); }} placeholder="email@example.com" required className="w-full px-4 py-3 rounded-xl border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-900/50 text-gray-900 dark:text-white text-sm outline-none focus:ring-2 focus:ring-red-500/30 focus:border-red-400 dark:focus:border-red-500 placeholder:text-gray-400 transition-all" />
-              </div>
-              <div>
-                <label className="block text-xs font-semibold text-gray-600 dark:text-gray-400 mb-1.5 uppercase tracking-wide">Verification Code</label>
-                <input type="text" value={verifData.code} onChange={(e) => { setVerifData((p) => ({ ...p, code: e.target.value })); setVerifyError(""); }} placeholder="Masukkan kode verifikasi" required className="w-full px-4 py-3 rounded-xl border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-900/50 text-gray-900 dark:text-white text-sm outline-none focus:ring-2 focus:ring-red-500/30 focus:border-red-400 dark:focus:border-red-500 placeholder:text-gray-400 tracking-widest transition-all" />
-              </div>
-              {verifyError && (
-                <div className="flex items-center gap-2.5 px-4 py-3 rounded-xl bg-red-50 dark:bg-red-500/10 border border-red-200 dark:border-red-500/20 text-red-600 dark:text-red-400 text-xs font-medium">
-                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="flex-shrink-0"><circle cx="12" cy="12" r="10" /><line x1="12" y1="8" x2="12" y2="12" /><line x1="12" y1="16" x2="12.01" y2="16" /></svg>
-                  {verifyError}
-                </div>
-              )}
-              <button type="submit" disabled={verifying} className={`flex items-center justify-center gap-2 px-4 py-3.5 rounded-xl border-0 text-sm font-bold text-white transition-all duration-200 mt-1 ${verifying ? "bg-red-400 cursor-not-allowed" : "bg-red-500 hover:bg-red-600 cursor-pointer shadow-lg shadow-red-500/25 hover:shadow-red-500/40 hover:-translate-y-0.5"}`}>
-                {verifying ? (<><div className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" />Memverifikasi...</>) : (<><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><polyline points="20 6 9 17 4 12" /></svg>Verifikasi Akses</>)}
-              </button>
-            </form>
-          </div>
-          <div className="bg-gray-50 dark:bg-gray-800/30 rounded-xl border border-gray-200 dark:border-gray-700/50 p-4 mb-3">
-            <p className="text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-2">Informasi</p>
-            <ul className="space-y-1">
-              {["Code verifikasi hanya dapat digunakan sekali", "IP address akan dicatat untuk keamanan", "Akses berlaku selama 5 jam", "Session tetap aktif saat refresh halaman"].map((info, i) => (
-                <li key={i} className="flex items-start gap-2 text-xs text-gray-500 dark:text-gray-400"><span className="text-gray-300 dark:text-gray-600 mt-0.5">•</span>{info}</li>
-              ))}
-            </ul>
-            <div className="mt-3 pt-3 border-t border-gray-200 dark:border-gray-700/50 text-xs text-gray-500 dark:text-gray-400">
-              Punya membership monthly?{" "}<span onClick={() => navigate("/signin")} className="text-red-500 cursor-pointer font-bold hover:underline">Login di sini</span>
-            </div>
-          </div>
-          <button onClick={() => navigate(-1)} className="w-full py-3 rounded-xl border border-gray-200 dark:border-gray-700 bg-transparent text-gray-500 dark:text-gray-400 text-sm font-medium cursor-pointer hover:bg-gray-50 dark:hover:bg-gray-800/50 transition-colors flex items-center justify-center gap-1.5">
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="15 18 9 12 15 6" /></svg>
-            Kembali
-          </button>
-        </div>
-      </div>
-    );
-  }
-
   if (loading) {
     return (
       <div className="min-h-screen rounded-2xl border border-gray-200 bg-white dark:border-gray-800 dark:bg-white/[0.03] flex items-center justify-center">
         <div className="text-center">
           <div className="w-10 h-10 border-[3px] border-gray-200 dark:border-gray-700 border-t-red-500 rounded-full animate-spin mx-auto mb-4" />
-          <p className="text-sm font-medium text-gray-500 dark:text-gray-400">
-            {isIdn ? "Memuat IDN Live Plus..." : "Memuat live stream member..."}
-          </p>
+          <p className="text-sm font-medium text-gray-500 dark:text-gray-400">Memuat stream...</p>
         </div>
       </div>
     );
@@ -922,12 +743,6 @@ const handleQualityChange = (q: QualityOption | null) => {
           </div>
           {isIdn && <span className="px-3 py-1.5 rounded-full bg-blue-50 dark:bg-blue-500/10 border border-blue-200 dark:border-blue-500/20 text-blue-600 dark:text-blue-400 text-[11px] font-bold">IDN Live+</span>}
           {isMember && <span className="px-3 py-1.5 rounded-full bg-emerald-50 dark:bg-emerald-500/10 border border-emerald-200 dark:border-emerald-500/20 text-emerald-600 dark:text-emerald-400 text-[11px] font-bold">Member Live</span>}
-          {isIdn && hasMembership && <span className="px-3 py-1.5 rounded-full bg-amber-50 dark:bg-amber-500/10 border border-amber-200 dark:border-amber-500/20 text-amber-600 dark:text-amber-400 text-[11px] font-bold">★ Monthly</span>}
-          {isIdn && idnShow && <span className="text-xs text-gray-500 dark:text-gray-400 font-medium">{idnShow.view_count?.toLocaleString() || 0} penonton</span>}
-          {isMember && memberShow && <span className="text-xs text-gray-500 dark:text-gray-400">{memberShow.type?.toUpperCase()} · Mulai {new Date(memberShow.started_at).toLocaleTimeString("id-ID", { hour: "2-digit", minute: "2-digit" })} WIB</span>}
-          {isIdn && !hasMembership && isVerified && (
-            <button onClick={handleLogout} className="ml-auto px-3 py-1.5 rounded-xl border border-gray-200 dark:border-gray-700 bg-transparent text-gray-500 dark:text-gray-400 text-[11px] font-semibold cursor-pointer hover:bg-gray-50 dark:hover:bg-gray-800/50 transition-colors">Logout</button>
-          )}
         </div>
 
         <div className="grid grid-cols-1 xl:grid-cols-[1fr_360px] gap-6">
@@ -957,7 +772,6 @@ const handleQualityChange = (q: QualityOption | null) => {
                   <div className="flex-1 min-w-0">
                     <h3 className="text-base font-bold text-gray-800 dark:text-white/90 mb-2">{idnShow.title}</h3>
                     <div className="flex flex-wrap gap-3 text-xs text-gray-500 dark:text-gray-400 mb-2">
-                      <span className="flex items-center gap-1"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>{idnShow.view_count?.toLocaleString() || 0}</span>
                       {idnShow.showId && <span>#{idnShow.showId}</span>}
                     </div>
                     {idnShow.idnliveplus?.description && <p className="text-xs leading-relaxed text-gray-500 dark:text-gray-400 m-0 whitespace-pre-line">{idnShow.idnliveplus.description}</p>}
@@ -970,7 +784,9 @@ const handleQualityChange = (q: QualityOption | null) => {
               <div className="rounded-2xl border border-gray-200 dark:border-gray-800 bg-gray-50 dark:bg-gray-800/30 p-5">
                 <p className="text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-3">Detail Member</p>
                 <div className="flex gap-4 items-center">
-                  <img src={memberShow.img_alt || memberShow.img} alt={memberShow.name} className="w-14 h-14 rounded-full object-cover flex-shrink-0 border-2 border-gray-200 dark:border-gray-700" onError={(e) => { (e.target as HTMLImageElement).style.display = "none"; }} />
+                  {(memberShow.img_alt || memberShow.img) && (
+                    <img src={memberShow.img_alt || memberShow.img} alt={memberShow.name} className="w-14 h-14 rounded-full object-cover flex-shrink-0 border-2 border-gray-200 dark:border-gray-700" onError={(e) => { (e.target as HTMLImageElement).style.display = "none"; }} />
+                  )}
                   <div>
                     <h3 className="text-base font-bold text-gray-800 dark:text-white/90 mb-2">{memberShow.name}</h3>
                     <div className="flex gap-2 flex-wrap items-center">
@@ -982,7 +798,7 @@ const handleQualityChange = (q: QualityOption | null) => {
               </div>
             )}
 
-            {isIdn && members.length > 0 && (
+            {members.length > 0 && (
               <div className="rounded-2xl border border-gray-200 dark:border-gray-800 bg-gray-50 dark:bg-gray-800/30 p-5">
                 <p className="text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-4">Lineup Show · {members.length} Member</p>
                 <div className="grid grid-cols-[repeat(auto-fill,minmax(68px,1fr))] gap-3">
