@@ -512,29 +512,22 @@ function LiveStream() {
   const isIdn    = isIdnSlug(playbackId || "");
   const isMember = !isIdn;
 
-  const [idnShow,           setIdnShow]           = useState<any>(null);
-  const [qualities,         setQualities]         = useState<QualityOption[]>([]);
-  const [qualityMode,       setQualityMode]       = useState<"auto" | "manual">("auto");
-  const [currentQuality,    setCurrentQuality]    = useState<QualityOption | null>(null);
-  const [hlsUrl,            setHlsUrl]            = useState("");
-  const [memberShow,        setMemberShow]        = useState<any>(null);
-  const [memberHlsUrl,      setMemberHlsUrl]      = useState("");
-  const [memberRoomId,      setMemberRoomId]      = useState<number | null>(null);
-  const [membershipLoading, setMembershipLoading] = useState(false); // skip membership check
-  const [hasMembership,     setHasMembership]     = useState(false);
-  const [isVerified,        setIsVerified]        = useState(true);  // skip verification
-  const [showVerification,  setShowVerification]  = useState(false); // skip verification UI
-  const [verifData,         setVerifData]         = useState({ email: "", code: "" });
-  const [verifyError,       setVerifyError]       = useState("");
-  const [verifying,         setVerifying]         = useState(false);
-  const [loading,           setLoading]           = useState(true);
-  const [error,             setError]             = useState("");
-  const [members,           setMembers]           = useState<any[]>([]);
+  const [idnShow,        setIdnShow]        = useState<any>(null);
+  const [qualities,      setQualities]      = useState<QualityOption[]>([]);
+  const [qualityMode,    setQualityMode]    = useState<"auto" | "manual">("auto");
+  const [currentQuality, setCurrentQuality] = useState<QualityOption | null>(null);
+  const [hlsUrl,         setHlsUrl]         = useState("");
+  const [memberShow,     setMemberShow]     = useState<any>(null);
+  const [memberHlsUrl,   setMemberHlsUrl]   = useState("");
+  const [memberRoomId,   setMemberRoomId]   = useState<number | null>(null);
+  const [loading,        setLoading]        = useState(true);
+  const [error,          setError]          = useState("");
+  const [members]                           = useState<any[]>([]);
 
-  const [chatMessages,      setChatMessages]      = useState<ChatMessage[]>([]);
-  const [chatInput,         setChatInput]         = useState("");
-  const [chatUser,          setChatUser]          = useState<any>(null);
-  const [isChatLoggingIn,   setIsChatLoggingIn]   = useState(true);
+  const [chatMessages,    setChatMessages]    = useState<ChatMessage[]>([]);
+  const [chatInput,       setChatInput]       = useState("");
+  const [chatUser,        setChatUser]        = useState<any>(null);
+  const [isChatLoggingIn, setIsChatLoggingIn] = useState(true);
   const chatEndRef = useRef<HTMLDivElement>(null);
   const channelRef = useRef<any>(null);
 
