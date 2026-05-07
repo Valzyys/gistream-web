@@ -659,37 +659,53 @@ function LiveStream() {
   };
 
   const loadIdnStream = useCallback(async () => {
-    setLoading(true); setError("");
+  setLoading(true); setError("");
+  try {
+    const idnRes = await fetch(IDN_API);
+    const idnData = await idnRes.json();
+    if (!idnData || idnData.status !== 200 || !Array.isArray(idnData.data)) { setError("Gagal mengambil data IDN Plus"); setLoading(false); return; }
+    const show = idnData.data.find((s: any) => s.slug === playbackId && s.status === "live");
+    if (!show) { setError("Show tidak ditemukan atau sudah berakhir"); setLoading(false); return; }
+    setIdnShow(show);
+
+    // ── Fetch qualities dari play.jkt48connect.com ─────────────────────────
     try {
-      const idnRes = await fetch(IDN_API);
-      const idnData = await idnRes.json();
-      if (!idnData || idnData.status !== 200 || !Array.isArray(idnData.data)) { setError("Gagal mengambil data IDN Plus"); setLoading(false); return; }
-      const show = idnData.data.find((s: any) => s.slug === playbackId && s.status === "live");
-      if (!show) { setError("Show tidak ditemukan atau sudah berakhir"); setLoading(false); return; }
-      setIdnShow(show);
-      const qualRes = await fetch(`${PLAY_HOST}/live/idn/${show.slug}/qualities.json?showId=${show.showId}`);
+      const qualRes = await fetch(
+        `${PLAY_HOST}/live/idn/${show.slug}/qualities.json?showId=${show.showId || ""}`
+      );
       const qualData = await qualRes.json();
-      if (qualData.success && Array.isArray(qualData.qualities)) setQualities(qualData.qualities);
-      setHlsUrl(`${PLAY_HOST}/live/idn/${show.slug}/master.m3u8?showId=${show.showId}`);
-      try {
-        const theaterRes = await fetch(`https://v2.jkt48connect.com/api/jkt48/theater?apikey=${API_KEY}`);
-        const theaterData = await theaterRes.json();
-        if (theaterData.theater?.length > 0) {
-          const now = Date.now();
-          let nearest = theaterData.theater[0];
-          let minDiff = Math.abs(new Date(nearest.date).getTime() - now);
-          theaterData.theater.forEach((s: any) => {
-            const diff = Math.abs(new Date(s.date).getTime() - now);
-            if (diff < minDiff) { minDiff = diff; nearest = s; }
-          });
-          const detailRes = await fetch(`https://v2.jkt48connect.com/api/jkt48/theater/${nearest.id}?apikey=${API_KEY}`);
-          const detailData = await detailRes.json();
-          if (detailData.shows?.[0]?.members) setMembers(detailData.shows[0].members);
-        }
-      } catch {}
-      setLoading(false);
-    } catch { setError("Terjadi kesalahan saat memuat stream."); setLoading(false); }
-  }, [playbackId]);
+      if (qualData.success && Array.isArray(qualData.qualities)) {
+        setQualities(qualData.qualities);
+      }
+      // auto_url sudah disediakan langsung oleh endpoint
+      setHlsUrl(
+        qualData.auto_url ||
+        `${PLAY_HOST}/live/idn/${show.slug}/master.m3u8`
+      );
+    } catch {
+      setHlsUrl(`${PLAY_HOST}/live/idn/${show.slug}/master.m3u8`);
+    }
+
+    try {
+      const theaterRes = await fetch(`https://v2.jkt48connect.com/api/jkt48/theater?apikey=${API_KEY}`);
+      const theaterData = await theaterRes.json();
+      if (theaterData.theater?.length > 0) {
+        const now = Date.now();
+        let nearest = theaterData.theater[0];
+        let minDiff = Math.abs(new Date(nearest.date).getTime() - now);
+        theaterData.theater.forEach((s: any) => {
+          const diff = Math.abs(new Date(s.date).getTime() - now);
+          if (diff < minDiff) { minDiff = diff; nearest = s; }
+        });
+        const detailRes = await fetch(`https://v2.jkt48connect.com/api/jkt48/theater/${nearest.id}?apikey=${API_KEY}`);
+        const detailData = await detailRes.json();
+        if (detailData.shows?.[0]?.members) setMembers(detailData.shows[0].members);
+      }
+    } catch {}
+
+    setLoading(false);
+  } catch { setError("Terjadi kesalahan saat memuat stream."); setLoading(false); }
+}, [playbackId]);
 
   const loadMemberStream = useCallback(async () => {
     setLoading(true); setError("");
@@ -709,19 +725,20 @@ function LiveStream() {
   }, [playbackId]);
 
   const handleQualityChange = (q: QualityOption | null) => {
-    setCurrentQuality(q);
-    if (!q || !idnShow) return;
-    setHlsUrl(q.manual_url);
-  };
+  setCurrentQuality(q);
+  if (!q || !idnShow) return;
+  // manual_url sudah lengkap dari qualities endpoint
+  setHlsUrl(q.manual_url);
+};
 
-  const handleModeChange = (mode: "auto" | "manual") => {
-    setQualityMode(mode);
-    if (mode === "auto" && idnShow) {
-      setHlsUrl(`${PLAY_HOST}/live/idn/${idnShow.slug}/master.m3u8?showId=${idnShow.showId}`);
-      setCurrentQuality(null);
-    }
-  };
-
+const handleModeChange = (mode: "auto" | "manual") => {
+  setQualityMode(mode);
+  if (mode === "auto" && idnShow) {
+    // Kembali ke master/auto URL
+    setHlsUrl(`${PLAY_HOST}/live/idn/${idnShow.slug}/master.m3u8`);
+    setCurrentQuality(null);
+  }
+};
   const initChat = useCallback(async () => {
     setIsChatLoggingIn(true);
     let userData: any = null;
