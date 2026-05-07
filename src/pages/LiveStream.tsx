@@ -959,23 +959,34 @@ const handleModeChange = (mode: "auto" | "manual") => {
 
         <div className="grid grid-cols-1 xl:grid-cols-[1fr_360px] gap-6">
           <div className="flex flex-col gap-5">
-            {isIdn && hlsUrl ? (
-              <HlsPlayer
-  src={memberHlsUrl}
-  title={showTitle}
-  qualities={qualities}
-  onQualityChange={handleQualityChange}
-  currentQuality={currentQuality}
-  qualityMode={qualityMode}
-  onModeChange={handleModeChange}
-  isIdn={!!(memberShow?.is_group || memberShow?.url_key === "jkt48-official")}
-/>
-              <HlsPlayer src={memberHlsUrl} title={showTitle} qualities={qualities} onQualityChange={handleQualityChange} currentQuality={currentQuality} qualityMode={qualityMode} onModeChange={handleModeChange} isIdn={show?.is_group || false} />
-            ) : (
-              <div className="aspect-video bg-gray-100 dark:bg-gray-800/50 rounded-2xl flex items-center justify-center border border-gray-200 dark:border-gray-700">
-                <div className="w-10 h-10 border-[3px] border-gray-200 dark:border-gray-700 border-t-red-500 rounded-full animate-spin" />
-              </div>
-            )}
+            // JADI:
+{isIdn && hlsUrl ? (
+  <HlsPlayer
+    src={hlsUrl}
+    title={showTitle}
+    qualities={qualities}
+    onQualityChange={handleQualityChange}
+    currentQuality={currentQuality}
+    qualityMode={qualityMode}
+    onModeChange={handleModeChange}
+    isIdn={true}
+  />
+) : isMember && memberHlsUrl ? (
+  <HlsPlayer
+    src={memberHlsUrl}
+    title={showTitle}
+    qualities={qualities}
+    onQualityChange={handleQualityChange}
+    currentQuality={currentQuality}
+    qualityMode={qualityMode}
+    onModeChange={handleModeChange}
+    isIdn={!!(memberShow?.is_group || memberShow?.url_key === "jkt48-official")}
+  />
+) : (
+  <div className="aspect-video bg-gray-100 dark:bg-gray-800/50 rounded-2xl flex items-center justify-center border border-gray-200 dark:border-gray-700">
+    <div className="w-10 h-10 border-[3px] border-gray-200 dark:border-gray-700 border-t-red-500 rounded-full animate-spin" />
+  </div>
+)}
 
             {isIdn && idnShow && (
               <div className="rounded-2xl border border-gray-200 dark:border-gray-800 bg-gray-50 dark:bg-gray-800/30 p-5">
