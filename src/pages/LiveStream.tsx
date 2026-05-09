@@ -164,6 +164,8 @@ function HlsPlayer({
     // Loader sederhana: tidak perlu unwrap layer apapun karena url-2
     // sudah merupakan direct proxy URL (proxy.mediastream48.workers.dev).
     // Hanya inject header x-showId.
+    // Cast ke `any` untuk menghindari TS error pada tipe Loader<LoaderContext>
+    // karena DefaultLoader sudah implement semua method yang diperlukan.
     class MediastreamLoader extends DefaultLoader {
       load(context: any, config: any, callbacks: any) {
         const prevXhrSetup = config.xhrSetup;
@@ -179,6 +181,7 @@ function HlsPlayer({
         super.load(context, config, callbacks);
       }
     }
+    const LoaderClass = MediastreamLoader as any;
 
     const hls = new Hls({
       enableWorker: true,
@@ -208,7 +211,7 @@ function HlsPlayer({
       abrEwmaSlowLive:         9.0,
       nudgeOffset:    0.3,
       nudgeMaxRetry:  5,
-      loader: MediastreamLoader,
+      loader: LoaderClass,
     });
 
     hlsRef.current = hls;
@@ -246,7 +249,7 @@ function HlsPlayer({
           const newHls = new Hls({
             lowLatencyMode: false,
             maxBufferLength: 30,
-            loader: MediastreamLoader,
+            loader: LoaderClass,
           });
           newHls.loadSource(src);
           newHls.attachMedia(v);
