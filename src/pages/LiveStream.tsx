@@ -161,21 +161,19 @@ function HlsPlayer({
     const currentShowId = showId;
     const DefaultLoader = Hls.DefaultConfig.loader as any;
 
-    // Loader sederhana: tidak perlu unwrap layer apapun karena url-2
-    // sudah merupakan direct proxy URL (proxy.mediastream48.workers.dev).
-    // Hanya inject header x-showId.
-    // Cast ke `any` untuk menghindari TS error pada tipe Loader<LoaderContext>
-    // karena DefaultLoader sudah implement semua method yang diperlukan.
+    // proxy.mediastream48.workers.dev memerlukan header "x-showId" di SETIAP request
+    // (manifest, level playlist, maupun segment).
+    // Gunakan custom loader + xhrSetup global agar header terkirim ke semua request.
     class MediastreamLoader extends DefaultLoader {
       load(context: any, config: any, callbacks: any) {
         const prevXhrSetup = config.xhrSetup;
         config = {
           ...config,
-          xhrSetup: (xhr: XMLHttpRequest, url: string) => {
+          xhrSetup: (xhr: XMLHttpRequest, _url: string) => {
             if (currentShowId) {
-              xhr.setRequestHeader("x-showId", currentShowId);
+              try { xhr.setRequestHeader("x-showId", currentShowId); } catch {}
             }
-            if (prevXhrSetup) prevXhrSetup(xhr, url);
+            if (prevXhrSetup) prevXhrSetup(xhr, _url);
           },
         };
         super.load(context, config, callbacks);
@@ -183,9 +181,16 @@ function HlsPlayer({
     }
     const LoaderClass = MediastreamLoader as any;
 
+    // xhrSetup global: safety-net untuk manifest request pertama
+    const xhrSetupGlobal = (xhr: XMLHttpRequest, _url: string) => {
+      if (currentShowId) {
+        try { xhr.setRequestHeader("x-showId", currentShowId); } catch {}
+      }
+    };
+
     const hls = new Hls({
-      enableWorker: true,
-      lowLatencyMode: false,
+      enableWorker:    false, // harus false agar xhrSetup bisa inject header
+      lowLatencyMode:  false,
       maxBufferLength:    30,
       maxMaxBufferLength: 60,
       maxBufferSize:      60 * 1000 * 1000,
@@ -211,8 +216,9 @@ function HlsPlayer({
       abrEwmaSlowLive:         9.0,
       nudgeOffset:    0.3,
       nudgeMaxRetry:  5,
-      loader: LoaderClass,
-    });
+      xhrSetup:       xhrSetupGlobal,
+      loader:         LoaderClass,
+    } as any);
 
     hlsRef.current = hls;
     hls.loadSource(src);
@@ -247,10 +253,12 @@ function HlsPlayer({
           const v = videoRef.current;
           if (!v) return;
           const newHls = new Hls({
-            lowLatencyMode: false,
+            enableWorker:    false,
+            lowLatencyMode:  false,
             maxBufferLength: 30,
-            loader: LoaderClass,
-          });
+            xhrSetup:        xhrSetupGlobal,
+            loader:          LoaderClass,
+          } as any);
           newHls.loadSource(src);
           newHls.attachMedia(v);
           newHls.on(Hls.Events.MANIFEST_PARSED, () => v.play().catch(() => {}));
