@@ -7,14 +7,64 @@ const supabaseUrl = import.meta.env.VITE_SUPABASE_URL || "https://mzxfuaoihgzxvo
 const supabaseKey = import.meta.env.VITE_SUPABASE_ANON_KEY || "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im16eGZ1YW9paGd6eHZva3dhcmFvIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzQ0MDg0NjIsImV4cCI6MjA4OTk4NDQ2Mn0.OFYCkBFXCSfLn-wG94OHHKL5CX8T_BLrbDGPiBdPIog";
 const supabase = createClient(supabaseUrl, supabaseKey);
 
-const API_BASE  = "https://v2.jkt48connect.com/api/jkt48connect";
-const API_KEY   = "JKTCONNECT";
-const PLAY_HOST = "https://play.jkt48connect.com";
-const IDN_API   = "https://v2.jkt48connect.com/api/jkt48/idnplus?apikey=JKTCONNECT";
-const LIVE_API  = "https://v2.jkt48connect.com/api/jkt48/live?apikey=JKTCONNECT";
-const STREAM_API = (showId: string) =>
-  `https://v2.jkt48connect.com/api/jkt48/live/stream?apikey=JKTCONNECT&showId=${showId}`;
+const API_BASE = "https://v2.jkt48connect.com/api/jkt48connect";
+const API_KEY  = "JKTCONNECT";
+const IDN_API  = "https://v2.jkt48connect.com/api/jkt48/idnplus?apikey=JKTCONNECT";
+const LIVE_API = "https://v2.jkt48connect.com/api/jkt48/live?apikey=JKTCONNECT";
 
+// ── Mediastream48 constants ───────────────────────────────────────────────────
+const PARTNER_SECRET = "streamhanabira26";
+const X_TOKEN_ID     = "114e0e89-f8b4-44ee-9354-bb06805cc02f";
+const X_SEC_KEY      = "49c647f3-c84b-4b93-9b84-9d1ad158428e";
+
+const MEDIASTREAM_PLAYBACK = (showId: string) =>
+  `https://proxy.mediastream48.workers.dev/api/stream/v2/playback?showId=${showId}`;
+
+async function generateApiToken(showId: string): Promise<string> {
+  const rawSecret = `${X_SEC_KEY}:${X_TOKEN_ID}:${PARTNER_SECRET}`;
+  const keyData   = new TextEncoder().encode(rawSecret);
+  const hashBuf   = await crypto.subtle.digest("SHA-256", keyData);
+  const jwtSecret = Array.from(new Uint8Array(hashBuf))
+    .map(b => b.toString(16).padStart(2, "0")).join("");
+
+  const nowTs = Math.floor(Date.now() / 1000);
+  const expTs = nowTs + 7200;
+
+  const header  = btoa(JSON.stringify({ alg: "HS256", typ: "JWT" }))
+    .replace(/=/g, "").replace(/\+/g, "-").replace(/\//g, "_");
+  const payload = btoa(JSON.stringify({ sid: showId, tid: X_TOKEN_ID, exp: expTs }))
+    .replace(/=/g, "").replace(/\+/g, "-").replace(/\//g, "_");
+  const signingInput = `${header}.${payload}`;
+
+  const key = await crypto.subtle.importKey(
+    "raw",
+    new TextEncoder().encode(jwtSecret),
+    { name: "HMAC", hash: "SHA-256" },
+    false,
+    ["sign"]
+  );
+  const sigBuf = await crypto.subtle.sign("HMAC", key, new TextEncoder().encode(signingInput));
+  const sig    = btoa(String.fromCharCode(...new Uint8Array(sigBuf)))
+    .replace(/=/g, "").replace(/\+/g, "-").replace(/\//g, "_");
+
+  return `${signingInput}.${sig}`;
+}
+
+function buildMediaHeaders(xApiToken: string, showId: string): Record<string, string> {
+  return {
+    "Accept":          "*/*",
+    "Accept-Encoding": "gzip, deflate, br",
+    "Origin":          "https://stream.hanabira48.com",
+    "Referer":         "https://stream.hanabira48.com/",
+    "User-Agent":      "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/147.0.0.0 Safari/537.36",
+    "x-api-token":     xApiToken,
+    "x-sec-key":       X_SEC_KEY,
+    "x-showid":        showId,
+    "x-token-id":      X_TOKEN_ID,
+  };
+}
+
+// ── Auth helpers ──────────────────────────────────────────────────────────────
 const getSession = () => {
   try {
     const d = JSON.parse(
@@ -32,6 +82,7 @@ const isIdnSlug = (param: string) => {
   return /\d{4}-\d{2}-\d{2}/.test(param);
 };
 
+// ── Types ─────────────────────────────────────────────────────────────────────
 interface QualityOption {
   index:           number;
   name:            string;
@@ -40,8 +91,8 @@ interface QualityOption {
   bandwidth_label: string;
   resolution:      string;
   fps:             string;
-  manual_url:      string; // url-2 dari stream API
-  playlist_url:    string; // url theater (fallback)
+  manual_url:      string;
+  playlist_url:    string;
 }
 
 interface ChatMessage {
@@ -159,7 +210,7 @@ function HlsPlayer({
 
     const currentShowId = showId;
 
-    // ── Custom loader: inject x-showId header untuk proxy.mediastream48 ──
+    // ── Custom loader: inject mediastream48 headers ───────────────────────
     class ShowIdLoader {
       private ctrl: AbortController | null = null;
       context: any = null;
@@ -176,11 +227,19 @@ function HlsPlayer({
         this.ctrl    = new AbortController();
         this.stats.loading.start = performance.now();
 
-        fetch(context.url, {
-          signal:      this.ctrl.signal,
-          credentials: "omit",
-          headers:     { "x-showId": currentShowId },
-        })
+        // Generate fresh token per load
+        generateApiToken(currentShowId)
+          .then(xApiToken => {
+            const headers: Record<string, string> = {
+              ...buildMediaHeaders(xApiToken, currentShowId),
+            };
+
+            return fetch(context.url, {
+              signal:      this.ctrl!.signal,
+              credentials: "omit",
+              headers,
+            });
+          })
           .then(async (res) => {
             if (!res.ok) throw new Error(`HTTP ${res.status}`);
             this.stats.loading.first = performance.now();
@@ -700,7 +759,7 @@ function LiveStream() {
     } catch { setVerifyError("Terjadi kesalahan saat verifikasi. Silakan coba lagi."); setVerifying(false); }
   };
 
-  // ── Load IDN stream ─────────────────────────────────────────────────────────
+  // ── Load IDN stream — langsung dari mediastream48 ─────────────────────────
   const loadIdnStream = useCallback(async () => {
     setLoading(true); setError("");
     try {
@@ -714,100 +773,71 @@ function LiveStream() {
       if (!show) { setError("Show tidak ditemukan atau sudah berakhir"); setLoading(false); return; }
       setIdnShow(show);
 
-      const showId = show.showId || "";
+      const showId = (show.showId || "").toString().toUpperCase();
       setIdnShowId(showId);
 
-      let qualityOptions: QualityOption[] = [];
+      // Step 2: Generate JWT + fetch master playlist dari mediastream48
       let autoUrl = "";
+      let qualityOptions: QualityOption[] = [];
 
-      // Step 2: Fetch stream API → dapat url-2 per quality
       try {
-        const streamRes  = await fetch(STREAM_API(showId));
-        const streamData = await streamRes.json();
+        const xApiToken = await generateApiToken(showId);
+        const r = await fetch(MEDIASTREAM_PLAYBACK(showId), {
+          headers: buildMediaHeaders(xApiToken, showId),
+          redirect: "follow",
+        });
+        if (!r.ok) throw new Error(`Playback API error: ${r.status}`);
 
-        // Response: { success, showId, streams: [...], stream_url }
-        const streams: any[] = Array.isArray(streamData?.streams)
-          ? streamData.streams
-          : Array.isArray(streamData)
-          ? streamData
-          : [];
+        const m3u8Text    = await r.text();
+        const m3u8BaseUrl = r.url.substring(0, r.url.lastIndexOf("/") + 1);
 
-        if (streams.length > 0) {
-          const sorted = [...streams].sort(
-            (a, b) => parseInt(b.BANDWIDTH || "0") - parseInt(a.BANDWIDTH || "0")
-          );
+        if (m3u8Text.includes("#EXT-X-STREAM-INF")) {
+          // Parse master playlist → ambil semua variant
+          const lines: string[] = m3u8Text.split("\n");
+          const variants: { bandwidth: number; name: string; url: string }[] = [];
 
-          qualityOptions = sorted.map((s: any, idx: number) => {
-            const bw      = parseInt(s.BANDWIDTH || "0");
-            const bwLabel =
-              bw >= 1_000_000
-                ? (bw / 1_000_000).toFixed(1) + " Mbps"
-                : Math.round(bw / 1_000) + " Kbps";
+          for (let i = 0; i < lines.length; i++) {
+            const line = lines[i].trim();
+            if (!line.startsWith("#EXT-X-STREAM-INF")) continue;
+            const bw   = parseInt((line.match(/BANDWIDTH=(\d+)/i) || [])[1] || "0", 10);
+            const name = (line.match(/NAME="([^"]+)"/i) || [])[1] || "";
+            const next = lines[i + 1]?.trim();
+            if (!next || next.startsWith("#")) continue;
+            const varUrl = /^https?:\/\//i.test(next) ? next : m3u8BaseUrl + next;
+            variants.push({ bandwidth: bw, name, url: varUrl });
+            i++;
+          }
 
+          variants.sort((a, b) => b.bandwidth - a.bandwidth);
+
+          qualityOptions = variants.map((v, idx) => {
+            const bwLabel = v.bandwidth >= 1_000_000
+              ? (v.bandwidth / 1_000_000).toFixed(1) + " Mbps"
+              : Math.round(v.bandwidth / 1_000) + " Kbps";
             return {
               index:           idx,
-              name:            s.NAME || s.name || `Quality ${idx + 1}`,
-              quality:         s["GROUP-ID"] || s.name || "",
-              bandwidth:       bw,
+              name:            v.name || `Quality ${idx + 1}`,
+              quality:         v.name || `q${idx}`,
+              bandwidth:       v.bandwidth,
               bandwidth_label: bwLabel,
-              resolution:      s.RESOLUTION || "",
-              fps:             s["FRAME-RATE"] || "",
-              // url-2 = proxy mediastream langsung (butuh header x-showId)
-              manual_url:      s["url-2"] || s.url || "",
-              // url = theater worker (fallback)
-              playlist_url:    s.url || "",
+              resolution:      "",
+              fps:             "",
+              manual_url:      v.url,
+              playlist_url:    v.url,
             };
           });
 
           setQualities(qualityOptions);
-
-          // Auto = url-2 dari bandwidth tertinggi
-          autoUrl = sorted[0]?.["url-2"] || sorted[0]?.url || streamData.stream_url || "";
+          autoUrl = variants[0]?.url || "";
+        } else {
+          // Sudah media playlist langsung (bukan master)
+          autoUrl = r.url;
         }
-      } catch (streamErr) {
-        console.warn("Stream API gagal, fallback ke qualities.json:", streamErr);
-      }
-
-      // Fallback ke qualities.json
-      if (!autoUrl) {
-        try {
-          const qualRes  = await fetch(`${PLAY_HOST}/live/idn/${show.slug}/qualities.json?showId=${showId}`);
-          const qualData = await qualRes.json();
-
-          if (qualData.streams && Array.isArray(qualData.streams) && qualData.streams.length > 0) {
-            const sorted = [...qualData.streams].sort(
-              (a: any, b: any) => parseInt(b.BANDWIDTH || "0") - parseInt(a.BANDWIDTH || "0")
-            );
-            autoUrl = sorted[0]?.["url-2"] || sorted[0]?.url || "";
-
-            if (qualityOptions.length === 0) {
-              qualityOptions = sorted.map((s: any, idx: number) => {
-                const bw      = parseInt(s.BANDWIDTH || "0");
-                const bwLabel =
-                  bw >= 1_000_000
-                    ? (bw / 1_000_000).toFixed(1) + " Mbps"
-                    : Math.round(bw / 1_000) + " Kbps";
-                return {
-                  index:           idx,
-                  name:            s.NAME || s["GROUP-ID"] || `Quality ${idx + 1}`,
-                  quality:         s["GROUP-ID"] || "",
-                  bandwidth:       bw,
-                  bandwidth_label: bwLabel,
-                  resolution:      s.RESOLUTION || "",
-                  fps:             s["FRAME-RATE"] || "",
-                  manual_url:      s["url-2"] || s.url || "",
-                  playlist_url:    s.url || "",
-                };
-              });
-              setQualities(qualityOptions);
-            }
-          }
-        } catch {}
-      }
-
-      // Final fallback → theater worker
-      if (!autoUrl) {
-        autoUrl = `https://theater.jkt48connect.com/live/${showId}/1080p60/index.m3u8`;
+      } catch (e) {
+        console.error("Gagal fetch mediastream48:", e);
+        setError("Gagal mengambil stream dari server. Silakan coba lagi.");
+        setLoading(false);
+        return;
       }
 
       setHlsUrl(autoUrl);
@@ -817,9 +847,9 @@ function LiveStream() {
         const theaterRes  = await fetch(`https://v2.jkt48connect.com/api/jkt48/theater?apikey=${API_KEY}`);
         const theaterData = await theaterRes.json();
         if (theaterData.theater?.length > 0) {
-          const now    = Date.now();
-          let nearest  = theaterData.theater[0];
-          let minDiff  = Math.abs(new Date(nearest.date).getTime() - now);
+          const now   = Date.now();
+          let nearest = theaterData.theater[0];
+          let minDiff = Math.abs(new Date(nearest.date).getTime() - now);
           theaterData.theater.forEach((s: any) => {
             const diff = Math.abs(new Date(s.date).getTime() - now);
             if (diff < minDiff) { minDiff = diff; nearest = s; }
@@ -851,27 +881,23 @@ function LiveStream() {
     } catch { setError("Terjadi kesalahan saat memuat stream member."); setLoading(false); }
   }, [playbackId]);
 
-  // ── Quality change handlers ─────────────────────────────────────────────────
+  // ── Quality change handlers ───────────────────────────────────────────────
   const handleQualityChange = (q: QualityOption | null) => {
     setCurrentQuality(q);
     if (!q) return;
-    // manual_url = url-2, butuh header x-showId (di-inject ShowIdLoader)
-    if (q.manual_url) setHlsUrl(q.manual_url);
+    setHlsUrl(q.manual_url);
   };
 
   const handleModeChange = (mode: "auto" | "manual") => {
     setQualityMode(mode);
     if (mode === "auto") {
-      // Kembali ke url-2 bandwidth tertinggi
-      const best    = [...qualities].sort((a, b) => b.bandwidth - a.bandwidth)[0];
-      const autoUrl = best?.manual_url
-        || `https://theater.jkt48connect.com/live/${idnShowId}/1080p60/index.m3u8`;
-      setHlsUrl(autoUrl);
+      const best = [...qualities].sort((a, b) => b.bandwidth - a.bandwidth)[0];
+      if (best?.manual_url) setHlsUrl(best.manual_url);
       setCurrentQuality(null);
     }
   };
 
-  // ── Chat init ───────────────────────────────────────────────────────────────
+  // ── Chat init ─────────────────────────────────────────────────────────────
   const initChat = useCallback(async () => {
     setIsChatLoggingIn(true);
     let userData: any = null;
@@ -930,7 +956,7 @@ function LiveStream() {
     await channelRef.current?.send({ type: "broadcast", event: "pesan_baru", payload });
   };
 
-  // ── Effects ─────────────────────────────────────────────────────────────────
+  // ── Effects ───────────────────────────────────────────────────────────────
   useEffect(() => {
     if (!isIdn) return;
     const channel = supabase.channel(`chat-${playbackId}`, { config: { broadcast: { ack: true } } });
@@ -980,7 +1006,7 @@ function LiveStream() {
     ? (idnShow?.title || "Live Stream JKT48")
     : (memberShow?.name || "Live Member JKT48");
 
-  // ── Loading membership ──────────────────────────────────────────────────────
+  // ── Loading membership ────────────────────────────────────────────────────
   if (isIdn && membershipLoading) {
     return (
       <div className="min-h-screen rounded-2xl border border-gray-200 bg-white dark:border-gray-800 dark:bg-white/[0.03] flex items-center justify-center">
@@ -992,7 +1018,7 @@ function LiveStream() {
     );
   }
 
-  // ── Verification gate ───────────────────────────────────────────────────────
+  // ── Verification gate ─────────────────────────────────────────────────────
   if (isIdn && showVerification && !isVerified) {
     return (
       <div className="min-h-screen rounded-2xl border border-gray-200 bg-white px-5 py-7 dark:border-gray-800 dark:bg-white/[0.03] xl:px-10 xl:py-12 flex items-center justify-center">
@@ -1047,7 +1073,7 @@ function LiveStream() {
     );
   }
 
-  // ── Loading stream ──────────────────────────────────────────────────────────
+  // ── Loading stream ────────────────────────────────────────────────────────
   if (loading) {
     return (
       <div className="min-h-screen rounded-2xl border border-gray-200 bg-white dark:border-gray-800 dark:bg-white/[0.03] flex items-center justify-center">
@@ -1061,7 +1087,7 @@ function LiveStream() {
     );
   }
 
-  // ── Error ───────────────────────────────────────────────────────────────────
+  // ── Error ─────────────────────────────────────────────────────────────────
   if (error) {
     return (
       <div className="min-h-screen rounded-2xl border border-gray-200 bg-white px-5 py-7 dark:border-gray-800 dark:bg-white/[0.03] xl:px-10 xl:py-12 flex items-center justify-center">
@@ -1080,7 +1106,7 @@ function LiveStream() {
     );
   }
 
-  // ── Main render ─────────────────────────────────────────────────────────────
+  // ── Main render ───────────────────────────────────────────────────────────
   return (
     <div>
       <div className="rounded-2xl border border-gray-200 bg-white px-5 py-6 dark:border-gray-800 dark:bg-white/[0.03] xl:px-8 xl:py-7">
