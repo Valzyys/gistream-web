@@ -155,15 +155,67 @@ function HlsPlayer({
       return;
     }
 
-    // ── Custom Loader ────────────────────────────────────────────────────────
-    // url-2 (mediastream48 proxy) diakses langsung tanpa perlu ekstrak apapun.
-    // Cukup inject header x-showId ke setiap request hls.js.
+    // ── URL Unwrapper ────────────────────────────────────────────────────────
+    // Segment URLs yang di-resolve hls.js bisa terbungkus dalam beberapa layer:
+    //
+    //   Layer 1 (play proxy):
+    //     https://play.jkt48connect.com/hls/{double-encoded-theater-url}
+    //
+    //   Layer 2 (theater proxy):
+    //     https://theater.jkt48connect.com/proxy?url={encoded-mediastream-url}&sid=...
+    //
+    //   Layer 3 (target):
+    //     https://proxy.mediastream48.workers.dev/live/{base64}.php  ← yang kita inginkan
+    //
+    // Fungsi ini melakukan decode iteratif sampai tidak ada lagi layer wrapper.
+    function unwrapSegmentUrl(raw: string): string {
+      let url = raw;
+
+      try {
+        // Layer 1: play.jkt48connect.com/hls/{encoded}
+        // Path-nya: /hls/<encoded-url>  → ambil bagian setelah /hls/
+        const playMatch = url.match(/^https?:\/\/play\.jkt48connect\.com\/hls\/(.+)$/);
+        if (playMatch) {
+          // decode sekali (path sudah di-encode satu kali oleh play host)
+          url = decodeURIComponent(playMatch[1]);
+        }
+
+        // Layer 2: theater.jkt48connect.com/proxy?url=...&sid=...
+        // Bisa muncul setelah layer 1 di-decode, atau langsung sebagai input
+        if (url.includes("theater.jkt48connect.com/proxy")) {
+          const parsed = new URL(url);
+          const inner = parsed.searchParams.get("url");
+          if (inner) {
+            // inner mungkin masih double-encoded (%25 → %)
+            url = decodeURIComponent(inner);
+          }
+        }
+
+        // Layer 2b: jika masih ada %25 (triple-encoded), decode sekali lagi
+        if (url.includes("%25")) {
+          url = decodeURIComponent(url);
+        }
+
+        // Verifikasi: pastikan hasil akhir adalah URL yang valid dan bukan wrapper lagi
+        new URL(url); // throws jika tidak valid
+      } catch {
+        // Jika decode gagal, kembalikan URL asal agar tidak break
+        return raw;
+      }
+
+      return url;
+    }
+    // ────────────────────────────────────────────────────────────────────────
+
     const currentShowId = showId;
     const DefaultLoader = Hls.DefaultConfig.loader as any;
 
     class MediastreamLoader extends DefaultLoader {
       load(context: any, config: any, callbacks: any) {
-        // Inject header x-showId via xhrSetup
+        // Unwrap semua layer wrapper → dapat URL proxy.mediastream48.workers.dev langsung
+        context.url = unwrapSegmentUrl(context.url);
+
+        // Inject header x-showId ke setiap XHR request
         const prevXhrSetup = config.xhrSetup;
         config = {
           ...config,
@@ -178,7 +230,6 @@ function HlsPlayer({
         super.load(context, config, callbacks);
       }
     }
-    // ────────────────────────────────────────────────────────────────────────
 
     const hls = new Hls({
       enableWorker: true,
