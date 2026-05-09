@@ -177,7 +177,7 @@ function HlsPlayer({
                      bwEstimate: 0, loading: { start: 0, first: 0, end: 0 },
                      parsing: { start: 0, end: 0 }, buffering: { start: 0, first: 0, end: 0 } };
 
-      load(context: any, config: any, callbacks: any) {
+      load(context: any, _config: any, callbacks: any) {
         this.context = context;
         this.fetchCtrl = new AbortController();
         const { signal } = this.fetchCtrl;
