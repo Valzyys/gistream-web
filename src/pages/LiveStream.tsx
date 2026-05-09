@@ -30,25 +30,6 @@ const isIdnSlug = (param: string) => {
   return /\d{4}-\d{2}-\d{2}/.test(param);
 };
 
-/**
- * Dari URL theater proxy (https://theater.jkt48connect.com/proxy?url=...&sid=...)
- * ambil nilai ?url= saja (mediastream URL murni).
- * Jika bukan theater proxy, kembalikan URL asli.
- */
-function extractMediastreamUrl(rawUrl: string): string {
-  try {
-    const parsed = new URL(rawUrl);
-    if (
-      parsed.hostname === "theater.jkt48connect.com" &&
-      parsed.pathname === "/proxy"
-    ) {
-      const innerUrl = parsed.searchParams.get("url");
-      if (innerUrl) return innerUrl;
-    }
-  } catch {}
-  return rawUrl;
-}
-
 interface QualityOption {
   index:           number;
   name:            string;
@@ -57,7 +38,7 @@ interface QualityOption {
   bandwidth_label: string;
   resolution:      string;
   fps:             string;
-  manual_url:      string;
+  manual_url:      string;   // ← ini sekarang berisi url-2
   playlist_url:    string;
 }
 
@@ -175,19 +156,13 @@ function HlsPlayer({
     }
 
     // ── Custom Loader ────────────────────────────────────────────────────────
-    // Intercept setiap URL yang di-fetch hls.js:
-    //   - Jika URL adalah theater proxy → ambil ?url= (mediastream URL murni)
-    //   - Tambahkan header x-showId ke setiap request
+    // url-2 (mediastream48 proxy) diakses langsung tanpa perlu ekstrak apapun.
+    // Cukup inject header x-showId ke setiap request hls.js.
     const currentShowId = showId;
     const DefaultLoader = Hls.DefaultConfig.loader as any;
 
     class MediastreamLoader extends DefaultLoader {
       load(context: any, config: any, callbacks: any) {
-        const originalUrl: string = context.url;
-
-        // Ekstrak mediastream URL dari theater proxy jika perlu
-        context.url = extractMediastreamUrl(originalUrl);
-
         // Inject header x-showId via xhrSetup
         const prevXhrSetup = config.xhrSetup;
         config = {
@@ -233,7 +208,7 @@ function HlsPlayer({
       abrEwmaSlowLive:         9.0,
       nudgeOffset:    0.3,
       nudgeMaxRetry:  5,
-      loader: MediastreamLoader, // ← custom loader
+      loader: MediastreamLoader,
     });
 
     hlsRef.current = hls;
@@ -572,11 +547,13 @@ function LiveStream() {
   const isMember = !isIdn;
 
   const [idnShow,           setIdnShow]           = useState<any>(null);
-  const [idnShowId,         setIdnShowId]         = useState<string>("");  // ← showId untuk header x-showId
+  const [idnShowId,         setIdnShowId]         = useState<string>("");
   const [qualities,         setQualities]         = useState<QualityOption[]>([]);
   const [qualityMode,       setQualityMode]       = useState<"auto" | "manual">("auto");
   const [currentQuality,    setCurrentQuality]    = useState<QualityOption | null>(null);
   const [hlsUrl,            setHlsUrl]            = useState("");
+  // ── url-2 per quality, diindex by quality name (e.g. "1080p60") ──────────
+  const [streamUrls,        setStreamUrls]        = useState<Record<string, string>>({});
   const [memberShow,        setMemberShow]        = useState<any>(null);
   const [memberHlsUrl,      setMemberHlsUrl]      = useState("");
   const [memberRoomId,      setMemberRoomId]      = useState<number | null>(null);
@@ -702,22 +679,74 @@ function LiveStream() {
       if (!show) { setError("Show tidak ditemukan atau sudah berakhir"); setLoading(false); return; }
       setIdnShow(show);
 
-      // ── Simpan showId untuk dikirim sebagai header x-showId ───────────────
-      setIdnShowId(show.showId || "");
+      // ── Simpan showId untuk header x-showId ───────────────────────────────
+      const showId = show.showId || "";
+      setIdnShowId(showId);
 
       // ── Ambil qualities dari /qualities.json ──────────────────────────────
-      const qualRes = await fetch(`${PLAY_HOST}/live/idn/${show.slug}/qualities.json?showId=${show.showId}`);
+      // Endpoint ini mengembalikan array of streams dengan field "url" (theater proxy)
+      // dan "url-2" (mediastream proxy langsung). Kita pakai "url-2".
+      const qualRes = await fetch(`${PLAY_HOST}/live/idn/${show.slug}/qualities.json?showId=${showId}`);
       const qualData = await qualRes.json();
+
+      // ── Bangun map url-2 per quality name dari response qualities.json ─────
+      // Sekaligus build QualityOption[] dengan manual_url = url-2
+      const urlMap: Record<string, string> = {};
+
       if (qualData.success && Array.isArray(qualData.qualities)) {
-        setQualities(qualData.qualities);
+        const mappedQualities: QualityOption[] = qualData.qualities.map((q: any) => {
+          // Simpan url-2 ke map untuk lookup saat handleQualityChange
+          if (q["url-2"]) urlMap[q.quality] = q["url-2"];
+          return {
+            index:           q.index,
+            name:            q.name,
+            quality:         q.quality,
+            bandwidth:       q.bandwidth,
+            bandwidth_label: q.bandwidth_label,
+            resolution:      q.resolution,
+            fps:             q.fps,
+            // ← gunakan url-2 sebagai manual_url; fallback ke url jika tidak ada
+            manual_url:      q["url-2"] || q.url || q.manual_url || "",
+            playlist_url:    q.playlist_url || "",
+          };
+        });
+        setQualities(mappedQualities);
+        setStreamUrls(urlMap);
       }
 
-      // ── HLS URL = theater proxy index.m3u8 (highest quality) ─────────────
-      // Custom loader di HlsPlayer akan:
-      //   1. Fetch playlist dari theater proxy URL
-      //   2. Tiap segment URL (theater proxy) → ekstrak ?url= → mediastream URL murni
-      //   3. Fetch segment dengan header x-showId: {showId}
-      setHlsUrl(`${PLAY_HOST}/live/idn/${show.slug}/master.m3u8?showId=${show.showId}`);
+      // ── Jika qualities.json juga berisi data streams (format seperti streams.json)
+      //    coba ekstrak url-2 dari sana juga
+      if (qualData.streams && Array.isArray(qualData.streams)) {
+        qualData.streams.forEach((s: any) => {
+          const key = s["GROUP-ID"] || s.NAME || s.name;
+          if (key && s["url-2"]) urlMap[key] = s["url-2"];
+        });
+        setStreamUrls({ ...urlMap });
+      }
+
+      // ── HLS URL untuk mode Auto: gunakan url-2 dari stream tertinggi ──────
+      // Cari stream 1080p60 (index pertama / bandwidth tertinggi) di qualData
+      let autoUrl = "";
+
+      // Prioritas 1: streams array di qualData (format JSON doc ke-2)
+      if (qualData.streams && Array.isArray(qualData.streams)) {
+        const topStream = qualData.streams[0]; // sudah diurutkan bandwidth tertinggi
+        if (topStream?.["url-2"]) autoUrl = topStream["url-2"];
+      }
+
+      // Prioritas 2: ambil dari qualities array (manual_url sudah = url-2)
+      if (!autoUrl && qualData.qualities && Array.isArray(qualData.qualities)) {
+        const best = [...qualData.qualities].sort((a: any, b: any) => (b.bandwidth || 0) - (a.bandwidth || 0))[0];
+        if (best?.["url-2"]) autoUrl = best["url-2"];
+      }
+
+      // Prioritas 3: fallback ke stream_url dari qualData (jika ada)
+      if (!autoUrl && qualData.stream_url) autoUrl = qualData.stream_url;
+
+      // Prioritas 4: fallback ke theater proxy master playlist (legacy)
+      if (!autoUrl) autoUrl = `${PLAY_HOST}/live/idn/${show.slug}/master.m3u8?showId=${showId}`;
+
+      setHlsUrl(autoUrl);
 
       // ── Theater members (lineup) ──────────────────────────────────────────
       try {
@@ -761,15 +790,20 @@ function LiveStream() {
   const handleQualityChange = (q: QualityOption | null) => {
     setCurrentQuality(q);
     if (!q || !idnShow) return;
-    // Pakai manual_url (theater proxy index.m3u8 per quality)
-    // Custom loader akan ekstrak mediastream URL dari tiap segment
-    setHlsUrl(q.manual_url);
+    // Gunakan manual_url yang sudah berisi url-2
+    // Jika karena suatu alasan manual_url kosong, fallback ke streamUrls map
+    const targetUrl = q.manual_url || streamUrls[q.quality] || streamUrls[q.name] || "";
+    if (targetUrl) setHlsUrl(targetUrl);
   };
 
   const handleModeChange = (mode: "auto" | "manual") => {
     setQualityMode(mode);
     if (mode === "auto" && idnShow) {
-      setHlsUrl(`${PLAY_HOST}/live/idn/${idnShow.slug}/master.m3u8?showId=${idnShow.showId}`);
+      // Kembali ke url-2 stream tertinggi (sudah disimpan saat loadIdnStream)
+      // Cari dari qualities: bandwidth tertinggi
+      const best = [...qualities].sort((a, b) => (b.bandwidth || 0) - (a.bandwidth || 0))[0];
+      const autoUrl = best?.manual_url || `${PLAY_HOST}/live/idn/${idnShow.slug}/master.m3u8?showId=${idnShowId}`;
+      setHlsUrl(autoUrl);
       setCurrentQuality(null);
     }
   };
@@ -870,7 +904,7 @@ function LiveStream() {
   const handleLogout = () => {
     localStorage.removeItem("stream_verification");
     setIsVerified(false); setShowVerification(true);
-    setIdnShow(null); setIdnShowId(""); setHlsUrl(""); setQualities([]);
+    setIdnShow(null); setIdnShowId(""); setHlsUrl(""); setQualities([]); setStreamUrls({});
     setVerifData({ email: "", code: "" });
   };
 
@@ -1008,7 +1042,7 @@ function LiveStream() {
                 qualityMode={qualityMode}
                 onModeChange={handleModeChange}
                 isIdn={true}
-                showId={idnShowId}  {/* ← showId untuk header x-showId */}
+                showId={idnShowId}
               />
             ) : isMember && memberHlsUrl ? (
               <HlsPlayer
