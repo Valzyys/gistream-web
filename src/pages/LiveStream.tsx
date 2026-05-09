@@ -776,44 +776,7 @@ function LiveStream() {
       const showId = (show.showId || "").toString().toUpperCase();
       setIdnShowId(showId);
 
-      // Step 2: Generate JWT + fetch master playlist dari mediastream48
-      let autoUrl = "";
-      let qualityOptions: QualityOption[] = [];
-
-      try {
-        const xApiToken = await generateApiToken(showId);
-        const r = await fetch(MEDIASTREAM_PLAYBACK(showId), {
-          headers: buildMediaHeaders(xApiToken, showId),
-          redirect: "follow",
-        });
-        if (!r.ok) throw new Error(`Playback API error: ${r.status}`);
-
-        const m3u8Text    = await r.text();
-        const m3u8BaseUrl = r.url.substring(0, r.url.lastIndexOf("/") + 1);
-
-        if (m3u8Text.includes("#EXT-X-STREAM-INF")) {
-          // Parse master playlist → ambil semua variant
-          const lines: string[] = m3u8Text.split("\n");
-          const variants: { bandwidth: number; name: string; url: string }[] = [];
-
-          for (let i = 0; i < lines.length; i++) {
-            const line = lines[i].trim();
-            if (!line.startsWith("#EXT-X-STREAM-INF")) continue;
-            const bw   = parseInt((line.match(/BANDWIDTH=(\d+)/i) || [])[1] || "0", 10);
-            const name = (line.match(/NAME="([^"]+)"/i) || [])[1] || "";
-            const next = lines[i + 1]?.trim();
-            if (!next || next.startsWith("#")) continue;
-            const varUrl = /^https?:\/\//i.test(next) ? next : m3u8BaseUrl + next;
-            variants.push({ bandwidth: bw, name, url: varUrl });
-            i++;
-          }
-
-          variants.sort((a, b) => b.bandwidth - a.bandwidth);
-
-          qualityOptions = variants.map((v, idx) => {
-            const bwLabel = v.bandwidth >= 1_000_000
-              ? (v.bandwidth / 1_000_000).toFixed(1) + " Mbps"
-              : Math.round(v.bandwidth / 1_000) + " Kbps";
+ + " Kbps";
             return {
               index:           idx,
               name:            v.name || `Quality ${idx + 1}`,
