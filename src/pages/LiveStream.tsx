@@ -12,7 +12,6 @@ const API_KEY   = "JKTCONNECT";
 const PLAY_HOST = "https://play.jkt48connect.com";
 const IDN_API   = "https://v2.jkt48connect.com/api/jkt48/idnplus?apikey=JKTCONNECT";
 const LIVE_API  = "https://v2.jkt48connect.com/api/jkt48/live?apikey=JKTCONNECT";
-// Endpoint baru yang punya url-2 per quality
 const STREAM_API = (showId: string) =>
   `https://v2.jkt48connect.com/api/jkt48/live/stream?apikey=JKTCONNECT&showId=${showId}`;
 
@@ -41,8 +40,8 @@ interface QualityOption {
   bandwidth_label: string;
   resolution:      string;
   fps:             string;
-  manual_url:      string;   // berisi url-2 dari stream API
-  playlist_url:    string;
+  manual_url:      string; // url-2 dari stream API
+  playlist_url:    string; // url theater (fallback)
 }
 
 interface ChatMessage {
@@ -56,13 +55,13 @@ interface ChatMessage {
 }
 
 interface SRComment {
-  id: string;
-  name: string;
-  avatar_url: string;
-  comment: string;
-  created_at: number;
+  id:          string;
+  name:        string;
+  avatar_url:  string;
+  comment:     string;
+  created_at:  number;
   class_level: number;
-  user_id: number;
+  user_id:     number;
 }
 
 // ── Showroom comment polling hook ─────────────────────────────────────────────
@@ -85,13 +84,13 @@ function useShowroomComments(roomId: number | null) {
       const data = await res.json();
       const parsed: SRComment[] = (data?.comment_log ?? [])
         .map((c: any) => ({
-          id: `${c.user_id}-${c.created_at}`,
-          name: c.name ?? "Unknown",
-          avatar_url: c.avatar_url ?? "",
-          comment: c.comment ?? "",
-          created_at: c.created_at ?? 0,
+          id:          `${c.user_id}-${c.created_at}`,
+          name:        c.name ?? "Unknown",
+          avatar_url:  c.avatar_url ?? "",
+          comment:     c.comment ?? "",
+          created_at:  c.created_at ?? 0,
           class_level: c.class_level ?? 1,
-          user_id: c.user_id ?? 0,
+          user_id:     c.user_id ?? 0,
         }))
         .sort((a: SRComment, b: SRComment) => a.created_at - b.created_at);
       if (!mounted.current) return;
@@ -160,100 +159,68 @@ function HlsPlayer({
 
     const currentShowId = showId;
 
-    // ── Custom Fetch-based Loader ──────────────────────────────────────────
-    // Browser memblokir set header Origin/Referer via XHR (restricted headers).
-    // Satu-satunya cara inject x-showId yang benar-benar terkirim adalah dengan
-    // membuat loader berbasis fetch() — fetch() mengirim header custom ke proxy
-    // dan browser menangani CORS secara normal.
-    //
-    // proxy.mediastream48.workers.dev memvalidasi:
-    //   x-showId  : wajib, harus cocok dengan show yang aktif
-    // (Origin & Referer di-set otomatis browser dari domain kita, tidak perlu spoof)
-
-    class FetchLoader {
-      private fetchCtrl: AbortController | null = null;
+    // ── Custom loader: inject x-showId header untuk proxy.mediastream48 ──
+    class ShowIdLoader {
+      private ctrl: AbortController | null = null;
       context: any = null;
-      stats: any = { aborted: false, loaded: 0, retry: 0, total: 0, chunkCount: 0,
-                     bwEstimate: 0, loading: { start: 0, first: 0, end: 0 },
-                     parsing: { start: 0, end: 0 }, buffering: { start: 0, first: 0, end: 0 } };
+      stats: any = {
+        aborted: false, loaded: 0, retry: 0, total: 0, chunkCount: 0,
+        bwEstimate: 0,
+        loading:   { start: 0, first: 0, end: 0 },
+        parsing:   { start: 0, end: 0 },
+        buffering: { start: 0, first: 0, end: 0 },
+      };
 
       load(context: any, _config: any, callbacks: any) {
         this.context = context;
-        this.fetchCtrl = new AbortController();
-        const { signal } = this.fetchCtrl;
-        const startTime = performance.now();
-        this.stats.loading.start = startTime;
+        this.ctrl    = new AbortController();
+        this.stats.loading.start = performance.now();
 
-        const headers: Record<string, string> = {
-          "x-showId": currentShowId || "",
-        };
-
-        fetch(context.url, { headers, signal, credentials: "omit" })
+        fetch(context.url, {
+          signal:      this.ctrl.signal,
+          credentials: "omit",
+          headers:     { "x-showId": currentShowId },
+        })
           .then(async (res) => {
             if (!res.ok) throw new Error(`HTTP ${res.status}`);
             this.stats.loading.first = performance.now();
 
-            const isPlaylist =
-              context.url.includes(".m3u8") ||
-              context.url.includes(".js") ||
-              context.url.includes(".jpg") ||
+            const isText =
               context.type === "manifest" ||
-              context.type === "level";
+              context.type === "level"    ||
+              /\.(m3u8|js|txt)(\?|$)/i.test(context.url);
 
-            if (isPlaylist) {
+            if (isText) {
               const text = await res.text();
-              this.stats.loading.end = performance.now();
-              this.stats.loaded = text.length;
-              this.stats.total  = text.length;
-              callbacks.onSuccess(
-                { url: context.url, data: text },
-                this.stats,
-                context,
-                res
-              );
+              this.stats.loading.end  = performance.now();
+              this.stats.parsing.end  = performance.now();
+              this.stats.loaded = this.stats.total = text.length;
+              callbacks.onSuccess({ url: context.url, data: text }, this.stats, context, res);
             } else {
-              const buffer = await res.arrayBuffer();
+              const buf = await res.arrayBuffer();
               this.stats.loading.end = performance.now();
-              this.stats.loaded = buffer.byteLength;
-              this.stats.total  = buffer.byteLength;
-              callbacks.onSuccess(
-                { url: context.url, data: buffer },
-                this.stats,
-                context,
-                res
-              );
+              this.stats.loaded = this.stats.total = buf.byteLength;
+              callbacks.onSuccess({ url: context.url, data: buf }, this.stats, context, res);
             }
           })
           .catch((err) => {
             if (err.name === "AbortError") return;
             this.stats.loading.end = performance.now();
-            callbacks.onError(
-              { code: 0, text: err.message },
-              context,
-              null,
-              this.stats
-            );
+            callbacks.onError({ code: 0, text: err.message }, context, null, this.stats);
           });
       }
 
-      abort() {
-        this.fetchCtrl?.abort();
-        this.stats.aborted = true;
-      }
-
-      destroy() {
-        this.abort();
-      }
+      abort()   { this.ctrl?.abort(); this.stats.aborted = true; }
+      destroy() { this.abort(); }
     }
-    const LoaderClass = FetchLoader as any;
 
     const hls = new Hls({
-      enableWorker:    false,
-      lowLatencyMode:  false,
-      maxBufferLength:    30,
-      maxMaxBufferLength: 60,
-      maxBufferSize:      60 * 1000 * 1000,
-      backBufferLength:   30,
+      enableWorker:                false,
+      lowLatencyMode:              false,
+      maxBufferLength:             30,
+      maxMaxBufferLength:          60,
+      maxBufferSize:               60 * 1000 * 1000,
+      backBufferLength:            30,
       liveSyncDurationCount:       3,
       liveMaxLatencyDurationCount: 10,
       liveDurationInfinity:        true,
@@ -267,15 +234,15 @@ function HlsPlayer({
       levelLoadingTimeOut:         10000,
       levelLoadingMaxRetry:        4,
       levelLoadingRetryDelay:      1000,
-      startLevel:              qualityMode === "auto" ? -1 : undefined,
-      abrEwmaDefaultEstimate:  500_000,
-      abrBandWidthFactor:      0.8,
-      abrBandWidthUpFactor:    0.7,
-      abrEwmaFastLive:         3.0,
-      abrEwmaSlowLive:         9.0,
-      nudgeOffset:    0.3,
-      nudgeMaxRetry:  5,
-      loader:         LoaderClass,
+      startLevel:                  -1,
+      abrEwmaDefaultEstimate:      500_000,
+      abrBandWidthFactor:          0.8,
+      abrBandWidthUpFactor:        0.7,
+      abrEwmaFastLive:             3.0,
+      abrEwmaSlowLive:             9.0,
+      nudgeOffset:                 0.3,
+      nudgeMaxRetry:               5,
+      loader:                      ShowIdLoader as any,
     } as any);
 
     hlsRef.current = hls;
@@ -314,7 +281,7 @@ function HlsPlayer({
             enableWorker:    false,
             lowLatencyMode:  false,
             maxBufferLength: 30,
-            loader:          LoaderClass,
+            loader:          ShowIdLoader as any,
           } as any);
           newHls.loadSource(src);
           newHls.attachMedia(v);
@@ -325,7 +292,7 @@ function HlsPlayer({
     });
 
     return destroyHls;
-  }, [src, showId, destroyHls]); // eslint-disable-line
+  }, [src, showId, destroyHls]);
 
   return (
     <div className="relative w-full rounded-2xl overflow-hidden bg-black shadow-2xl">
@@ -501,11 +468,11 @@ function IdnChatPanel({
 function MemberChatPanel({
   comments, loading, error, lastPoll, retry,
 }: {
-  comments: SRComment[];
-  loading: boolean;
-  error: boolean;
-  lastPoll: Date | null;
-  retry: () => void;
+  comments:  SRComment[];
+  loading:   boolean;
+  error:     boolean;
+  lastPoll:  Date | null;
+  retry:     () => void;
 }) {
   const chatEndRef = useRef<HTMLDivElement>(null);
   useEffect(() => { chatEndRef.current?.scrollIntoView({ behavior: "smooth" }); }, [comments.length]);
@@ -635,10 +602,10 @@ function LiveStream() {
   const [error,             setError]             = useState("");
   const [members,           setMembers]           = useState<any[]>([]);
 
-  const [chatMessages,      setChatMessages]      = useState<ChatMessage[]>([]);
-  const [chatInput,         setChatInput]         = useState("");
-  const [chatUser,          setChatUser]          = useState<any>(null);
-  const [isChatLoggingIn,   setIsChatLoggingIn]   = useState(true);
+  const [chatMessages,    setChatMessages]    = useState<ChatMessage[]>([]);
+  const [chatInput,       setChatInput]       = useState("");
+  const [chatUser,        setChatUser]        = useState<any>(null);
+  const [isChatLoggingIn, setIsChatLoggingIn] = useState(true);
   const chatEndRef = useRef<HTMLDivElement>(null);
   const channelRef = useRef<any>(null);
 
@@ -647,7 +614,7 @@ function LiveStream() {
 
   const fetchClientIP = async () => {
     try {
-      const res = await fetch("https://api.ipify.org?format=json");
+      const res  = await fetch("https://api.ipify.org?format=json");
       const data = await res.json();
       setClientIP(data.ip);
       return data.ip;
@@ -658,11 +625,11 @@ function LiveStream() {
     setMembershipLoading(true);
     const session = getSession();
     if (!session) { setMembershipLoading(false); return false; }
-    const uid = session.user?.user_id;
+    const uid   = session.user?.user_id;
     const token = session.token;
     if (!uid || !token) { setMembershipLoading(false); return false; }
     try {
-      const res = await fetch(`${API_BASE}/membership/status/${uid}?apikey=${API_KEY}`, {
+      const res  = await fetch(`${API_BASE}/membership/status/${uid}?apikey=${API_KEY}`, {
         headers: { Authorization: `Bearer ${token}` },
       });
       const data = await res.json();
@@ -694,20 +661,20 @@ function LiveStream() {
     if (!verifData.email || !verifData.code) { setVerifyError("Email dan code wajib diisi"); return; }
     setVerifying(true); setVerifyError("");
     try {
-      const ip = clientIP || (await fetchClientIP());
+      const ip        = clientIP || (await fetchClientIP());
       const verifyRes = await fetch("https://v2.jkt48connect.com/api/codes/verify", {
         method: "POST", headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ email: verifData.email, code: verifData.code, apikey: "JKTCONNECT" }),
       });
       const verifyData = await verifyRes.json();
       if (!verifyData.status) { setVerifyError(verifyData.message || "Code tidak valid atau sudah kedaluwarsa"); setVerifying(false); return; }
-      const codeData = verifyData.data;
+      const codeData   = verifyData.data;
       if (!codeData.is_active) { setVerifyError("Code ini sudah tidak aktif"); setVerifying(false); return; }
-      const usageCount = parseInt(codeData.usage_count) || 0;
-      const usageLimit = parseInt(codeData.usage_limit) || 1;
-      const hasUsageLeft = usageCount < usageLimit;
+      const usageCount    = parseInt(codeData.usage_count) || 0;
+      const usageLimit    = parseInt(codeData.usage_limit) || 1;
+      const hasUsageLeft  = usageCount < usageLimit;
       if (codeData.is_used && !hasUsageLeft) {
-        const listRes = await fetch(`https://v2.jkt48connect.com/api/codes/list?email=${verifData.email}&apikey=JKTCONNECT`);
+        const listRes  = await fetch(`https://v2.jkt48connect.com/api/codes/list?email=${verifData.email}&apikey=JKTCONNECT`);
         const listData = await listRes.json();
         if (listData.status && listData.data?.wotatokens) {
           const userCode = listData.data.wotatokens.find((c: any) => c.code === verifData.code);
@@ -721,7 +688,7 @@ function LiveStream() {
         }
         setVerifyError("Code sudah tidak dapat digunakan"); setVerifying(false); return;
       }
-      const useRes = await fetch("https://v2.jkt48connect.com/api/codes/use", {
+      const useRes  = await fetch("https://v2.jkt48connect.com/api/codes/use", {
         method: "POST", headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ email: verifData.email, code: verifData.code, apikey: "JKTCONNECT" }),
       });
@@ -733,11 +700,12 @@ function LiveStream() {
     } catch { setVerifyError("Terjadi kesalahan saat verifikasi. Silakan coba lagi."); setVerifying(false); }
   };
 
+  // ── Load IDN stream ─────────────────────────────────────────────────────────
   const loadIdnStream = useCallback(async () => {
     setLoading(true); setError("");
     try {
-      // ── Step 1: Ambil list show IDN yang sedang live ───────────────────────
-      const idnRes = await fetch(IDN_API);
+      // Step 1: Cari show yang sedang live
+      const idnRes  = await fetch(IDN_API);
       const idnData = await idnRes.json();
       if (!idnData || idnData.status !== 200 || !Array.isArray(idnData.data)) {
         setError("Gagal mengambil data IDN Plus"); setLoading(false); return;
@@ -749,68 +717,61 @@ function LiveStream() {
       const showId = show.showId || "";
       setIdnShowId(showId);
 
-      // ── Step 2: Fetch /api/jkt48/live/stream?showId=... untuk url-2 ────────
-      // Endpoint ini mengembalikan array streams (format sama dengan doc ke-2)
-      // dengan field "url-2" per quality.
       let qualityOptions: QualityOption[] = [];
       let autoUrl = "";
 
+      // Step 2: Fetch stream API → dapat url-2 per quality
       try {
-        const streamRes = await fetch(STREAM_API(showId));
+        const streamRes  = await fetch(STREAM_API(showId));
         const streamData = await streamRes.json();
 
-        // Response bisa berupa array langsung atau { streams: [...] }
-        const streams: any[] = Array.isArray(streamData)
-          ? streamData
-          : Array.isArray(streamData?.streams)
+        // Response: { success, showId, streams: [...], stream_url }
+        const streams: any[] = Array.isArray(streamData?.streams)
           ? streamData.streams
+          : Array.isArray(streamData)
+          ? streamData
           : [];
 
         if (streams.length > 0) {
-          // Urutkan bandwidth tertinggi dulu
           const sorted = [...streams].sort(
-            (a, b) => parseInt(b.BANDWIDTH || b.bandwidth || "0") - parseInt(a.BANDWIDTH || a.bandwidth || "0")
+            (a, b) => parseInt(b.BANDWIDTH || "0") - parseInt(a.BANDWIDTH || "0")
           );
 
           qualityOptions = sorted.map((s: any, idx: number) => {
-            const bw = parseInt(s.BANDWIDTH || s.bandwidth || "0");
+            const bw      = parseInt(s.BANDWIDTH || "0");
             const bwLabel =
               bw >= 1_000_000
                 ? (bw / 1_000_000).toFixed(1) + " Mbps"
                 : Math.round(bw / 1_000) + " Kbps";
-            const name = s.NAME || s.name || s["GROUP-ID"] || `Quality ${idx + 1}`;
-            const quality = s["GROUP-ID"] || s.name || name;
-            const resolution = s.RESOLUTION || s.resolution || "";
-            const fps = s["FRAME-RATE"] || s.fps || "";
 
             return {
               index:           idx,
-              name,
-              quality,
+              name:            s.NAME || s.name || `Quality ${idx + 1}`,
+              quality:         s["GROUP-ID"] || s.name || "",
               bandwidth:       bw,
               bandwidth_label: bwLabel,
-              resolution,
-              fps,
-              // Gunakan url-2 sebagai URL stream langsung
-              manual_url:      s["url-2"] || s.url2 || s.url || "",
+              resolution:      s.RESOLUTION || "",
+              fps:             s["FRAME-RATE"] || "",
+              // url-2 = proxy mediastream langsung (butuh header x-showId)
+              manual_url:      s["url-2"] || s.url || "",
+              // url = theater worker (fallback)
               playlist_url:    s.url || "",
             };
           });
 
           setQualities(qualityOptions);
 
-          // Auto URL = url-2 dari stream bandwidth tertinggi
-          autoUrl = sorted[0]?.["url-2"] || sorted[0]?.url2 || "";
+          // Auto = url-2 dari bandwidth tertinggi
+          autoUrl = sorted[0]?.["url-2"] || sorted[0]?.url || streamData.stream_url || "";
         }
       } catch (streamErr) {
-        console.warn("Stream API gagal, fallback ke master playlist:", streamErr);
+        console.warn("Stream API gagal, fallback ke qualities.json:", streamErr);
       }
 
-      // ── Fallback: jika stream API gagal atau tidak ada url-2 ──────────────
+      // Fallback ke qualities.json
       if (!autoUrl) {
-        // Coba qualities.json sebagai fallback
         try {
-          const qualRes = await fetch(`${PLAY_HOST}/live/idn/${show.slug}/qualities.json?showId=${showId}`);
+          const qualRes  = await fetch(`${PLAY_HOST}/live/idn/${show.slug}/qualities.json?showId=${showId}`);
           const qualData = await qualRes.json();
 
           if (qualData.streams && Array.isArray(qualData.streams) && qualData.streams.length > 0) {
@@ -819,19 +780,17 @@ function LiveStream() {
             );
             autoUrl = sorted[0]?.["url-2"] || sorted[0]?.url || "";
 
-            // Jika qualityOptions masih kosong, build dari sini
             if (qualityOptions.length === 0) {
               qualityOptions = sorted.map((s: any, idx: number) => {
-                const bw = parseInt(s.BANDWIDTH || "0");
+                const bw      = parseInt(s.BANDWIDTH || "0");
                 const bwLabel =
                   bw >= 1_000_000
                     ? (bw / 1_000_000).toFixed(1) + " Mbps"
                     : Math.round(bw / 1_000) + " Kbps";
-                const name = s.NAME || s["GROUP-ID"] || `Quality ${idx + 1}`;
                 return {
                   index:           idx,
-                  name,
-                  quality:         s["GROUP-ID"] || name,
+                  name:            s.NAME || s["GROUP-ID"] || `Quality ${idx + 1}`,
+                  quality:         s["GROUP-ID"] || "",
                   bandwidth:       bw,
                   bandwidth_label: bwLabel,
                   resolution:      s.RESOLUTION || "",
@@ -842,52 +801,30 @@ function LiveStream() {
               });
               setQualities(qualityOptions);
             }
-          } else if (qualData.qualities && Array.isArray(qualData.qualities)) {
-            const best = [...qualData.qualities].sort(
-              (a: any, b: any) => (b.bandwidth || 0) - (a.bandwidth || 0)
-            )[0];
-            autoUrl = best?.["url-2"] || best?.manual_url || "";
-
-            if (qualityOptions.length === 0) {
-              qualityOptions = qualData.qualities.map((q: any, idx: number) => ({
-                index:           idx,
-                name:            q.name || `Quality ${idx + 1}`,
-                quality:         q.quality || q.name || "",
-                bandwidth:       q.bandwidth || 0,
-                bandwidth_label: q.bandwidth_label || "",
-                resolution:      q.resolution || "",
-                fps:             q.fps || "",
-                manual_url:      q["url-2"] || q.manual_url || "",
-                playlist_url:    q.playlist_url || "",
-              }));
-              setQualities(qualityOptions);
-            }
           }
-
-          if (!autoUrl && qualData.stream_url) autoUrl = qualData.stream_url;
         } catch {}
       }
 
-      // ── Final fallback: theater proxy master playlist ──────────────────────
+      // Final fallback → theater worker
       if (!autoUrl) {
-        autoUrl = `${PLAY_HOST}/live/idn/${show.slug}/master.m3u8?showId=${showId}`;
+        autoUrl = `https://theater.jkt48connect.com/live/${showId}/1080p60/index.m3u8`;
       }
 
       setHlsUrl(autoUrl);
 
-      // ── Theater members (lineup) ──────────────────────────────────────────
+      // Theater members lineup
       try {
-        const theaterRes = await fetch(`https://v2.jkt48connect.com/api/jkt48/theater?apikey=${API_KEY}`);
+        const theaterRes  = await fetch(`https://v2.jkt48connect.com/api/jkt48/theater?apikey=${API_KEY}`);
         const theaterData = await theaterRes.json();
         if (theaterData.theater?.length > 0) {
-          const now = Date.now();
-          let nearest = theaterData.theater[0];
-          let minDiff = Math.abs(new Date(nearest.date).getTime() - now);
+          const now    = Date.now();
+          let nearest  = theaterData.theater[0];
+          let minDiff  = Math.abs(new Date(nearest.date).getTime() - now);
           theaterData.theater.forEach((s: any) => {
             const diff = Math.abs(new Date(s.date).getTime() - now);
             if (diff < minDiff) { minDiff = diff; nearest = s; }
           });
-          const detailRes = await fetch(`https://v2.jkt48connect.com/api/jkt48/theater/${nearest.id}?apikey=${API_KEY}`);
+          const detailRes  = await fetch(`https://v2.jkt48connect.com/api/jkt48/theater/${nearest.id}?apikey=${API_KEY}`);
           const detailData = await detailRes.json();
           if (detailData.shows?.[0]?.members) setMembers(detailData.shows[0].members);
         }
@@ -900,7 +837,7 @@ function LiveStream() {
   const loadMemberStream = useCallback(async () => {
     setLoading(true); setError("");
     try {
-      const res = await fetch(LIVE_API);
+      const res  = await fetch(LIVE_API);
       const data = await res.json();
       if (!Array.isArray(data)) { setError("Gagal mengambil data live member"); setLoading(false); return; }
       const show = data.find((s: any) => s.url_key === playbackId);
@@ -914,24 +851,27 @@ function LiveStream() {
     } catch { setError("Terjadi kesalahan saat memuat stream member."); setLoading(false); }
   }, [playbackId]);
 
+  // ── Quality change handlers ─────────────────────────────────────────────────
   const handleQualityChange = (q: QualityOption | null) => {
     setCurrentQuality(q);
-    if (!q || !idnShow) return;
-    // manual_url sudah berisi url-2 langsung dari stream API
+    if (!q) return;
+    // manual_url = url-2, butuh header x-showId (di-inject ShowIdLoader)
     if (q.manual_url) setHlsUrl(q.manual_url);
   };
 
   const handleModeChange = (mode: "auto" | "manual") => {
     setQualityMode(mode);
-    if (mode === "auto" && idnShow) {
+    if (mode === "auto") {
       // Kembali ke url-2 bandwidth tertinggi
-      const best = [...qualities].sort((a, b) => (b.bandwidth || 0) - (a.bandwidth || 0))[0];
-      const autoUrl = best?.manual_url || `${PLAY_HOST}/live/idn/${idnShow.slug}/master.m3u8?showId=${idnShowId}`;
+      const best    = [...qualities].sort((a, b) => b.bandwidth - a.bandwidth)[0];
+      const autoUrl = best?.manual_url
+        || `https://theater.jkt48connect.com/live/${idnShowId}/1080p60/index.m3u8`;
       setHlsUrl(autoUrl);
       setCurrentQuality(null);
     }
   };
 
+  // ── Chat init ───────────────────────────────────────────────────────────────
   const initChat = useCallback(async () => {
     setIsChatLoggingIn(true);
     let userData: any = null;
@@ -941,7 +881,7 @@ function LiveStream() {
         const parsed = JSON.parse(rawData);
         if (parsed?.isLoggedIn && parsed?.token && parsed?.user?.user_id) {
           try {
-            const res = await fetch(`${API_BASE}/profile/${parsed.user.user_id}?apikey=${API_KEY}`, {
+            const res         = await fetch(`${API_BASE}/profile/${parsed.user.user_id}?apikey=${API_KEY}`, {
               headers: { Authorization: `Bearer ${parsed.token}` },
             });
             const profileData = await res.json();
@@ -951,8 +891,8 @@ function LiveStream() {
       }
     } catch {}
     if (userData && (userData.username || userData.full_name)) {
-      const username = userData.username || userData.full_name;
-      const email = userData.email || `${username.replace(/\s+/g, "").toLowerCase()}@jkt48connect.local`;
+      const username   = userData.username || userData.full_name;
+      const email      = userData.email || `${username.replace(/\s+/g, "").toLowerCase()}@jkt48connect.local`;
       const avatar_url = userData.avatar
         ? userData.avatar
         : `https://ui-avatars.com/api/?name=${encodeURIComponent(username)}&background=dc2626&color=fff`;
@@ -977,16 +917,20 @@ function LiveStream() {
     e.preventDefault();
     if (!chatInput.trim() || !chatUser) return;
     const payload: ChatMessage = {
-      user_id: chatUser.id, username: chatUser.username,
-      avatar_url: chatUser.avatar_url || `https://ui-avatars.com/api/?name=${chatUser.username}`,
-      bluetick: chatUser.bluetick, role: chatUser.role,
-      text_content: chatInput.trim(), timestamp: new Date().toISOString(),
+      user_id:      chatUser.id,
+      username:     chatUser.username,
+      avatar_url:   chatUser.avatar_url || `https://ui-avatars.com/api/?name=${chatUser.username}`,
+      bluetick:     chatUser.bluetick,
+      role:         chatUser.role,
+      text_content: chatInput.trim(),
+      timestamp:    new Date().toISOString(),
     };
     setChatMessages((prev) => [...prev, payload]);
     setChatInput("");
     await channelRef.current?.send({ type: "broadcast", event: "pesan_baru", payload });
   };
 
+  // ── Effects ─────────────────────────────────────────────────────────────────
   useEffect(() => {
     if (!isIdn) return;
     const channel = supabase.channel(`chat-${playbackId}`, { config: { broadcast: { ack: true } } });
@@ -1036,6 +980,7 @@ function LiveStream() {
     ? (idnShow?.title || "Live Stream JKT48")
     : (memberShow?.name || "Live Member JKT48");
 
+  // ── Loading membership ──────────────────────────────────────────────────────
   if (isIdn && membershipLoading) {
     return (
       <div className="min-h-screen rounded-2xl border border-gray-200 bg-white dark:border-gray-800 dark:bg-white/[0.03] flex items-center justify-center">
@@ -1047,6 +992,7 @@ function LiveStream() {
     );
   }
 
+  // ── Verification gate ───────────────────────────────────────────────────────
   if (isIdn && showVerification && !isVerified) {
     return (
       <div className="min-h-screen rounded-2xl border border-gray-200 bg-white px-5 py-7 dark:border-gray-800 dark:bg-white/[0.03] xl:px-10 xl:py-12 flex items-center justify-center">
@@ -1101,6 +1047,7 @@ function LiveStream() {
     );
   }
 
+  // ── Loading stream ──────────────────────────────────────────────────────────
   if (loading) {
     return (
       <div className="min-h-screen rounded-2xl border border-gray-200 bg-white dark:border-gray-800 dark:bg-white/[0.03] flex items-center justify-center">
@@ -1114,6 +1061,7 @@ function LiveStream() {
     );
   }
 
+  // ── Error ───────────────────────────────────────────────────────────────────
   if (error) {
     return (
       <div className="min-h-screen rounded-2xl border border-gray-200 bg-white px-5 py-7 dark:border-gray-800 dark:bg-white/[0.03] xl:px-10 xl:py-12 flex items-center justify-center">
@@ -1132,6 +1080,7 @@ function LiveStream() {
     );
   }
 
+  // ── Main render ─────────────────────────────────────────────────────────────
   return (
     <div>
       <div className="rounded-2xl border border-gray-200 bg-white px-5 py-6 dark:border-gray-800 dark:bg-white/[0.03] xl:px-8 xl:py-7">
@@ -1144,7 +1093,7 @@ function LiveStream() {
             <span className="w-1.5 h-1.5 rounded-full bg-white animate-pulse" />
             LIVE
           </div>
-          {isIdn && <span className="px-3 py-1.5 rounded-full bg-blue-50 dark:bg-blue-500/10 border border-blue-200 dark:border-blue-500/20 text-blue-600 dark:text-blue-400 text-[11px] font-bold">IDN Live+</span>}
+          {isIdn    && <span className="px-3 py-1.5 rounded-full bg-blue-50 dark:bg-blue-500/10 border border-blue-200 dark:border-blue-500/20 text-blue-600 dark:text-blue-400 text-[11px] font-bold">IDN Live+</span>}
           {isMember && <span className="px-3 py-1.5 rounded-full bg-emerald-50 dark:bg-emerald-500/10 border border-emerald-200 dark:border-emerald-500/20 text-emerald-600 dark:text-emerald-400 text-[11px] font-bold">Member Live</span>}
           {isIdn && hasMembership && <span className="px-3 py-1.5 rounded-full bg-amber-50 dark:bg-amber-500/10 border border-amber-200 dark:border-amber-500/20 text-amber-600 dark:text-amber-400 text-[11px] font-bold">★ Monthly</span>}
           {isIdn && idnShow && <span className="text-xs text-gray-500 dark:text-gray-400 font-medium">{idnShow.view_count?.toLocaleString() || 0} penonton</span>}
@@ -1194,7 +1143,10 @@ function LiveStream() {
                   <div className="flex-1 min-w-0">
                     <h3 className="text-base font-bold text-gray-800 dark:text-white/90 mb-2">{idnShow.title}</h3>
                     <div className="flex flex-wrap gap-3 text-xs text-gray-500 dark:text-gray-400 mb-2">
-                      <span className="flex items-center gap-1"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>{idnShow.view_count?.toLocaleString() || 0}</span>
+                      <span className="flex items-center gap-1">
+                        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>
+                        {idnShow.view_count?.toLocaleString() || 0}
+                      </span>
                       {idnShow.showId && <span>#{idnShow.showId}</span>}
                     </div>
                     {idnShow.idnliveplus?.description && <p className="text-xs leading-relaxed text-gray-500 dark:text-gray-400 m-0 whitespace-pre-line">{idnShow.idnliveplus.description}</p>}
@@ -1242,9 +1194,24 @@ function LiveStream() {
             <div className="rounded-2xl border border-gray-200 dark:border-gray-800 bg-white dark:bg-white/[0.02] overflow-hidden" style={{ height: "580px" }}>
               <div className="h-full flex flex-col">
                 {isIdn ? (
-                  <IdnChatPanel messages={chatMessages} chatInput={chatInput} setChatInput={setChatInput} chatUser={chatUser} isChatLoggingIn={isChatLoggingIn} onSend={handleSendMessage} chatEndRef={chatEndRef} navigate={navigate} />
+                  <IdnChatPanel
+                    messages={chatMessages}
+                    chatInput={chatInput}
+                    setChatInput={setChatInput}
+                    chatUser={chatUser}
+                    isChatLoggingIn={isChatLoggingIn}
+                    onSend={handleSendMessage}
+                    chatEndRef={chatEndRef}
+                    navigate={navigate}
+                  />
                 ) : (
-                  <MemberChatPanel comments={srComments} loading={srLoading} error={srError} lastPoll={srLastPoll} retry={srRetry} />
+                  <MemberChatPanel
+                    comments={srComments}
+                    loading={srLoading}
+                    error={srError}
+                    lastPoll={srLastPoll}
+                    retry={srRetry}
+                  />
                 )}
               </div>
             </div>
