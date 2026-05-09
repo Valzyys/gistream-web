@@ -161,18 +161,28 @@ function HlsPlayer({
     const currentShowId = showId;
     const DefaultLoader = Hls.DefaultConfig.loader as any;
 
-    // proxy.mediastream48.workers.dev memerlukan header "x-showId" di SETIAP request
-    // (manifest, level playlist, maupun segment).
-    // Gunakan custom loader + xhrSetup global agar header terkirim ke semua request.
+    // proxy.mediastream48.workers.dev memerlukan 3 header di SETIAP request:
+    //   - x-showId   : ID show yang sedang diputar
+    //   - Origin     : https://stream.hanabira48.com
+    //   - Referer    : https://stream.hanabira48.com/
+    const PROXY_ORIGIN  = "https://stream.hanabira48.com";
+    const PROXY_REFERER = "https://stream.hanabira48.com/";
+
+    const injectHeaders = (xhr: XMLHttpRequest) => {
+      try {
+        if (currentShowId) xhr.setRequestHeader("x-showId", currentShowId);
+        xhr.setRequestHeader("Origin",  PROXY_ORIGIN);
+        xhr.setRequestHeader("Referer", PROXY_REFERER);
+      } catch {}
+    };
+
     class MediastreamLoader extends DefaultLoader {
       load(context: any, config: any, callbacks: any) {
         const prevXhrSetup = config.xhrSetup;
         config = {
           ...config,
           xhrSetup: (xhr: XMLHttpRequest, _url: string) => {
-            if (currentShowId) {
-              try { xhr.setRequestHeader("x-showId", currentShowId); } catch {}
-            }
+            injectHeaders(xhr);
             if (prevXhrSetup) prevXhrSetup(xhr, _url);
           },
         };
@@ -183,9 +193,7 @@ function HlsPlayer({
 
     // xhrSetup global: safety-net untuk manifest request pertama
     const xhrSetupGlobal = (xhr: XMLHttpRequest, _url: string) => {
-      if (currentShowId) {
-        try { xhr.setRequestHeader("x-showId", currentShowId); } catch {}
-      }
+      injectHeaders(xhr);
     };
 
     const hls = new Hls({
