@@ -159,45 +159,96 @@ function HlsPlayer({
     }
 
     const currentShowId = showId;
-    const DefaultLoader = Hls.DefaultConfig.loader as any;
 
-    // proxy.mediastream48.workers.dev memerlukan 3 header di SETIAP request:
-    //   - x-showId   : ID show yang sedang diputar
-    //   - Origin     : https://stream.hanabira48.com
-    //   - Referer    : https://stream.hanabira48.com/
-    const PROXY_ORIGIN  = "https://stream.hanabira48.com";
-    const PROXY_REFERER = "https://stream.hanabira48.com/";
+    // ── Custom Fetch-based Loader ──────────────────────────────────────────
+    // Browser memblokir set header Origin/Referer via XHR (restricted headers).
+    // Satu-satunya cara inject x-showId yang benar-benar terkirim adalah dengan
+    // membuat loader berbasis fetch() — fetch() mengirim header custom ke proxy
+    // dan browser menangani CORS secara normal.
+    //
+    // proxy.mediastream48.workers.dev memvalidasi:
+    //   x-showId  : wajib, harus cocok dengan show yang aktif
+    // (Origin & Referer di-set otomatis browser dari domain kita, tidak perlu spoof)
 
-    const injectHeaders = (xhr: XMLHttpRequest) => {
-      try {
-        if (currentShowId) xhr.setRequestHeader("x-showId", currentShowId);
-        xhr.setRequestHeader("Origin",  PROXY_ORIGIN);
-        xhr.setRequestHeader("Referer", PROXY_REFERER);
-      } catch {}
-    };
+    class FetchLoader {
+      private fetchCtrl: AbortController | null = null;
+      context: any = null;
+      stats: any = { aborted: false, loaded: 0, retry: 0, total: 0, chunkCount: 0,
+                     bwEstimate: 0, loading: { start: 0, first: 0, end: 0 },
+                     parsing: { start: 0, end: 0 }, buffering: { start: 0, first: 0, end: 0 } };
 
-    class MediastreamLoader extends DefaultLoader {
       load(context: any, config: any, callbacks: any) {
-        const prevXhrSetup = config.xhrSetup;
-        config = {
-          ...config,
-          xhrSetup: (xhr: XMLHttpRequest, _url: string) => {
-            injectHeaders(xhr);
-            if (prevXhrSetup) prevXhrSetup(xhr, _url);
-          },
+        this.context = context;
+        this.fetchCtrl = new AbortController();
+        const { signal } = this.fetchCtrl;
+        const startTime = performance.now();
+        this.stats.loading.start = startTime;
+
+        const headers: Record<string, string> = {
+          "x-showId": currentShowId || "",
         };
-        super.load(context, config, callbacks);
+
+        fetch(context.url, { headers, signal, credentials: "omit" })
+          .then(async (res) => {
+            if (!res.ok) throw new Error(`HTTP ${res.status}`);
+            this.stats.loading.first = performance.now();
+
+            const isPlaylist =
+              context.url.includes(".m3u8") ||
+              context.url.includes(".js") ||
+              context.url.includes(".jpg") ||
+              context.type === "manifest" ||
+              context.type === "level";
+
+            if (isPlaylist) {
+              const text = await res.text();
+              this.stats.loading.end = performance.now();
+              this.stats.loaded = text.length;
+              this.stats.total  = text.length;
+              callbacks.onSuccess(
+                { url: context.url, data: text },
+                this.stats,
+                context,
+                res
+              );
+            } else {
+              const buffer = await res.arrayBuffer();
+              this.stats.loading.end = performance.now();
+              this.stats.loaded = buffer.byteLength;
+              this.stats.total  = buffer.byteLength;
+              callbacks.onSuccess(
+                { url: context.url, data: buffer },
+                this.stats,
+                context,
+                res
+              );
+            }
+          })
+          .catch((err) => {
+            if (err.name === "AbortError") return;
+            this.stats.loading.end = performance.now();
+            callbacks.onError(
+              { code: 0, text: err.message },
+              context,
+              null,
+              this.stats
+            );
+          });
+      }
+
+      abort() {
+        this.fetchCtrl?.abort();
+        this.stats.aborted = true;
+      }
+
+      destroy() {
+        this.abort();
       }
     }
-    const LoaderClass = MediastreamLoader as any;
-
-    // xhrSetup global: safety-net untuk manifest request pertama
-    const xhrSetupGlobal = (xhr: XMLHttpRequest, _url: string) => {
-      injectHeaders(xhr);
-    };
+    const LoaderClass = FetchLoader as any;
 
     const hls = new Hls({
-      enableWorker:    false, // harus false agar xhrSetup bisa inject header
+      enableWorker:    false,
       lowLatencyMode:  false,
       maxBufferLength:    30,
       maxMaxBufferLength: 60,
@@ -224,7 +275,6 @@ function HlsPlayer({
       abrEwmaSlowLive:         9.0,
       nudgeOffset:    0.3,
       nudgeMaxRetry:  5,
-      xhrSetup:       xhrSetupGlobal,
       loader:         LoaderClass,
     } as any);
 
@@ -264,7 +314,6 @@ function HlsPlayer({
             enableWorker:    false,
             lowLatencyMode:  false,
             maxBufferLength: 30,
-            xhrSetup:        xhrSetupGlobal,
             loader:          LoaderClass,
           } as any);
           newHls.loadSource(src);
