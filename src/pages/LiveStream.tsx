@@ -30,6 +30,25 @@ const isIdnSlug = (param: string) => {
   return /\d{4}-\d{2}-\d{2}/.test(param);
 };
 
+/**
+ * Dari URL theater proxy (https://theater.jkt48connect.com/proxy?url=...&sid=...)
+ * ambil nilai ?url= saja (mediastream URL murni).
+ * Jika bukan theater proxy, kembalikan URL asli.
+ */
+function extractMediastreamUrl(rawUrl: string): string {
+  try {
+    const parsed = new URL(rawUrl);
+    if (
+      parsed.hostname === "theater.jkt48connect.com" &&
+      parsed.pathname === "/proxy"
+    ) {
+      const innerUrl = parsed.searchParams.get("url");
+      if (innerUrl) return innerUrl;
+    }
+  } catch {}
+  return rawUrl;
+}
+
 interface QualityOption {
   index:           number;
   name:            string;
@@ -118,7 +137,7 @@ function useShowroomComments(roomId: number | null) {
 
 // ── HLS Player ────────────────────────────────────────────────────────────────
 function HlsPlayer({
-  src, title, qualities, onQualityChange, currentQuality, qualityMode, onModeChange, isIdn,
+  src, title, qualities, onQualityChange, currentQuality, qualityMode, onModeChange, isIdn, showId,
 }: {
   src: string; title: string; qualities: QualityOption[];
   onQualityChange: (q: QualityOption | null) => void;
@@ -126,6 +145,7 @@ function HlsPlayer({
   qualityMode: "auto" | "manual";
   onModeChange: (mode: "auto" | "manual") => void;
   isIdn: boolean;
+  showId: string;
 }) {
   const videoRef = useRef<HTMLVideoElement>(null);
   const hlsRef   = useRef<Hls | null>(null);
@@ -154,54 +174,66 @@ function HlsPlayer({
       return;
     }
 
+    // ── Custom Loader ────────────────────────────────────────────────────────
+    // Intercept setiap URL yang di-fetch hls.js:
+    //   - Jika URL adalah theater proxy → ambil ?url= (mediastream URL murni)
+    //   - Tambahkan header x-showId ke setiap request
+    const currentShowId = showId;
+    const DefaultLoader = Hls.DefaultConfig.loader as any;
+
+    class MediastreamLoader extends DefaultLoader {
+      load(context: any, config: any, callbacks: any) {
+        const originalUrl: string = context.url;
+
+        // Ekstrak mediastream URL dari theater proxy jika perlu
+        context.url = extractMediastreamUrl(originalUrl);
+
+        // Inject header x-showId via xhrSetup
+        const prevXhrSetup = config.xhrSetup;
+        config = {
+          ...config,
+          xhrSetup: (xhr: XMLHttpRequest, url: string) => {
+            if (currentShowId) {
+              xhr.setRequestHeader("x-showId", currentShowId);
+            }
+            if (prevXhrSetup) prevXhrSetup(xhr, url);
+          },
+        };
+
+        super.load(context, config, callbacks);
+      }
+    }
+    // ────────────────────────────────────────────────────────────────────────
+
     const hls = new Hls({
       enableWorker: true,
-
-      // ── CRITICAL: disable lowLatencyMode for standard HLS ─────────────────
-      // lowLatencyMode:true only helps LL-HLS streams; for regular HLS it
-      // causes the player to use segment counts that are too small, starving
-      // the buffer and causing constant stalls.
       lowLatencyMode: false,
-
-      // ── Buffer: give enough headroom so network jitter doesn't stall ──────
-      maxBufferLength:    30,           // try to hold 30s of video ahead
-      maxMaxBufferLength: 60,           // hard ceiling
-      maxBufferSize:      60 * 1000 * 1000, // 60 MB
-
-      // Back-buffer: keep 30s behind so seeking back is instant; clear older
-      backBufferLength: 30,
-
-      // ── Live sync: sensible latency, not razor-thin ───────────────────────
-      // Use segment-count based config (more portable across segment lengths)
-      liveSyncDurationCount:       3,   // target = 3 segments behind live edge
-      liveMaxLatencyDurationCount: 10,  // if > 10 segments behind → jump
+      maxBufferLength:    30,
+      maxMaxBufferLength: 60,
+      maxBufferSize:      60 * 1000 * 1000,
+      backBufferLength:   30,
+      liveSyncDurationCount:       3,
+      liveMaxLatencyDurationCount: 10,
       liveDurationInfinity:        true,
-
-      // ── Fragment loading: generous timeouts, retry fast ───────────────────
-      fragLoadingTimeOut:             10000,
-      fragLoadingMaxRetry:            6,
-      fragLoadingRetryDelay:          1000,
-      fragLoadingMaxRetryTimeout:     8000,
-
-      // ── Manifest / level loading ──────────────────────────────────────────
-      manifestLoadingTimeOut:         10000,
-      manifestLoadingMaxRetry:        4,
-      manifestLoadingRetryDelay:      1000,
-      levelLoadingTimeOut:            10000,
-      levelLoadingMaxRetry:           4,
-      levelLoadingRetryDelay:         1000,
-
-      // ── ABR: prefer stability, be slow to upgrade ─────────────────────────
+      fragLoadingTimeOut:          10000,
+      fragLoadingMaxRetry:         6,
+      fragLoadingRetryDelay:       1000,
+      fragLoadingMaxRetryTimeout:  8000,
+      manifestLoadingTimeOut:      10000,
+      manifestLoadingMaxRetry:     4,
+      manifestLoadingRetryDelay:   1000,
+      levelLoadingTimeOut:         10000,
+      levelLoadingMaxRetry:        4,
+      levelLoadingRetryDelay:      1000,
       startLevel:              qualityMode === "auto" ? -1 : undefined,
-      abrEwmaDefaultEstimate:  500_000,  // conservative; let real BW measurement drive
-      abrBandWidthFactor:      0.8,      // only use 80% of measured BW when choosing level
-      abrBandWidthUpFactor:    0.7,      // upgrade quality only when clearly stable
+      abrEwmaDefaultEstimate:  500_000,
+      abrBandWidthFactor:      0.8,
+      abrBandWidthUpFactor:    0.7,
       abrEwmaFastLive:         3.0,
       abrEwmaSlowLive:         9.0,
-
-      // ── Stall nudge ───────────────────────────────────────────────────────
       nudgeOffset:    0.3,
       nudgeMaxRetry:  5,
+      loader: MediastreamLoader, // ← custom loader
     });
 
     hlsRef.current = hls;
@@ -226,21 +258,21 @@ function HlsPlayer({
     });
 
     hls.on(Hls.Events.ERROR, (_, data) => {
-      // Let hls.js handle non-fatal errors on its own
       if (!data.fatal) return;
-
       if (data.type === Hls.ErrorTypes.NETWORK_ERROR) {
         hls.startLoad();
       } else if (data.type === Hls.ErrorTypes.MEDIA_ERROR) {
         hls.recoverMediaError();
       } else {
-        // Fully unrecoverable: tear down and reinit after a pause
         destroyHls();
         retryRef.current = setTimeout(() => {
           const v = videoRef.current;
           if (!v) return;
-          // Re-run the whole effect by updating src via the closure
-          const newHls = new Hls({ lowLatencyMode: false, maxBufferLength: 30 });
+          const newHls = new Hls({
+            lowLatencyMode: false,
+            maxBufferLength: 30,
+            loader: MediastreamLoader,
+          });
           newHls.loadSource(src);
           newHls.attachMedia(v);
           newHls.on(Hls.Events.MANIFEST_PARSED, () => v.play().catch(() => {}));
@@ -250,11 +282,10 @@ function HlsPlayer({
     });
 
     return destroyHls;
-  }, [src, destroyHls]); // eslint-disable-line
+  }, [src, showId, destroyHls]); // eslint-disable-line
 
   return (
     <div className="relative w-full rounded-2xl overflow-hidden bg-black shadow-2xl">
-      {/* Hide timeline / seek bar — keep play, volume, fullscreen */}
       <style>{`
         video.live-player::-webkit-media-controls-timeline,
         video.live-player::-webkit-media-controls-time-remaining-display,
@@ -541,6 +572,7 @@ function LiveStream() {
   const isMember = !isIdn;
 
   const [idnShow,           setIdnShow]           = useState<any>(null);
+  const [idnShowId,         setIdnShowId]         = useState<string>("");  // ← showId untuk header x-showId
   const [qualities,         setQualities]         = useState<QualityOption[]>([]);
   const [qualityMode,       setQualityMode]       = useState<"auto" | "manual">("auto");
   const [currentQuality,    setCurrentQuality]    = useState<QualityOption | null>(null);
@@ -663,14 +695,31 @@ function LiveStream() {
     try {
       const idnRes = await fetch(IDN_API);
       const idnData = await idnRes.json();
-      if (!idnData || idnData.status !== 200 || !Array.isArray(idnData.data)) { setError("Gagal mengambil data IDN Plus"); setLoading(false); return; }
+      if (!idnData || idnData.status !== 200 || !Array.isArray(idnData.data)) {
+        setError("Gagal mengambil data IDN Plus"); setLoading(false); return;
+      }
       const show = idnData.data.find((s: any) => s.slug === playbackId && s.status === "live");
       if (!show) { setError("Show tidak ditemukan atau sudah berakhir"); setLoading(false); return; }
       setIdnShow(show);
+
+      // ── Simpan showId untuk dikirim sebagai header x-showId ───────────────
+      setIdnShowId(show.showId || "");
+
+      // ── Ambil qualities dari /qualities.json ──────────────────────────────
       const qualRes = await fetch(`${PLAY_HOST}/live/idn/${show.slug}/qualities.json?showId=${show.showId}`);
       const qualData = await qualRes.json();
-      if (qualData.success && Array.isArray(qualData.qualities)) setQualities(qualData.qualities);
+      if (qualData.success && Array.isArray(qualData.qualities)) {
+        setQualities(qualData.qualities);
+      }
+
+      // ── HLS URL = theater proxy index.m3u8 (highest quality) ─────────────
+      // Custom loader di HlsPlayer akan:
+      //   1. Fetch playlist dari theater proxy URL
+      //   2. Tiap segment URL (theater proxy) → ekstrak ?url= → mediastream URL murni
+      //   3. Fetch segment dengan header x-showId: {showId}
       setHlsUrl(`${PLAY_HOST}/live/idn/${show.slug}/master.m3u8?showId=${show.showId}`);
+
+      // ── Theater members (lineup) ──────────────────────────────────────────
       try {
         const theaterRes = await fetch(`https://v2.jkt48connect.com/api/jkt48/theater?apikey=${API_KEY}`);
         const theaterData = await theaterRes.json();
@@ -687,6 +736,7 @@ function LiveStream() {
           if (detailData.shows?.[0]?.members) setMembers(detailData.shows[0].members);
         }
       } catch {}
+
       setLoading(false);
     } catch { setError("Terjadi kesalahan saat memuat stream."); setLoading(false); }
   }, [playbackId]);
@@ -711,6 +761,8 @@ function LiveStream() {
   const handleQualityChange = (q: QualityOption | null) => {
     setCurrentQuality(q);
     if (!q || !idnShow) return;
+    // Pakai manual_url (theater proxy index.m3u8 per quality)
+    // Custom loader akan ekstrak mediastream URL dari tiap segment
     setHlsUrl(q.manual_url);
   };
 
@@ -818,7 +870,7 @@ function LiveStream() {
   const handleLogout = () => {
     localStorage.removeItem("stream_verification");
     setIsVerified(false); setShowVerification(true);
-    setIdnShow(null); setHlsUrl(""); setQualities([]);
+    setIdnShow(null); setIdnShowId(""); setHlsUrl(""); setQualities([]);
     setVerifData({ email: "", code: "" });
   };
 
@@ -947,9 +999,29 @@ function LiveStream() {
         <div className="grid grid-cols-1 xl:grid-cols-[1fr_360px] gap-6">
           <div className="flex flex-col gap-5">
             {isIdn && hlsUrl ? (
-              <HlsPlayer src={hlsUrl} title={showTitle} qualities={qualities} onQualityChange={handleQualityChange} currentQuality={currentQuality} qualityMode={qualityMode} onModeChange={handleModeChange} isIdn={true} />
+              <HlsPlayer
+                src={hlsUrl}
+                title={showTitle}
+                qualities={qualities}
+                onQualityChange={handleQualityChange}
+                currentQuality={currentQuality}
+                qualityMode={qualityMode}
+                onModeChange={handleModeChange}
+                isIdn={true}
+                showId={idnShowId}  {/* ← showId untuk header x-showId */}
+              />
             ) : isMember && memberHlsUrl ? (
-              <HlsPlayer src={memberHlsUrl} title={showTitle} qualities={[]} onQualityChange={() => {}} currentQuality={null} qualityMode="auto" onModeChange={() => {}} isIdn={false} />
+              <HlsPlayer
+                src={memberHlsUrl}
+                title={showTitle}
+                qualities={[]}
+                onQualityChange={() => {}}
+                currentQuality={null}
+                qualityMode="auto"
+                onModeChange={() => {}}
+                isIdn={false}
+                showId=""
+              />
             ) : (
               <div className="aspect-video bg-gray-100 dark:bg-gray-800/50 rounded-2xl flex items-center justify-center border border-gray-200 dark:border-gray-700">
                 <div className="w-10 h-10 border-[3px] border-gray-200 dark:border-gray-700 border-t-red-500 rounded-full animate-spin" />
