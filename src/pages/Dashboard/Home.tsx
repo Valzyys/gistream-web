@@ -6,6 +6,7 @@ import RecentOrders from "../../components/ecommerce/RecentOrders";
 import DemographicCard from "../../components/ecommerce/DemographicCard";
 import PageMeta from "../../components/common/PageMeta";
 import VideoOpening from "../../components/ecommerce/VideoOpening";
+import AppInstallBanner from "../../components/common/AppInstallBanner";
 
 export default function Home() {
   return (
@@ -15,7 +16,7 @@ export default function Home() {
         description="GiStream adalah platform unofficial untuk menonton live stream theater JKT48 dengan harga terjangkau, tersedia di Android dan Website, didukung oleh JKT48Connect."
       />
       <div className="grid grid-cols-12 gap-4 md:gap-6">
-        
+
         {/* 🎬 VideoOpening FULL WIDTH di paling atas */}
         <div className="col-span-12">
           <VideoOpening />
@@ -43,6 +44,9 @@ export default function Home() {
           <RecentOrders />
         </div>
       </div>
+
+      {/* 📲 Banner install app — fixed pojok kanan bawah, muncul setelah 2.5 detik */}
+      <AppInstallBanner />
     </>
   );
 }
