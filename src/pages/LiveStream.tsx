@@ -2,6 +2,7 @@ import { useEffect, useState, useRef, useCallback } from "react";
 import { useParams, useNavigate } from "react-router";
 import Hls from "hls.js";
 import { createClient } from "@supabase/supabase-js";
+import StreamInfoBanner from "../../components/common/StreamInfoBanner";
 
 const supabaseUrl = import.meta.env.VITE_SUPABASE_URL || "https://mzxfuaoihgzxvokwarao.supabase.co";
 const supabaseKey = import.meta.env.VITE_SUPABASE_ANON_KEY || "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im16eGZ1YW9paGd6eHZva3dhcmFvIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzQ0MDg0NjIsImV4cCI6MjA4OTk4NDQ2Mn0.OFYCkBFXCSfLn-wG94OHHKL5CX8T_BLrbDGPiBdPIog";
@@ -210,7 +211,6 @@ function HlsPlayer({
 
     const currentShowId = showId;
 
-    // ── Custom loader: inject mediastream48 headers ───────────────────────
     class ShowIdLoader {
       private ctrl: AbortController | null = null;
       context: any = null;
@@ -227,13 +227,11 @@ function HlsPlayer({
         this.ctrl    = new AbortController();
         this.stats.loading.start = performance.now();
 
-        // Generate fresh token per load
         generateApiToken(currentShowId)
           .then(xApiToken => {
             const headers: Record<string, string> = {
               ...buildMediaHeaders(xApiToken, currentShowId),
             };
-
             return fetch(context.url, {
               signal:      this.ctrl!.signal,
               credentials: "omit",
@@ -759,11 +757,9 @@ function LiveStream() {
     } catch { setVerifyError("Terjadi kesalahan saat verifikasi. Silakan coba lagi."); setVerifying(false); }
   };
 
-  // ── Load IDN stream — langsung dari mediastream48 ─────────────────────────
   const loadIdnStream = useCallback(async () => {
     setLoading(true); setError("");
     try {
-      // Step 1: Cari show yang sedang live
       const idnRes  = await fetch(IDN_API);
       const idnData = await idnRes.json();
       if (!idnData || idnData.status !== 200 || !Array.isArray(idnData.data)) {
@@ -776,7 +772,6 @@ function LiveStream() {
       const showId = (show.showId || "").toString().toUpperCase();
       setIdnShowId(showId);
 
-      // Step 2: Generate JWT + fetch master playlist dari mediastream48
       let autoUrl = "";
       let qualityOptions: QualityOption[] = [];
 
@@ -792,7 +787,6 @@ function LiveStream() {
         const m3u8BaseUrl = r.url.substring(0, r.url.lastIndexOf("/") + 1);
 
         if (m3u8Text.includes("#EXT-X-STREAM-INF")) {
-          // Parse master playlist → ambil semua variant
           const lines: string[] = m3u8Text.split("\n");
           const variants: { bandwidth: number; name: string; url: string }[] = [];
 
@@ -830,7 +824,6 @@ function LiveStream() {
           setQualities(qualityOptions);
           autoUrl = variants[0]?.url || "";
         } else {
-          // Sudah media playlist langsung (bukan master)
           autoUrl = r.url;
         }
       } catch (e) {
@@ -842,7 +835,6 @@ function LiveStream() {
 
       setHlsUrl(autoUrl);
 
-      // Theater members lineup
       try {
         const theaterRes  = await fetch(`https://v2.jkt48connect.com/api/jkt48/theater?apikey=${API_KEY}`);
         const theaterData = await theaterRes.json();
@@ -881,7 +873,6 @@ function LiveStream() {
     } catch { setError("Terjadi kesalahan saat memuat stream member."); setLoading(false); }
   }, [playbackId]);
 
-  // ── Quality change handlers ───────────────────────────────────────────────
   const handleQualityChange = (q: QualityOption | null) => {
     setCurrentQuality(q);
     if (!q) return;
@@ -897,7 +888,6 @@ function LiveStream() {
     }
   };
 
-  // ── Chat init ─────────────────────────────────────────────────────────────
   const initChat = useCallback(async () => {
     setIsChatLoggingIn(true);
     let userData: any = null;
@@ -956,7 +946,6 @@ function LiveStream() {
     await channelRef.current?.send({ type: "broadcast", event: "pesan_baru", payload });
   };
 
-  // ── Effects ───────────────────────────────────────────────────────────────
   useEffect(() => {
     if (!isIdn) return;
     const channel = supabase.channel(`chat-${playbackId}`, { config: { broadcast: { ack: true } } });
@@ -1110,6 +1099,7 @@ function LiveStream() {
   return (
     <div>
       <div className="rounded-2xl border border-gray-200 bg-white px-5 py-6 dark:border-gray-800 dark:bg-white/[0.03] xl:px-8 xl:py-7">
+        {/* Header bar */}
         <div className="flex items-center gap-2.5 mb-6 flex-wrap">
           <button onClick={() => navigate(-1)} className="flex items-center gap-1.5 px-3.5 py-2 rounded-xl border border-gray-200 dark:border-gray-700 bg-transparent text-gray-600 dark:text-gray-400 text-xs font-semibold cursor-pointer hover:bg-gray-50 dark:hover:bg-gray-800/50 transition-colors">
             <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="15 18 9 12 15 6" /></svg>
@@ -1131,6 +1121,11 @@ function LiveStream() {
 
         <div className="grid grid-cols-1 xl:grid-cols-[1fr_360px] gap-6">
           <div className="flex flex-col gap-5">
+
+            {/* ── Stream Info Banner — tepat di atas player ── */}
+            <StreamInfoBanner isIdn={isIdn} />
+
+            {/* Player */}
             {isIdn && hlsUrl ? (
               <HlsPlayer
                 src={hlsUrl}
@@ -1161,6 +1156,7 @@ function LiveStream() {
               </div>
             )}
 
+            {/* IDN show detail */}
             {isIdn && idnShow && (
               <div className="rounded-2xl border border-gray-200 dark:border-gray-800 bg-gray-50 dark:bg-gray-800/30 p-5">
                 <p className="text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-3">Detail Show</p>
@@ -1181,6 +1177,7 @@ function LiveStream() {
               </div>
             )}
 
+            {/* Member show detail */}
             {isMember && memberShow && (
               <div className="rounded-2xl border border-gray-200 dark:border-gray-800 bg-gray-50 dark:bg-gray-800/30 p-5">
                 <p className="text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-3">Detail Member</p>
@@ -1197,6 +1194,7 @@ function LiveStream() {
               </div>
             )}
 
+            {/* Lineup */}
             {isIdn && members.length > 0 && (
               <div className="rounded-2xl border border-gray-200 dark:border-gray-800 bg-gray-50 dark:bg-gray-800/30 p-5">
                 <p className="text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-4">Lineup Show · {members.length} Member</p>
@@ -1216,6 +1214,7 @@ function LiveStream() {
             <p className="text-center text-[10px] font-semibold text-gray-300 dark:text-gray-700 uppercase tracking-widest pb-1">Powered by JKT48Connect</p>
           </div>
 
+          {/* Chat panel */}
           <div className="xl:sticky xl:top-4 xl:self-start">
             <div className="rounded-2xl border border-gray-200 dark:border-gray-800 bg-white dark:bg-white/[0.02] overflow-hidden" style={{ height: "580px" }}>
               <div className="h-full flex flex-col">
