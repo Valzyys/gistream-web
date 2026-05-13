@@ -1,6 +1,6 @@
 import { useEffect, useState, useRef, useCallback } from "react";
 import { useParams, useNavigate } from "react-router";
-import Hls from "hls.js";
+import MuxPlayer from "@mux/mux-player-react";
 import { createClient } from "@supabase/supabase-js";
 import StreamInfoBanner from "../../components/common/StreamInfoBanner";
 
@@ -8,62 +8,11 @@ const supabaseUrl = import.meta.env.VITE_SUPABASE_URL || "https://mzxfuaoihgzxvo
 const supabaseKey = import.meta.env.VITE_SUPABASE_ANON_KEY || "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im16eGZ1YW9paGd6eHZva3dhcmFvIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzQ0MDg0NjIsImV4cCI6MjA4OTk4NDQ2Mn0.OFYCkBFXCSfLn-wG94OHHKL5CX8T_BLrbDGPiBdPIog";
 const supabase = createClient(supabaseUrl, supabaseKey);
 
-const API_BASE = "https://v2.jkt48connect.com/api/jkt48connect";
-const API_KEY  = "JKTCONNECT";
-const IDN_API  = "https://v2.jkt48connect.com/api/jkt48/idnplus?apikey=JKTCONNECT";
-const LIVE_API = "https://v2.jkt48connect.com/api/jkt48/live?apikey=JKTCONNECT";
-
-// ── Mediastream48 constants ───────────────────────────────────────────────────
-const PARTNER_SECRET = "streamhanabira26";
-const X_TOKEN_ID     = "114e0e89-f8b4-44ee-9354-bb06805cc02f";
-const X_SEC_KEY      = "49c647f3-c84b-4b93-9b84-9d1ad158428e";
-
-const MEDIASTREAM_PLAYBACK = (showId: string) =>
-  `https://proxy.mediastream48.workers.dev/api/stream/v2/playback?showId=${showId}`;
-
-async function generateApiToken(showId: string): Promise<string> {
-  const rawSecret = `${X_SEC_KEY}:${X_TOKEN_ID}:${PARTNER_SECRET}`;
-  const keyData   = new TextEncoder().encode(rawSecret);
-  const hashBuf   = await crypto.subtle.digest("SHA-256", keyData);
-  const jwtSecret = Array.from(new Uint8Array(hashBuf))
-    .map(b => b.toString(16).padStart(2, "0")).join("");
-
-  const nowTs = Math.floor(Date.now() / 1000);
-  const expTs = nowTs + 7200;
-
-  const header  = btoa(JSON.stringify({ alg: "HS256", typ: "JWT" }))
-    .replace(/=/g, "").replace(/\+/g, "-").replace(/\//g, "_");
-  const payload = btoa(JSON.stringify({ sid: showId, tid: X_TOKEN_ID, exp: expTs }))
-    .replace(/=/g, "").replace(/\+/g, "-").replace(/\//g, "_");
-  const signingInput = `${header}.${payload}`;
-
-  const key = await crypto.subtle.importKey(
-    "raw",
-    new TextEncoder().encode(jwtSecret),
-    { name: "HMAC", hash: "SHA-256" },
-    false,
-    ["sign"]
-  );
-  const sigBuf = await crypto.subtle.sign("HMAC", key, new TextEncoder().encode(signingInput));
-  const sig    = btoa(String.fromCharCode(...new Uint8Array(sigBuf)))
-    .replace(/=/g, "").replace(/\+/g, "-").replace(/\//g, "_");
-
-  return `${signingInput}.${sig}`;
-}
-
-function buildMediaHeaders(xApiToken: string, showId: string): Record<string, string> {
-  return {
-    "Accept":          "*/*",
-    "Accept-Encoding": "gzip, deflate, br",
-    "Origin":          "https://stream.hanabira48.com",
-    "Referer":         "https://stream.hanabira48.com/",
-    "User-Agent":      "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/147.0.0.0 Safari/537.36",
-    "x-api-token":     xApiToken,
-    "x-sec-key":       X_SEC_KEY,
-    "x-showid":        showId,
-    "x-token-id":      X_TOKEN_ID,
-  };
-}
+const API_BASE   = "https://v2.jkt48connect.com/api/jkt48connect";
+const API_KEY    = "JKTCONNECT";
+const IDN_API    = "https://v2.jkt48connect.com/api/jkt48/idnplus?apikey=JKTCONNECT";
+const LIVE_API   = "https://v2.jkt48connect.com/api/jkt48/live?apikey=JKTCONNECT";
+const MUX_ID_API = "https://v2.jkt48connect.com/api/jkt48/id?apikey=JKTCONNECT";
 
 // ── Auth helpers ──────────────────────────────────────────────────────────────
 const getSession = () => {
@@ -84,18 +33,6 @@ const isIdnSlug = (param: string) => {
 };
 
 // ── Types ─────────────────────────────────────────────────────────────────────
-interface QualityOption {
-  index:           number;
-  name:            string;
-  quality:         string;
-  bandwidth:       number;
-  bandwidth_label: string;
-  resolution:      string;
-  fps:             string;
-  manual_url:      string;
-  playlist_url:    string;
-}
-
 interface ChatMessage {
   user_id:      string;
   username:     string;
@@ -168,251 +105,6 @@ function useShowroomComments(roomId: number | null) {
   }, [roomId, fetchComments]);
 
   return { comments, loading, error, lastPoll, retry: fetchComments };
-}
-
-// ── HLS Player ────────────────────────────────────────────────────────────────
-function HlsPlayer({
-  src, title, qualities, onQualityChange, currentQuality, qualityMode, onModeChange, isIdn, showId,
-}: {
-  src: string; title: string; qualities: QualityOption[];
-  onQualityChange: (q: QualityOption | null) => void;
-  currentQuality: QualityOption | null;
-  qualityMode: "auto" | "manual";
-  onModeChange: (mode: "auto" | "manual") => void;
-  isIdn: boolean;
-  showId: string;
-}) {
-  const videoRef = useRef<HTMLVideoElement>(null);
-  const hlsRef   = useRef<Hls | null>(null);
-  const retryRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const [showQualityPanel, setShowQualityPanel] = useState(false);
-  const [currentLevel, setCurrentLevel]         = useState<string>("Auto");
-  const [bandwidth, setBandwidth]               = useState<string>("");
-
-  const destroyHls = useCallback(() => {
-    if (retryRef.current) { clearTimeout(retryRef.current); retryRef.current = null; }
-    if (hlsRef.current) { hlsRef.current.destroy(); hlsRef.current = null; }
-  }, []);
-
-  useEffect(() => {
-    const video = videoRef.current;
-    if (!video || !src) return;
-
-    destroyHls();
-
-    if (!Hls.isSupported()) {
-      if (video.canPlayType("application/vnd.apple.mpegurl")) {
-        video.src = src;
-        video.load();
-        video.play().catch(() => {});
-      }
-      return;
-    }
-
-    const currentShowId = showId;
-
-    class ShowIdLoader {
-      private ctrl: AbortController | null = null;
-      context: any = null;
-      stats: any = {
-        aborted: false, loaded: 0, retry: 0, total: 0, chunkCount: 0,
-        bwEstimate: 0,
-        loading:   { start: 0, first: 0, end: 0 },
-        parsing:   { start: 0, end: 0 },
-        buffering: { start: 0, first: 0, end: 0 },
-      };
-
-      load(context: any, _config: any, callbacks: any) {
-        this.context = context;
-        this.ctrl    = new AbortController();
-        this.stats.loading.start = performance.now();
-
-        generateApiToken(currentShowId)
-          .then(xApiToken => {
-            const headers: Record<string, string> = {
-              ...buildMediaHeaders(xApiToken, currentShowId),
-            };
-            return fetch(context.url, {
-              signal:      this.ctrl!.signal,
-              credentials: "omit",
-              headers,
-            });
-          })
-          .then(async (res) => {
-            if (!res.ok) throw new Error(`HTTP ${res.status}`);
-            this.stats.loading.first = performance.now();
-
-            const isText =
-              context.type === "manifest" ||
-              context.type === "level"    ||
-              /\.(m3u8|js|txt)(\?|$)/i.test(context.url);
-
-            if (isText) {
-              const text = await res.text();
-              this.stats.loading.end  = performance.now();
-              this.stats.parsing.end  = performance.now();
-              this.stats.loaded = this.stats.total = text.length;
-              callbacks.onSuccess({ url: context.url, data: text }, this.stats, context, res);
-            } else {
-              const buf = await res.arrayBuffer();
-              this.stats.loading.end = performance.now();
-              this.stats.loaded = this.stats.total = buf.byteLength;
-              callbacks.onSuccess({ url: context.url, data: buf }, this.stats, context, res);
-            }
-          })
-          .catch((err) => {
-            if (err.name === "AbortError") return;
-            this.stats.loading.end = performance.now();
-            callbacks.onError({ code: 0, text: err.message }, context, null, this.stats);
-          });
-      }
-
-      abort()   { this.ctrl?.abort(); this.stats.aborted = true; }
-      destroy() { this.abort(); }
-    }
-
-    const hls = new Hls({
-      enableWorker:                false,
-      lowLatencyMode:              false,
-      maxBufferLength:             30,
-      maxMaxBufferLength:          60,
-      maxBufferSize:               60 * 1000 * 1000,
-      backBufferLength:            30,
-      liveSyncDurationCount:       3,
-      liveMaxLatencyDurationCount: 10,
-      liveDurationInfinity:        true,
-      fragLoadingTimeOut:          10000,
-      fragLoadingMaxRetry:         6,
-      fragLoadingRetryDelay:       1000,
-      fragLoadingMaxRetryTimeout:  8000,
-      manifestLoadingTimeOut:      10000,
-      manifestLoadingMaxRetry:     4,
-      manifestLoadingRetryDelay:   1000,
-      levelLoadingTimeOut:         10000,
-      levelLoadingMaxRetry:        4,
-      levelLoadingRetryDelay:      1000,
-      startLevel:                  -1,
-      abrEwmaDefaultEstimate:      500_000,
-      abrBandWidthFactor:          0.8,
-      abrBandWidthUpFactor:        0.7,
-      abrEwmaFastLive:             3.0,
-      abrEwmaSlowLive:             9.0,
-      nudgeOffset:                 0.3,
-      nudgeMaxRetry:               5,
-      loader:                      ShowIdLoader as any,
-    } as any);
-
-    hlsRef.current = hls;
-    hls.loadSource(src);
-    hls.attachMedia(video);
-
-    hls.on(Hls.Events.MANIFEST_PARSED, () => {
-      video.play().catch(() => {});
-    });
-
-    hls.on(Hls.Events.LEVEL_SWITCHED, (_, data) => {
-      const lvl = hls.levels[data.level];
-      if (lvl) {
-        setCurrentLevel(lvl.name || `${lvl.height}p`);
-        const bw = hls.bandwidthEstimate;
-        if (bw > 0) setBandwidth(
-          bw >= 1_000_000
-            ? (bw / 1_000_000).toFixed(1) + " Mbps"
-            : Math.round(bw / 1_000) + " Kbps"
-        );
-      }
-    });
-
-    hls.on(Hls.Events.ERROR, (_, data) => {
-      if (!data.fatal) return;
-      if (data.type === Hls.ErrorTypes.NETWORK_ERROR) {
-        hls.startLoad();
-      } else if (data.type === Hls.ErrorTypes.MEDIA_ERROR) {
-        hls.recoverMediaError();
-      } else {
-        destroyHls();
-        retryRef.current = setTimeout(() => {
-          const v = videoRef.current;
-          if (!v) return;
-          const newHls = new Hls({
-            enableWorker:    false,
-            lowLatencyMode:  false,
-            maxBufferLength: 30,
-            loader:          ShowIdLoader as any,
-          } as any);
-          newHls.loadSource(src);
-          newHls.attachMedia(v);
-          newHls.on(Hls.Events.MANIFEST_PARSED, () => v.play().catch(() => {}));
-          hlsRef.current = newHls;
-        }, 2000);
-      }
-    });
-
-    return destroyHls;
-  }, [src, showId, destroyHls]);
-
-  return (
-    <div className="relative w-full rounded-2xl overflow-hidden bg-black shadow-2xl">
-      <style>{`
-        video.live-player::-webkit-media-controls-timeline,
-        video.live-player::-webkit-media-controls-time-remaining-display,
-        video.live-player::-webkit-media-controls-current-time-display {
-          display: none !important;
-        }
-      `}</style>
-
-      <div className={isIdn ? "aspect-video" : ""}>
-        <video
-          ref={videoRef}
-          controls
-          autoPlay
-          playsInline
-          className={`live-player w-full ${isIdn ? "h-full" : ""} block`}
-          title={title}
-        />
-      </div>
-
-      {qualities.length > 0 && (
-        <div className="absolute bottom-12 right-3 z-20">
-          <button
-            onClick={() => setShowQualityPanel((p) => !p)}
-            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-black/80 backdrop-blur-sm text-white text-[11px] font-bold cursor-pointer border border-white/10 hover:bg-black/90 transition-colors"
-          >
-            <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-              <circle cx="12" cy="12" r="3" /><path d="M19.07 4.93a10 10 0 0 1 0 14.14M4.93 4.93a10 10 0 0 0 0 14.14" />
-            </svg>
-            {qualityMode === "auto" ? `Auto (${currentLevel})` : currentQuality?.name || currentLevel}
-            {bandwidth && <span className="opacity-50 text-[10px]">· {bandwidth}</span>}
-          </button>
-          {showQualityPanel && (
-            <div className="absolute bottom-[calc(100%+8px)] right-0 bg-gray-900/95 backdrop-blur-xl border border-white/10 rounded-2xl p-2 min-w-[190px] shadow-2xl">
-              <p className="text-[9px] font-bold text-white/30 px-2 pb-1.5 uppercase tracking-widest">Kualitas</p>
-              <button
-                onClick={() => { onModeChange("auto"); onQualityChange(null); setShowQualityPanel(false); }}
-                className={`w-full px-3 py-2 rounded-xl border-0 text-[12px] cursor-pointer text-left flex items-center justify-between mb-0.5 transition-colors ${qualityMode === "auto" ? "bg-red-500/20 text-red-400 font-bold" : "bg-transparent text-white/70 hover:bg-white/5"}`}
-              >
-                <span>⚡ Auto</span>
-                {qualityMode === "auto" && <span className="text-[10px] opacity-60">{currentLevel}</span>}
-              </button>
-              {qualities.map((q) => {
-                const isActive = qualityMode === "manual" && currentQuality?.quality === q.quality;
-                return (
-                  <button
-                    key={q.quality}
-                    onClick={() => { onModeChange("manual"); onQualityChange(q); setShowQualityPanel(false); }}
-                    className={`w-full px-3 py-2 rounded-xl border-0 text-[12px] cursor-pointer text-left flex items-center justify-between mb-0.5 transition-colors ${isActive ? "bg-red-500/20 text-red-400 font-bold" : "bg-transparent text-white/70 hover:bg-white/5"}`}
-                  >
-                    <span>{q.name}</span>
-                    <span className="text-[10px] opacity-50">{q.bandwidth_label}</span>
-                  </button>
-                );
-              })}
-            </div>
-          )}
-        </div>
-      )}
-    </div>
-  );
 }
 
 // ── IDN Chat Panel ────────────────────────────────────────────────────────────
@@ -638,15 +330,18 @@ function LiveStream() {
   const isIdn    = isIdnSlug(playbackId || "");
   const isMember = !isIdn;
 
+  // ── Mux state ─────────────────────────────────────────────────────────────
+  const [muxPlaybackId,     setMuxPlaybackId]     = useState<string>("");
+  const [muxLoading,        setMuxLoading]        = useState(true);
+  const [muxError,          setMuxError]          = useState("");
+
+  // ── IDN/Member show info (untuk detail panel & chat) ──────────────────────
   const [idnShow,           setIdnShow]           = useState<any>(null);
-  const [idnShowId,         setIdnShowId]         = useState<string>("");
-  const [qualities,         setQualities]         = useState<QualityOption[]>([]);
-  const [qualityMode,       setQualityMode]       = useState<"auto" | "manual">("auto");
-  const [currentQuality,    setCurrentQuality]    = useState<QualityOption | null>(null);
-  const [hlsUrl,            setHlsUrl]            = useState("");
   const [memberShow,        setMemberShow]        = useState<any>(null);
-  const [memberHlsUrl,      setMemberHlsUrl]      = useState("");
   const [memberRoomId,      setMemberRoomId]      = useState<number | null>(null);
+  const [members,           setMembers]           = useState<any[]>([]);
+
+  // ── Membership / verification ─────────────────────────────────────────────
   const [membershipLoading, setMembershipLoading] = useState(isIdn);
   const [hasMembership,     setHasMembership]     = useState(false);
   const [isVerified,        setIsVerified]        = useState(false);
@@ -655,10 +350,8 @@ function LiveStream() {
   const [verifyError,       setVerifyError]       = useState("");
   const [verifying,         setVerifying]         = useState(false);
   const [clientIP,          setClientIP]          = useState("");
-  const [loading,           setLoading]           = useState(true);
-  const [error,             setError]             = useState("");
-  const [members,           setMembers]           = useState<any[]>([]);
 
+  // ── Chat ──────────────────────────────────────────────────────────────────
   const [chatMessages,    setChatMessages]    = useState<ChatMessage[]>([]);
   const [chatInput,       setChatInput]       = useState("");
   const [chatUser,        setChatUser]        = useState<any>(null);
@@ -669,6 +362,66 @@ function LiveStream() {
   const { comments: srComments, loading: srLoading, error: srError, lastPoll: srLastPoll, retry: srRetry } =
     useShowroomComments(isMember ? memberRoomId : null);
 
+  // ── Fetch Mux Playback ID dari /id endpoint ───────────────────────────────
+  const fetchMuxPlaybackId = useCallback(async () => {
+    setMuxLoading(true);
+    setMuxError("");
+    try {
+      const res  = await fetch(MUX_ID_API);
+      const data = await res.json();
+      if (!data?.ID) throw new Error("Playback ID tidak tersedia");
+      setMuxPlaybackId(data.ID);
+    } catch (e: any) {
+      setMuxError(e.message || "Gagal mengambil Mux Playback ID");
+    } finally {
+      setMuxLoading(false);
+    }
+  }, []);
+
+  // ── Fetch show info untuk detail panel (IDN) ──────────────────────────────
+  const fetchIdnShowInfo = useCallback(async () => {
+    try {
+      const res  = await fetch(IDN_API);
+      const data = await res.json();
+      if (!data || data.status !== 200 || !Array.isArray(data.data)) return;
+      const show = data.data.find((s: any) => s.slug === playbackId);
+      if (show) setIdnShow(show);
+
+      // Lineup dari theater
+      try {
+        const theaterRes  = await fetch(`https://v2.jkt48connect.com/api/jkt48/theater?apikey=${API_KEY}`);
+        const theaterData = await theaterRes.json();
+        if (theaterData.theater?.length > 0) {
+          const now   = Date.now();
+          let nearest = theaterData.theater[0];
+          let minDiff = Math.abs(new Date(nearest.date).getTime() - now);
+          theaterData.theater.forEach((s: any) => {
+            const diff = Math.abs(new Date(s.date).getTime() - now);
+            if (diff < minDiff) { minDiff = diff; nearest = s; }
+          });
+          const detailRes  = await fetch(`https://v2.jkt48connect.com/api/jkt48/theater/${nearest.id}?apikey=${API_KEY}`);
+          const detailData = await detailRes.json();
+          if (detailData.shows?.[0]?.members) setMembers(detailData.shows[0].members);
+        }
+      } catch {}
+    } catch {}
+  }, [playbackId]);
+
+  // ── Fetch show info untuk detail panel (Member) ───────────────────────────
+  const fetchMemberShowInfo = useCallback(async () => {
+    try {
+      const res  = await fetch(LIVE_API);
+      const data = await res.json();
+      if (!Array.isArray(data)) return;
+      const show = data.find((s: any) => s.url_key === playbackId);
+      if (show) {
+        setMemberShow(show);
+        if (show.room_id) setMemberRoomId(show.room_id);
+      }
+    } catch {}
+  }, [playbackId]);
+
+  // ── Auth helpers ──────────────────────────────────────────────────────────
   const fetchClientIP = async () => {
     try {
       const res  = await fetch("https://api.ipify.org?format=json");
@@ -727,9 +480,9 @@ function LiveStream() {
       if (!verifyData.status) { setVerifyError(verifyData.message || "Code tidak valid atau sudah kedaluwarsa"); setVerifying(false); return; }
       const codeData   = verifyData.data;
       if (!codeData.is_active) { setVerifyError("Code ini sudah tidak aktif"); setVerifying(false); return; }
-      const usageCount    = parseInt(codeData.usage_count) || 0;
-      const usageLimit    = parseInt(codeData.usage_limit) || 1;
-      const hasUsageLeft  = usageCount < usageLimit;
+      const usageCount   = parseInt(codeData.usage_count) || 0;
+      const usageLimit   = parseInt(codeData.usage_limit) || 1;
+      const hasUsageLeft = usageCount < usageLimit;
       if (codeData.is_used && !hasUsageLeft) {
         const listRes  = await fetch(`https://v2.jkt48connect.com/api/codes/list?email=${verifData.email}&apikey=JKTCONNECT`);
         const listData = await listRes.json();
@@ -757,137 +510,7 @@ function LiveStream() {
     } catch { setVerifyError("Terjadi kesalahan saat verifikasi. Silakan coba lagi."); setVerifying(false); }
   };
 
-  const loadIdnStream = useCallback(async () => {
-    setLoading(true); setError("");
-    try {
-      const idnRes  = await fetch(IDN_API);
-      const idnData = await idnRes.json();
-      if (!idnData || idnData.status !== 200 || !Array.isArray(idnData.data)) {
-        setError("Gagal mengambil data IDN Plus"); setLoading(false); return;
-      }
-      const show = idnData.data.find((s: any) => s.slug === playbackId && s.status === "live");
-      if (!show) { setError("Show tidak ditemukan atau sudah berakhir"); setLoading(false); return; }
-      setIdnShow(show);
-
-      const showId = (show.showId || "").toString().toUpperCase();
-      setIdnShowId(showId);
-
-      let autoUrl = "";
-      let qualityOptions: QualityOption[] = [];
-
-      try {
-        const xApiToken = await generateApiToken(showId);
-        const r = await fetch(MEDIASTREAM_PLAYBACK(showId), {
-          headers: buildMediaHeaders(xApiToken, showId),
-          redirect: "follow",
-        });
-        if (!r.ok) throw new Error(`Playback API error: ${r.status}`);
-
-        const m3u8Text    = await r.text();
-        const m3u8BaseUrl = r.url.substring(0, r.url.lastIndexOf("/") + 1);
-
-        if (m3u8Text.includes("#EXT-X-STREAM-INF")) {
-          const lines: string[] = m3u8Text.split("\n");
-          const variants: { bandwidth: number; name: string; url: string }[] = [];
-
-          for (let i = 0; i < lines.length; i++) {
-            const line = lines[i].trim();
-            if (!line.startsWith("#EXT-X-STREAM-INF")) continue;
-            const bw   = parseInt((line.match(/BANDWIDTH=(\d+)/i) || [])[1] || "0", 10);
-            const name = (line.match(/NAME="([^"]+)"/i) || [])[1] || "";
-            const next = lines[i + 1]?.trim();
-            if (!next || next.startsWith("#")) continue;
-            const varUrl = /^https?:\/\//i.test(next) ? next : m3u8BaseUrl + next;
-            variants.push({ bandwidth: bw, name, url: varUrl });
-            i++;
-          }
-
-          variants.sort((a, b) => b.bandwidth - a.bandwidth);
-
-          qualityOptions = variants.map((v, idx) => {
-            const bwLabel = v.bandwidth >= 1_000_000
-              ? (v.bandwidth / 1_000_000).toFixed(1) + " Mbps"
-              : Math.round(v.bandwidth / 1_000) + " Kbps";
-            return {
-              index:           idx,
-              name:            v.name || `Quality ${idx + 1}`,
-              quality:         v.name || `q${idx}`,
-              bandwidth:       v.bandwidth,
-              bandwidth_label: bwLabel,
-              resolution:      "",
-              fps:             "",
-              manual_url:      v.url,
-              playlist_url:    v.url,
-            };
-          });
-
-          setQualities(qualityOptions);
-          autoUrl = variants[0]?.url || "";
-        } else {
-          autoUrl = r.url;
-        }
-      } catch (e) {
-        console.error("Gagal fetch mediastream48:", e);
-        setError("Gagal mengambil stream dari server. Silakan coba lagi.");
-        setLoading(false);
-        return;
-      }
-
-      setHlsUrl(autoUrl);
-
-      try {
-        const theaterRes  = await fetch(`https://v2.jkt48connect.com/api/jkt48/theater?apikey=${API_KEY}`);
-        const theaterData = await theaterRes.json();
-        if (theaterData.theater?.length > 0) {
-          const now   = Date.now();
-          let nearest = theaterData.theater[0];
-          let minDiff = Math.abs(new Date(nearest.date).getTime() - now);
-          theaterData.theater.forEach((s: any) => {
-            const diff = Math.abs(new Date(s.date).getTime() - now);
-            if (diff < minDiff) { minDiff = diff; nearest = s; }
-          });
-          const detailRes  = await fetch(`https://v2.jkt48connect.com/api/jkt48/theater/${nearest.id}?apikey=${API_KEY}`);
-          const detailData = await detailRes.json();
-          if (detailData.shows?.[0]?.members) setMembers(detailData.shows[0].members);
-        }
-      } catch {}
-
-      setLoading(false);
-    } catch { setError("Terjadi kesalahan saat memuat stream."); setLoading(false); }
-  }, [playbackId]);
-
-  const loadMemberStream = useCallback(async () => {
-    setLoading(true); setError("");
-    try {
-      const res  = await fetch(LIVE_API);
-      const data = await res.json();
-      if (!Array.isArray(data)) { setError("Gagal mengambil data live member"); setLoading(false); return; }
-      const show = data.find((s: any) => s.url_key === playbackId);
-      if (!show) { setError("Member tidak sedang live saat ini"); setLoading(false); return; }
-      setMemberShow(show);
-      const streamUrl = show.streaming_url_list?.[0]?.url || null;
-      if (!streamUrl) { setError("URL stream tidak tersedia"); setLoading(false); return; }
-      setMemberHlsUrl(streamUrl);
-      if (show.room_id) setMemberRoomId(show.room_id);
-      setLoading(false);
-    } catch { setError("Terjadi kesalahan saat memuat stream member."); setLoading(false); }
-  }, [playbackId]);
-
-  const handleQualityChange = (q: QualityOption | null) => {
-    setCurrentQuality(q);
-    if (!q) return;
-    setHlsUrl(q.manual_url);
-  };
-
-  const handleModeChange = (mode: "auto" | "manual") => {
-    setQualityMode(mode);
-    if (mode === "auto") {
-      const best = [...qualities].sort((a, b) => b.bandwidth - a.bandwidth)[0];
-      if (best?.manual_url) setHlsUrl(best.manual_url);
-      setCurrentQuality(null);
-    }
-  };
-
+  // ── Chat init ─────────────────────────────────────────────────────────────
   const initChat = useCallback(async () => {
     setIsChatLoggingIn(true);
     let userData: any = null;
@@ -946,6 +569,9 @@ function LiveStream() {
     await channelRef.current?.send({ type: "broadcast", event: "pesan_baru", payload });
   };
 
+  // ── Effects ───────────────────────────────────────────────────────────────
+
+  // Supabase realtime chat (IDN)
   useEffect(() => {
     if (!isIdn) return;
     const channel = supabase.channel(`chat-${playbackId}`, { config: { broadcast: { ack: true } } });
@@ -964,30 +590,43 @@ function LiveStream() {
 
   useEffect(() => { chatEndRef.current?.scrollIntoView({ behavior: "smooth" }); }, [chatMessages]);
 
+  // Membership check + fetch Mux ID + show info (IDN)
   useEffect(() => {
-    if (isMember) {
-      loadMemberStream();
-    } else {
-      const init = async () => {
-        await fetchClientIP();
-        const hasMember = await checkMembership();
-        if (hasMember) { setIsVerified(true); setShowVerification(false); await loadIdnStream(); }
-        else {
-          const verified = await checkExistingVerification();
-          if (verified) await loadIdnStream();
-          else setLoading(false);
-        }
-      };
-      init();
-    }
-  }, [isMember]); // eslint-disable-line
+    if (!isIdn) return;
+    const init = async () => {
+      await fetchClientIP();
+      const hasMember = await checkMembership();
+      if (hasMember) {
+        setIsVerified(true);
+        setShowVerification(false);
+        await Promise.all([fetchMuxPlaybackId(), fetchIdnShowInfo()]);
+      } else {
+        const verified = await checkExistingVerification();
+        if (verified) await Promise.all([fetchMuxPlaybackId(), fetchIdnShowInfo()]);
+      }
+    };
+    init();
+  }, []); // eslint-disable-line
 
-  useEffect(() => { if (isIdn && isVerified && !idnShow) loadIdnStream(); }, [isVerified]); // eslint-disable-line
+  // Fetch Mux ID setelah verifikasi berhasil (IDN)
+  useEffect(() => {
+    if (isIdn && isVerified && !muxPlaybackId) {
+      fetchMuxPlaybackId();
+      fetchIdnShowInfo();
+    }
+  }, [isVerified]); // eslint-disable-line
+
+  // Fetch Mux ID + show info (Member)
+  useEffect(() => {
+    if (!isMember) return;
+    fetchMuxPlaybackId();
+    fetchMemberShowInfo();
+  }, []); // eslint-disable-line
 
   const handleLogout = () => {
     localStorage.removeItem("stream_verification");
     setIsVerified(false); setShowVerification(true);
-    setIdnShow(null); setIdnShowId(""); setHlsUrl(""); setQualities([]);
+    setIdnShow(null); setMuxPlaybackId(""); setMuxError("");
     setVerifData({ email: "", code: "" });
   };
 
@@ -1062,22 +701,20 @@ function LiveStream() {
     );
   }
 
-  // ── Loading stream ────────────────────────────────────────────────────────
-  if (loading) {
+  // ── Loading Mux ───────────────────────────────────────────────────────────
+  if (muxLoading) {
     return (
       <div className="min-h-screen rounded-2xl border border-gray-200 bg-white dark:border-gray-800 dark:bg-white/[0.03] flex items-center justify-center">
         <div className="text-center">
           <div className="w-10 h-10 border-[3px] border-gray-200 dark:border-gray-700 border-t-red-500 rounded-full animate-spin mx-auto mb-4" />
-          <p className="text-sm font-medium text-gray-500 dark:text-gray-400">
-            {isIdn ? "Memuat IDN Live Plus..." : "Memuat live stream member..."}
-          </p>
+          <p className="text-sm font-medium text-gray-500 dark:text-gray-400">Memuat live stream...</p>
         </div>
       </div>
     );
   }
 
   // ── Error ─────────────────────────────────────────────────────────────────
-  if (error) {
+  if (muxError) {
     return (
       <div className="min-h-screen rounded-2xl border border-gray-200 bg-white px-5 py-7 dark:border-gray-800 dark:bg-white/[0.03] xl:px-10 xl:py-12 flex items-center justify-center">
         <div className="text-center max-w-sm">
@@ -1085,9 +722,9 @@ function LiveStream() {
             <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round" className="text-red-500"><circle cx="12" cy="12" r="10" /><line x1="12" y1="8" x2="12" y2="12" /><line x1="12" y1="16" x2="12.01" y2="16" /></svg>
           </div>
           <h3 className="text-lg font-bold text-gray-800 dark:text-white/90 mb-2">Terjadi Kesalahan</h3>
-          <p className="text-sm text-gray-500 dark:text-gray-400 mb-6">{error}</p>
+          <p className="text-sm text-gray-500 dark:text-gray-400 mb-6">{muxError}</p>
           <div className="flex gap-3 justify-center">
-            <button onClick={() => { setError(""); isIdn ? loadIdnStream() : loadMemberStream(); }} className="px-5 py-2.5 rounded-xl border-0 bg-red-500 text-white text-sm font-bold cursor-pointer hover:bg-red-600 shadow-lg shadow-red-500/25 transition-all hover:-translate-y-0.5">Coba Lagi</button>
+            <button onClick={fetchMuxPlaybackId} className="px-5 py-2.5 rounded-xl border-0 bg-red-500 text-white text-sm font-bold cursor-pointer hover:bg-red-600 shadow-lg shadow-red-500/25 transition-all hover:-translate-y-0.5">Coba Lagi</button>
             <button onClick={() => navigate(-1)} className="px-5 py-2.5 rounded-xl border border-gray-200 dark:border-gray-700 bg-transparent text-gray-600 dark:text-gray-400 text-sm font-semibold cursor-pointer hover:bg-gray-50 dark:hover:bg-gray-800/50 transition-colors">Kembali</button>
           </div>
         </div>
@@ -1099,6 +736,7 @@ function LiveStream() {
   return (
     <div>
       <div className="rounded-2xl border border-gray-200 bg-white px-5 py-6 dark:border-gray-800 dark:bg-white/[0.03] xl:px-8 xl:py-7">
+
         {/* Header bar */}
         <div className="flex items-center gap-2.5 mb-6 flex-wrap">
           <button onClick={() => navigate(-1)} className="flex items-center gap-1.5 px-3.5 py-2 rounded-xl border border-gray-200 dark:border-gray-700 bg-transparent text-gray-600 dark:text-gray-400 text-xs font-semibold cursor-pointer hover:bg-gray-50 dark:hover:bg-gray-800/50 transition-colors">
@@ -1122,34 +760,22 @@ function LiveStream() {
         <div className="grid grid-cols-1 xl:grid-cols-[1fr_360px] gap-6">
           <div className="flex flex-col gap-5">
 
-            {/* ── Stream Info Banner — tepat di atas player ── */}
+            {/* Stream Info Banner */}
             <StreamInfoBanner isIdn={isIdn} />
 
-            {/* Player */}
-            {isIdn && hlsUrl ? (
-              <HlsPlayer
-                src={hlsUrl}
-                title={showTitle}
-                qualities={qualities}
-                onQualityChange={handleQualityChange}
-                currentQuality={currentQuality}
-                qualityMode={qualityMode}
-                onModeChange={handleModeChange}
-                isIdn={true}
-                showId={idnShowId}
-              />
-            ) : isMember && memberHlsUrl ? (
-              <HlsPlayer
-                src={memberHlsUrl}
-                title={showTitle}
-                qualities={[]}
-                onQualityChange={() => {}}
-                currentQuality={null}
-                qualityMode="auto"
-                onModeChange={() => {}}
-                isIdn={false}
-                showId=""
-              />
+            {/* ── Mux Player ── */}
+            {muxPlaybackId ? (
+              <div className="relative w-full rounded-2xl overflow-hidden bg-black shadow-2xl">
+                <MuxPlayer
+                  playbackId={muxPlaybackId}
+                  streamType="live"
+                  autoPlay
+                  title={showTitle}
+                  style={{ width: "100%", aspectRatio: "16/9" }}
+                  primaryColor="#ef4444"
+                  accentColor="#dc2626"
+                />
+              </div>
             ) : (
               <div className="aspect-video bg-gray-100 dark:bg-gray-800/50 rounded-2xl flex items-center justify-center border border-gray-200 dark:border-gray-700">
                 <div className="w-10 h-10 border-[3px] border-gray-200 dark:border-gray-700 border-t-red-500 rounded-full animate-spin" />
@@ -1169,7 +795,6 @@ function LiveStream() {
                         <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>
                         {idnShow.view_count?.toLocaleString() || 0}
                       </span>
-                      {idnShow.showId && <span>#{idnShow.showId}</span>}
                     </div>
                     {idnShow.idnliveplus?.description && <p className="text-xs leading-relaxed text-gray-500 dark:text-gray-400 m-0 whitespace-pre-line">{idnShow.idnliveplus.description}</p>}
                   </div>
@@ -1194,7 +819,7 @@ function LiveStream() {
               </div>
             )}
 
-            {/* Lineup */}
+            {/* Lineup (IDN) */}
             {isIdn && members.length > 0 && (
               <div className="rounded-2xl border border-gray-200 dark:border-gray-800 bg-gray-50 dark:bg-gray-800/30 p-5">
                 <p className="text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-4">Lineup Show · {members.length} Member</p>
