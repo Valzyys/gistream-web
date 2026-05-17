@@ -533,6 +533,8 @@ function LiveStream() {
   const [currentQuality, setCurrentQuality] = useState<QualityOption | null>(null);
 
   // Access control
+  // ─── FIX: gunakan ref untuk menyimpan hasil membership check secara synchronous ───
+  const membershipResultRef             = useRef<boolean>(false);
   const [membershipLoading, setMembershipLoading] = useState(isIdn);
   const [hasMembership,     setHasMembership]     = useState(false);
   const [isVerified,        setIsVerified]         = useState(false);
@@ -566,7 +568,8 @@ function LiveStream() {
   };
 
   // ── checkMembership ──────────────────────────────────────────────────────────
-  // Returns true jika membership monthly aktif → langsung bypass verifikasi kode
+  // FIX: Tidak lagi menggunakan React state untuk flow control.
+  // Semua keputusan diambil dari return value boolean langsung.
   const checkMembership = useCallback(async (): Promise<boolean> => {
     setMembershipLoading(true);
     const session = getSession();
@@ -579,19 +582,24 @@ function LiveStream() {
       });
       const data = await res.json();
       if (data.status && data.data?.is_active && data.data?.membership_type === "monthly") {
+        // ─── FIX: Simpan hasil ke ref terlebih dahulu (synchronous), baru update state ───
+        membershipResultRef.current = true;
         setHasMembership(true);
-        // ─── KUNCI FIX: langsung set verified & sembunyikan form verifikasi ───
         setIsVerified(true);
         setShowVerification(false);
         setMembershipLoading(false);
-        return true;
+        return true; // ← caller langsung dapat true tanpa tunggu re-render
       }
     } catch {}
+    membershipResultRef.current = false;
     setMembershipLoading(false);
     return false;
   }, []);
 
   const checkExistingVerification = async () => {
+    // ─── FIX: Jika membership sudah aktif (dari ref, bukan state), langsung skip ───
+    if (membershipResultRef.current) return true;
+
     const stored = localStorage.getItem("stream_verification");
     if (!stored) { setShowVerification(true); return false; }
     try {
@@ -849,38 +857,47 @@ function LiveStream() {
   useEffect(() => {
     if (isMember) {
       loadMemberStream();
-    } else {
-      const init = async () => {
-        await fetchClientIP();
-        // Cek membership dulu — jika aktif, langsung load stream tanpa perlu kode verifikasi
-        const hasMember = await checkMembership();
-        if (hasMember) {
-          // isVerified & showVerification sudah di-set di dalam checkMembership()
-          await loadIdnStream();
-          return;
-        }
-        // Bukan member → cek apakah sudah punya verifikasi kode yang masih valid
-        const verified = await checkExistingVerification();
-        if (verified) {
-          await loadIdnStream();
-        } else {
-          // Tampilkan form verifikasi kode
-          setLoading(false);
-        }
-      };
-      init();
+      return;
     }
+
+    // ─── FIX: Seluruh flow init dijalankan sequential dalam satu async function ───
+    // Tidak ada state-based branching — semua pakai return value boolean langsung.
+    const init = async () => {
+      await fetchClientIP();
+
+      // Step 1: Cek membership → return value boolean langsung, tidak tunggu state
+      const hasMember = await checkMembership();
+      if (hasMember) {
+        // Langsung load stream, ref sudah di-set true di dalam checkMembership()
+        await loadIdnStream();
+        return;
+      }
+
+      // Step 2: Bukan member → cek verifikasi kode yang tersimpan
+      // checkExistingVerification() juga cek membershipResultRef.current sebagai guard
+      const verified = await checkExistingVerification();
+      if (verified) {
+        await loadIdnStream();
+      } else {
+        // Tampilkan form verifikasi kode
+        setLoading(false);
+      }
+    };
+
+    init();
   }, [isMember]); // eslint-disable-line
 
-  // Jika user baru saja selesai verifikasi kode (isVerified berubah jadi true) tapi stream belum dimuat
+  // ─── FIX: Effect ini tetap ada sebagai fallback jika user baru saja verifikasi kode ───
+  // Tapi tidak lagi trigger untuk kasus membership (sudah ditangani di flow init di atas)
   useEffect(() => {
-    if (isIdn && isVerified && !idnShow && !loading) {
+    if (isIdn && isVerified && !idnShow && !loading && !membershipLoading) {
       loadIdnStream();
     }
   }, [isVerified]); // eslint-disable-line
 
   const handleLogout = () => {
     localStorage.removeItem("stream_verification");
+    membershipResultRef.current = false;
     setIsVerified(false); setShowVerification(true);
     setIdnShow(null); setHlsUrl(""); setApiToken(""); setQualities([]);
     setVerifData({ email: "", code: "" });
@@ -900,8 +917,10 @@ function LiveStream() {
     </div>
   );
 
-  // Form verifikasi kode — hanya tampil jika BUKAN membership DAN belum terverifikasi
-  if (isIdn && showVerification && !isVerified && !hasMembership) return (
+  // ─── FIX: Kondisi render form verifikasi sekarang lebih ketat ───
+  // Hanya tampil jika: IDN stream + belum verified + bukan membership + showVerification=true
+  // Tidak akan tampil jika membershipResultRef.current = true (sudah membership)
+  if (isIdn && showVerification && !isVerified && !hasMembership && !membershipResultRef.current) return (
     <div className="min-h-screen rounded-2xl border border-gray-200 bg-white px-5 py-7 dark:border-gray-800 dark:bg-white/[0.03] xl:px-10 xl:py-12 flex items-center justify-center">
       <div className="w-full max-w-[440px]">
         <div className="text-center mb-8">
