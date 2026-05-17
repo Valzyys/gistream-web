@@ -13,6 +13,91 @@ const PLAY_HOST = "https://play.jkt48connect.com";
 const IDN_API   = "https://v2.jkt48connect.com/api/jkt48/idnplus?apikey=JKTCONNECT";
 const LIVE_API  = "https://v2.jkt48connect.com/api/jkt48/live?apikey=JKTCONNECT";
 
+// ── GiStream token constants ──────────────────────────────────────────────────
+const PARTNER_KID    = "jkt48connect-v1";
+const PARTNER_SECRET = "gstream@jkt48connect@2108";
+const TOKEN_API_BASE = "https://v2.jkt48connect.com";
+const CTV_BASE       = "https://ctv.jkt48connect.com";
+const SIGNING_PATH   = "/api/token/generate?apikey=JKTCONNECT";
+
+// ── HMAC helpers (browser SubtleCrypto) ──────────────────────────────────────
+async function sha256Hex(str: string): Promise<string> {
+  const buf = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(str));
+  return Array.from(new Uint8Array(buf)).map(b => b.toString(16).padStart(2, "0")).join("");
+}
+
+async function hmacSHA256Hex(secret: string, message: string): Promise<string> {
+  const key = await crypto.subtle.importKey(
+    "raw", new TextEncoder().encode(secret),
+    { name: "HMAC", hash: "SHA-256" }, false, ["sign"]
+  );
+  const buf = await crypto.subtle.sign("HMAC", key, new TextEncoder().encode(message));
+  return Array.from(new Uint8Array(buf)).map(b => b.toString(16).padStart(2, "0")).join("");
+}
+
+async function buildHMACHeaders(): Promise<Record<string, string>> {
+  const timestamp  = Date.now().toString();
+  const nonce      = crypto.randomUUID().replace(/-/g, "");
+  const bodyHash   = await sha256Hex("{}");
+  const signingStr = `${timestamp}:${nonce}:POST:${SIGNING_PATH}:${bodyHash}`;
+  const signature  = await hmacSHA256Hex(PARTNER_SECRET, signingStr);
+  return {
+    "x-kid":       PARTNER_KID,
+    "x-timestamp": timestamp,
+    "x-nonce":     nonce,
+    "x-signature": signature,
+  };
+}
+
+// ── Generate JWT token dari GiStream ─────────────────────────────────────────
+async function generateStreamToken(slugOrId: string, isSlug: boolean): Promise<string> {
+  const hmacHeaders = await buildHMACHeaders();
+  const res = await fetch(`${TOKEN_API_BASE}${SIGNING_PATH}`, {
+    method: "POST",
+    headers: {
+      ...hmacHeaders,
+      ...(isSlug ? { "x-slug": slugOrId } : { "x-showid": slugOrId }),
+      "Content-Type": "application/json",
+    },
+    body: "{}",
+  });
+  const data = await res.json();
+  if (!data.status) throw new Error("Generate token gagal: " + data.message);
+  return data.data.token;
+}
+
+// ── Get stream URL dari ctv.jkt48connect.com ──────────────────────────────────
+async function getStreamURL(token: string, slugOrId: string, isSlug: boolean): Promise<{ url: string; qualities: QualityOption[] }> {
+  const param = isSlug ? `slug=${slugOrId}` : `showId=${slugOrId}`;
+  const res = await fetch(`${CTV_BASE}/stream?${param}`, {
+    headers: {
+      "x-api-token": token,
+      ...(isSlug ? { "x-slug": slugOrId } : { "x-showid": slugOrId }),
+    },
+  });
+  const data = await res.json();
+  if (!data.success) throw new Error(data.message || "Gagal mendapatkan stream URL");
+
+  // Ambil field "url" (bukan url-2) dari stream kualitas tertinggi sebagai default
+  const streams: any[] = data.streams || [];
+  const autoUrl = streams[0]?.url || "";
+
+  // Build qualities array dari response
+  const qualities: QualityOption[] = streams.map((s: any, idx: number) => ({
+    index:           idx,
+    name:            s.NAME || `${s.RESOLUTION?.split("x")[1] || "?"}p`,
+    quality:         s.NAME || `q${idx}`,
+    bandwidth:       parseInt(s.BANDWIDTH) || 0,
+    bandwidth_label: s.BANDWIDTH ? (parseInt(s.BANDWIDTH) >= 1_000_000 ? (parseInt(s.BANDWIDTH) / 1_000_000).toFixed(1) + " Mbps" : Math.round(parseInt(s.BANDWIDTH) / 1_000) + " Kbps") : "",
+    resolution:      s.RESOLUTION || "",
+    fps:             s["FRAME-RATE"] || "",
+    manual_url:      s.url || "",   // ← gunakan "url" bukan "url-2"
+    playlist_url:    s.url || "",
+  }));
+
+  return { url: autoUrl, qualities };
+}
+
 const getSession = () => {
   try {
     const d = JSON.parse(
@@ -635,24 +720,27 @@ function LiveStream() {
     } catch { setVerifyError("Terjadi kesalahan saat verifikasi. Silakan coba lagi."); setVerifying(false); }
   };
 
-  // ── UPDATED: loadIdnStream — cek slug di IDN API dulu, lalu fetch qualities ─
-const loadIdnStream = useCallback(async () => {
+  // ── loadIdnStream — generate token lalu get stream URL via ctv ───────────
+  const loadIdnStream = useCallback(async () => {
     setLoading(true); setError("");
     try {
+      // 1. Validasi show masih live di IDN API
       const idnRes = await fetch(IDN_API);
       const idnData = await idnRes.json();
-      if (!idnData || idnData.status !== 200 || !Array.isArray(idnData.data)) { setError("Gagal mengambil data IDN Plus"); setLoading(false); return; }
+      if (!idnData || idnData.status !== 200 || !Array.isArray(idnData.data)) {
+        setError("Gagal mengambil data IDN Plus"); setLoading(false); return;
+      }
       const show = idnData.data.find((s: any) => s.slug === playbackId && s.status === "live");
       if (!show) { setError("Show tidak ditemukan atau sudah berakhir"); setLoading(false); return; }
       setIdnShow(show);
 
-      // ── NEW: fetch qualities dulu dari play.jkt48connect.com ──────────────
-      const qualRes = await fetch(`${PLAY_HOST}/live/idn/${show.slug}/qualities.json`);
-      const qualData = await qualRes.json();
-      if (qualData.success && Array.isArray(qualData.qualities)) setQualities(qualData.qualities);
-      // Gunakan auto_url dari qualities response, fallback ke manual construct
-      setHlsUrl(qualData.auto_url || `${PLAY_HOST}/live/idn/${show.slug}/master.m3u8`);
+      // 2. Generate token → get stream URL via ctv
+      const token = await generateStreamToken(show.slug, true);
+      const { url: streamUrl, qualities: streamQualities } = await getStreamURL(token, show.slug, true);
+      setQualities(streamQualities);
+      setHlsUrl(streamUrl);
 
+      // 3. Fetch theater lineup (opsional)
       try {
         const theaterRes = await fetch(`https://v2.jkt48connect.com/api/jkt48/theater?apikey=${API_KEY}`);
         const theaterData = await theaterRes.json();
@@ -669,71 +757,109 @@ const loadIdnStream = useCallback(async () => {
           if (detailData.shows?.[0]?.members) setMembers(detailData.shows[0].members);
         }
       } catch {}
+
       setLoading(false);
-    } catch { setError("Terjadi kesalahan saat memuat stream."); setLoading(false); }
+    } catch (err: any) {
+      setError(err?.message || "Terjadi kesalahan saat memuat stream.");
+      setLoading(false);
+    }
   }, [playbackId]);
-  // AFTER — ganti loadMemberStream
-const loadMemberStream = useCallback(async () => {
-  setLoading(true); setError("");
-  try {
-    const res = await fetch(LIVE_API);
-    const data = await res.json();
-    if (!Array.isArray(data)) { setError("Gagal mengambil data live member"); setLoading(false); return; }
 
-    const show = data.find((s: any) =>
-      s.url_key === playbackId ||
-      s.slug === playbackId ||
-      s.identifier === playbackId ||
-      s.identifier?.endsWith(playbackId)
-    );
+  // ── loadMemberStream — generate token lalu get stream URL via ctv ─────────
+  const loadMemberStream = useCallback(async () => {
+    setLoading(true); setError("");
+    try {
+      const res = await fetch(LIVE_API);
+      const data = await res.json();
+      if (!Array.isArray(data)) { setError("Gagal mengambil data live member"); setLoading(false); return; }
 
-    if (!show) { setError("Member tidak sedang live saat ini"); setLoading(false); return; }
-    setMemberShow(show);
+      const show = data.find((s: any) =>
+        s.url_key === playbackId ||
+        s.slug === playbackId ||
+        s.identifier === playbackId ||
+        s.identifier?.endsWith(playbackId)
+      );
 
-    // Jika is_group (JKT48 official / theater), fetch qualities dari play.jkt48connect.com
-    if (show.is_group || show.url_key === "jkt48-official") {
-      const identifier = show.identifier || show.slug;
-      try {
-        const qualRes = await fetch(`${PLAY_HOST}/live/idn/${identifier}/qualities.json`);
-        const qualData = await qualRes.json();
-        if (qualData.success && Array.isArray(qualData.qualities)) setQualities(qualData.qualities);
-        setMemberHlsUrl(qualData.auto_url || `${PLAY_HOST}/live/idn/${identifier}/master.m3u8`);
-      } catch {
-        // fallback ke streaming_url_list
-        const streamUrl = show.streaming_url_list?.[0]?.url || null;
-        if (!streamUrl) { setError("URL stream tidak tersedia"); setLoading(false); return; }
-        setMemberHlsUrl(streamUrl);
+      if (!show) { setError("Member tidak sedang live saat ini"); setLoading(false); return; }
+      setMemberShow(show);
+
+      if (show.is_group || show.url_key === "jkt48-official") {
+        // Group/theater stream → generate token via slug/identifier
+        const identifier = show.identifier || show.slug || show.url_key;
+        try {
+          const token = await generateStreamToken(identifier, true);
+          const { url: streamUrl, qualities: streamQualities } = await getStreamURL(token, identifier, true);
+          setQualities(streamQualities);
+          setMemberHlsUrl(streamUrl);
+        } catch {
+          // fallback ke streaming_url_list
+          const streamUrl = show.streaming_url_list?.[0]?.url || null;
+          if (!streamUrl) { setError("URL stream tidak tersedia"); setLoading(false); return; }
+          setMemberHlsUrl(streamUrl);
+        }
+      } else {
+        // Member biasa (Showroom) → gunakan showId jika ada, fallback streaming_url_list
+        const showId = show.showid || show.show_id || null;
+        if (showId) {
+          try {
+            const token = await generateStreamToken(String(showId), false);
+            const { url: streamUrl, qualities: streamQualities } = await getStreamURL(token, String(showId), false);
+            setQualities(streamQualities);
+            setMemberHlsUrl(streamUrl);
+          } catch {
+            const streamUrl = show.streaming_url_list?.[0]?.url || null;
+            if (!streamUrl) { setError("URL stream tidak tersedia"); setLoading(false); return; }
+            setMemberHlsUrl(streamUrl);
+          }
+        } else {
+          // Tidak ada showId → langsung pakai streaming_url_list
+          const streamUrl = show.streaming_url_list?.[0]?.url || null;
+          if (!streamUrl) { setError("URL stream tidak tersedia"); setLoading(false); return; }
+          setMemberHlsUrl(streamUrl);
+        }
       }
-    } else {
-      // Member biasa — pakai streaming_url_list langsung
-      const streamUrl = show.streaming_url_list?.[0]?.url || null;
-      if (!streamUrl) { setError("URL stream tidak tersedia"); setLoading(false); return; }
-      setMemberHlsUrl(streamUrl);
-    }
 
-    if (show.room_id) setMemberRoomId(show.room_id);
-    setLoading(false);
-  } catch { setError("Terjadi kesalahan saat memuat stream member."); setLoading(false); }
-}, [playbackId]);
+      if (show.room_id) setMemberRoomId(show.room_id);
+      setLoading(false);
+    } catch (err: any) {
+      setError(err?.message || "Terjadi kesalahan saat memuat stream member.");
+      setLoading(false);
+    }
+  }, [playbackId]);
+
   const handleQualityChange = (q: QualityOption | null) => {
-  setCurrentQuality(q);
-  if (!q) return;
-  setHlsUrl(q.manual_url);        // untuk IDN
-  setMemberHlsUrl(q.manual_url);  // untuk member group
-};
+    setCurrentQuality(q);
+    if (!q) return;
+    setHlsUrl(q.manual_url);
+    setMemberHlsUrl(q.manual_url);
+  };
 
-const handleModeChange = (mode: "auto" | "manual") => {
-  setQualityMode(mode);
-  if (mode === "auto") {
-    const identifier = idnShow?.slug || memberShow?.identifier || memberShow?.slug;
-    if (identifier) {
-      const url = `${PLAY_HOST}/live/idn/${identifier}/master.m3u8`;
-      setHlsUrl(url);
-      setMemberHlsUrl(url);
+  const handleModeChange = async (mode: "auto" | "manual") => {
+    setQualityMode(mode);
+    if (mode === "auto") {
+      // Re-generate token untuk mendapatkan auto URL baru
+      try {
+        if (isIdn && idnShow?.slug) {
+          const token = await generateStreamToken(idnShow.slug, true);
+          const { url: streamUrl } = await getStreamURL(token, idnShow.slug, true);
+          setHlsUrl(streamUrl);
+        } else if (isMember && memberShow) {
+          const identifier = memberShow.identifier || memberShow.slug || memberShow.url_key;
+          const showId = memberShow.showid || memberShow.show_id || null;
+          if (memberShow.is_group || memberShow.url_key === "jkt48-official") {
+            const token = await generateStreamToken(identifier, true);
+            const { url: streamUrl } = await getStreamURL(token, identifier, true);
+            setMemberHlsUrl(streamUrl);
+          } else if (showId) {
+            const token = await generateStreamToken(String(showId), false);
+            const { url: streamUrl } = await getStreamURL(token, String(showId), false);
+            setMemberHlsUrl(streamUrl);
+          }
+        }
+      } catch {}
+      setCurrentQuality(null);
     }
-    setCurrentQuality(null);
-  }
-};
+  };
 
   const initChat = useCallback(async () => {
     setIsChatLoggingIn(true);
@@ -959,34 +1085,33 @@ const handleModeChange = (mode: "auto" | "manual") => {
 
         <div className="grid grid-cols-1 xl:grid-cols-[1fr_360px] gap-6">
           <div className="flex flex-col gap-5">
-            // JADI:
-{isIdn && hlsUrl ? (
-  <HlsPlayer
-    src={hlsUrl}
-    title={showTitle}
-    qualities={qualities}
-    onQualityChange={handleQualityChange}
-    currentQuality={currentQuality}
-    qualityMode={qualityMode}
-    onModeChange={handleModeChange}
-    isIdn={true}
-  />
-) : isMember && memberHlsUrl ? (
-  <HlsPlayer
-    src={memberHlsUrl}
-    title={showTitle}
-    qualities={qualities}
-    onQualityChange={handleQualityChange}
-    currentQuality={currentQuality}
-    qualityMode={qualityMode}
-    onModeChange={handleModeChange}
-    isIdn={!!(memberShow?.is_group || memberShow?.url_key === "jkt48-official")}
-  />
-) : (
-  <div className="aspect-video bg-gray-100 dark:bg-gray-800/50 rounded-2xl flex items-center justify-center border border-gray-200 dark:border-gray-700">
-    <div className="w-10 h-10 border-[3px] border-gray-200 dark:border-gray-700 border-t-red-500 rounded-full animate-spin" />
-  </div>
-)}
+            {isIdn && hlsUrl ? (
+              <HlsPlayer
+                src={hlsUrl}
+                title={showTitle}
+                qualities={qualities}
+                onQualityChange={handleQualityChange}
+                currentQuality={currentQuality}
+                qualityMode={qualityMode}
+                onModeChange={handleModeChange}
+                isIdn={true}
+              />
+            ) : isMember && memberHlsUrl ? (
+              <HlsPlayer
+                src={memberHlsUrl}
+                title={showTitle}
+                qualities={qualities}
+                onQualityChange={handleQualityChange}
+                currentQuality={currentQuality}
+                qualityMode={qualityMode}
+                onModeChange={handleModeChange}
+                isIdn={!!(memberShow?.is_group || memberShow?.url_key === "jkt48-official")}
+              />
+            ) : (
+              <div className="aspect-video bg-gray-100 dark:bg-gray-800/50 rounded-2xl flex items-center justify-center border border-gray-200 dark:border-gray-700">
+                <div className="w-10 h-10 border-[3px] border-gray-200 dark:border-gray-700 border-t-red-500 rounded-full animate-spin" />
+              </div>
+            )}
 
             {isIdn && idnShow && (
               <div className="rounded-2xl border border-gray-200 dark:border-gray-800 bg-gray-50 dark:bg-gray-800/30 p-5">
