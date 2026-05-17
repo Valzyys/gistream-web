@@ -9,7 +9,6 @@ const supabase = createClient(supabaseUrl, supabaseKey);
 
 const API_BASE  = "https://v2.jkt48connect.com/api/jkt48connect";
 const API_KEY   = "JKTCONNECT";
-const PLAY_HOST = "https://play.jkt48connect.com";
 const IDN_API   = "https://v2.jkt48connect.com/api/jkt48/idnplus?apikey=JKTCONNECT";
 const LIVE_API  = "https://v2.jkt48connect.com/api/jkt48/live?apikey=JKTCONNECT";
 
