@@ -16,7 +16,6 @@ const LIVE_API   = "https://v2.jkt48connect.com/api/jkt48/live?apikey=JKTCONNECT
 const TOKEN_API  = "https://v2.jkt48connect.com/api/token/generate?apikey=JKTCONNECT";
 const STREAM_API = "https://ctv.jkt48connect.com/stream";
 
-// ⚠ PARTNER_SECRET idealnya di backend. Gunakan env variable.
 const PARTNER_SECRET = import.meta.env.VITE_PARTNER_SECRET || "gstream@jkt48connect@2108";
 const PARTNER_KID    = "jkt48connect-v1";
 
@@ -68,10 +67,10 @@ async function generateToken(params: { slug?: string; showId?: string }): Promis
 
 // ── Stream URL Fetcher ────────────────────────────────────────────────────────
 interface StreamEntry {
-  url:         string;   // v4 GiStream worker — YANG KITA PAKAI, butuh x-api-token
-  "url-2":     string;   // spt33 HLS proxy
-  "url-2-raw": string;   // URL CDN mentah
-  NAME:        string;   // "1080p60", "720p60", "480p", "360p", "160p"
+  url:         string;
+  "url-2":     string;
+  "url-2-raw": string;
+  NAME:        string;
   BANDWIDTH:   number;
 }
 
@@ -112,7 +111,7 @@ interface QualityOption {
   quality:         string;
   bandwidth:       number;
   bandwidth_label: string;
-  streamUrl:       string; // field "url" dari stream response
+  streamUrl:       string;
 }
 
 interface ChatMessage {
@@ -177,8 +176,6 @@ function useShowroomComments(roomId: number | null) {
 }
 
 // ── HLS Player ────────────────────────────────────────────────────────────────
-// xhrSetup menyisipkan "x-api-token" di setiap XHR yang dibuat Hls.js
-// sehingga field "url" (v4 GiStream worker) bisa diakses dengan benar.
 function HlsPlayer({
   src, apiToken, title, qualities, onQualityChange, currentQuality, qualityMode, onModeChange, isIdn,
 }: {
@@ -216,7 +213,7 @@ function HlsPlayer({
       return;
     }
 
-    const token = apiToken; // capture untuk closure
+    const token = apiToken;
 
     const hls = new Hls({
       enableWorker: true, lowLatencyMode: false,
@@ -229,8 +226,6 @@ function HlsPlayer({
       startLevel: qualityMode === "auto" ? -1 : undefined,
       abrEwmaDefaultEstimate: 500_000, abrBandWidthFactor: 0.8, abrBandWidthUpFactor: 0.7,
       abrEwmaFastLive: 3.0, abrEwmaSlowLive: 9.0, nudgeOffset: 0.3, nudgeMaxRetry: 5,
-      // Sisipkan x-api-token di semua XHR (manifest, playlist, segment)
-      // Ini diperlukan karena field "url" (v4 GiStream) memvalidasi token di header
       xhrSetup: (xhr: XMLHttpRequest) => {
         if (token) xhr.setRequestHeader("x-api-token", token);
       },
@@ -531,8 +526,6 @@ function LiveStream() {
   const [members,        setMembers]        = useState<any[]>([]);
 
   // GiStream state
-  // hlsUrl = field "url" dari response stream (bukan url-2)
-  // apiToken = JWT yang digunakan sebagai x-api-token di header HLS via xhrSetup
   const [hlsUrl,         setHlsUrl]         = useState("");
   const [apiToken,       setApiToken]       = useState("");
   const [qualities,      setQualities]      = useState<QualityOption[]>([]);
@@ -572,7 +565,9 @@ function LiveStream() {
     } catch { return "unknown"; }
   };
 
-  const checkMembership = useCallback(async () => {
+  // ── checkMembership ──────────────────────────────────────────────────────────
+  // Returns true jika membership monthly aktif → langsung bypass verifikasi kode
+  const checkMembership = useCallback(async (): Promise<boolean> => {
     setMembershipLoading(true);
     const session = getSession();
     if (!session) { setMembershipLoading(false); return false; }
@@ -584,7 +579,12 @@ function LiveStream() {
       });
       const data = await res.json();
       if (data.status && data.data?.is_active && data.data?.membership_type === "monthly") {
-        setHasMembership(true); setMembershipLoading(false); return true;
+        setHasMembership(true);
+        // ─── KUNCI FIX: langsung set verified & sembunyikan form verifikasi ───
+        setIsVerified(true);
+        setShowVerification(false);
+        setMembershipLoading(false);
+        return true;
       }
     } catch {}
     setMembershipLoading(false);
@@ -650,8 +650,7 @@ function LiveStream() {
     } catch { setVerifyError("Terjadi kesalahan saat verifikasi. Silakan coba lagi."); setVerifying(false); }
   };
 
-  // Konversi StreamEntry[] → QualityOption[]
-  // Menggunakan field "url" (v4 GiStream worker) — sama seperti url-2 tapi endpoint berbeda
+  // ── Konversi StreamEntry[] → QualityOption[] ─────────────────────────────────
   const streamsToQualities = (streams: StreamEntry[]): QualityOption[] =>
     streams.map((s, idx) => ({
       index:           idx,
@@ -661,23 +660,21 @@ function LiveStream() {
       bandwidth_label: s.BANDWIDTH >= 1_000_000
         ? (s.BANDWIDTH / 1_000_000).toFixed(1) + " Mbps"
         : Math.round(s.BANDWIDTH / 1_000) + " Kbps",
-      streamUrl: s.url, // field "url" — butuh x-api-token di XHR header
+      streamUrl: s.url,
     }));
 
-  // Fungsi umum: generate token lalu fetch stream URL, simpan ke state
+  // ── applyStream: generate token → fetch stream URLs → simpan ke state ────────
   const applyStream = async (params: { slug?: string; showId?: string }) => {
     const tokenData  = await generateToken(params);
     const streamData = await fetchStreamURLs(tokenData.token, params);
     if (!streamData.streams.length) throw new Error("Tidak ada stream URL tersedia");
 
-    // Simpan token — akan disuntikkan ke setiap XHR oleh xhrSetup di HlsPlayer
     setApiToken(tokenData.token);
-    // Gunakan field "url" dari stream berkualitas tertinggi (index 0, bandwidth tertinggi)
     setHlsUrl(streamData.streams[0].url);
-    // Semua kualitas tersedia di quality switcher
     setQualities(streamsToQualities(streamData.streams));
   };
 
+  // ── loadIdnStream ─────────────────────────────────────────────────────────────
   const loadIdnStream = useCallback(async () => {
     setLoading(true); setError("");
     try {
@@ -717,6 +714,7 @@ function LiveStream() {
     }
   }, [playbackId]); // eslint-disable-line
 
+  // ── loadMemberStream ──────────────────────────────────────────────────────────
   const loadMemberStream = useCallback(async () => {
     setLoading(true); setError("");
     try {
@@ -741,7 +739,7 @@ function LiveStream() {
           const fallbackUrl = show.streaming_url_list?.[0]?.url || null;
           if (!fallbackUrl) { setError("URL stream tidak tersedia"); setLoading(false); return; }
           setHlsUrl(fallbackUrl);
-          setApiToken(""); // tidak ada token untuk Showroom fallback
+          setApiToken("");
         }
       } else {
         // Member biasa (Showroom) → langsung pakai streaming_url_list, tidak perlu token
@@ -759,24 +757,22 @@ function LiveStream() {
     }
   }, [playbackId]); // eslint-disable-line
 
-  // Quality switcher
+  // ── Quality switcher ──────────────────────────────────────────────────────────
   const handleQualityChange = (q: QualityOption | null) => {
     setCurrentQuality(q);
     if (!q) return;
-    // Gunakan streamUrl (field "url") dari quality yang dipilih
-    // Token yang sama tetap berlaku — disuntikkan via xhrSetup
     setHlsUrl(q.streamUrl);
   };
 
   const handleModeChange = (mode: "auto" | "manual") => {
     setQualityMode(mode);
     if (mode === "auto" && qualities.length > 0) {
-      // Kembali ke kualitas tertinggi (index 0)
       setHlsUrl(qualities[0].streamUrl);
       setCurrentQuality(null);
     }
   };
 
+  // ── Chat ──────────────────────────────────────────────────────────────────────
   const initChat = useCallback(async () => {
     setIsChatLoggingIn(true);
     let userData: any = null;
@@ -831,6 +827,7 @@ function LiveStream() {
     await channelRef.current?.send({ type: "broadcast", event: "pesan_baru", payload });
   };
 
+  // ── Effects ───────────────────────────────────────────────────────────────────
   useEffect(() => {
     if (!isIdn) return;
     const channel = supabase.channel(`chat-${playbackId}`, { config: { broadcast: { ack: true } } });
@@ -855,19 +852,32 @@ function LiveStream() {
     } else {
       const init = async () => {
         await fetchClientIP();
+        // Cek membership dulu — jika aktif, langsung load stream tanpa perlu kode verifikasi
         const hasMember = await checkMembership();
-        if (hasMember) { setIsVerified(true); setShowVerification(false); await loadIdnStream(); }
-        else {
-          const verified = await checkExistingVerification();
-          if (verified) await loadIdnStream();
-          else setLoading(false);
+        if (hasMember) {
+          // isVerified & showVerification sudah di-set di dalam checkMembership()
+          await loadIdnStream();
+          return;
+        }
+        // Bukan member → cek apakah sudah punya verifikasi kode yang masih valid
+        const verified = await checkExistingVerification();
+        if (verified) {
+          await loadIdnStream();
+        } else {
+          // Tampilkan form verifikasi kode
+          setLoading(false);
         }
       };
       init();
     }
   }, [isMember]); // eslint-disable-line
 
-  useEffect(() => { if (isIdn && isVerified && !idnShow) loadIdnStream(); }, [isVerified]); // eslint-disable-line
+  // Jika user baru saja selesai verifikasi kode (isVerified berubah jadi true) tapi stream belum dimuat
+  useEffect(() => {
+    if (isIdn && isVerified && !idnShow && !loading) {
+      loadIdnStream();
+    }
+  }, [isVerified]); // eslint-disable-line
 
   const handleLogout = () => {
     localStorage.removeItem("stream_verification");
@@ -890,7 +900,8 @@ function LiveStream() {
     </div>
   );
 
-  if (isIdn && showVerification && !isVerified) return (
+  // Form verifikasi kode — hanya tampil jika BUKAN membership DAN belum terverifikasi
+  if (isIdn && showVerification && !isVerified && !hasMembership) return (
     <div className="min-h-screen rounded-2xl border border-gray-200 bg-white px-5 py-7 dark:border-gray-800 dark:bg-white/[0.03] xl:px-10 xl:py-12 flex items-center justify-center">
       <div className="w-full max-w-[440px]">
         <div className="text-center mb-8">
