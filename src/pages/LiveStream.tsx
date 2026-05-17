@@ -60,13 +60,24 @@ async function generateStreamToken(slugOrId: string, isSlug: boolean): Promise<s
     },
     body: "{}",
   });
-  const data = await res.json();
+
+  const text = await res.text();
+  let data: any;
+  try {
+    data = JSON.parse(text);
+  } catch {
+    throw new Error("Token server returned non-JSON response");
+  }
   if (!data.status) throw new Error("Generate token gagal: " + data.message);
   return data.data.token;
 }
 
 // ── Get stream URL dari ctv.jkt48connect.com ──────────────────────────────────
-async function getStreamURL(token: string, slugOrId: string, isSlug: boolean): Promise<{ url: string; qualities: QualityOption[] }> {
+async function getStreamURL(
+  token: string,
+  slugOrId: string,
+  isSlug: boolean
+): Promise<{ url: string; qualities: QualityOption[] }> {
   const param = isSlug ? `slug=${slugOrId}` : `showId=${slugOrId}`;
   const res = await fetch(`${CTV_BASE}/stream?${param}`, {
     headers: {
@@ -77,21 +88,24 @@ async function getStreamURL(token: string, slugOrId: string, isSlug: boolean): P
   const data = await res.json();
   if (!data.success) throw new Error(data.message || "Gagal mendapatkan stream URL");
 
-  // Ambil field "url" (bukan url-2) dari stream kualitas tertinggi sebagai default
+  // URL bersih — token dikirim via HLS xhrSetup/fetchSetup header, bukan query param
   const streams: any[] = data.streams || [];
   const autoUrl = streams[0]?.url || "";
 
-  // Build qualities array dari response
   const qualities: QualityOption[] = streams.map((s: any, idx: number) => ({
     index:           idx,
     name:            s.NAME || `${s.RESOLUTION?.split("x")[1] || "?"}p`,
     quality:         s.NAME || `q${idx}`,
     bandwidth:       parseInt(s.BANDWIDTH) || 0,
-    bandwidth_label: s.BANDWIDTH ? (parseInt(s.BANDWIDTH) >= 1_000_000 ? (parseInt(s.BANDWIDTH) / 1_000_000).toFixed(1) + " Mbps" : Math.round(parseInt(s.BANDWIDTH) / 1_000) + " Kbps") : "",
-    resolution:      s.RESOLUTION || "",
-    fps:             s["FRAME-RATE"] || "",
-    manual_url:      s.url || "",   // ← gunakan "url" bukan "url-2"
-    playlist_url:    s.url || "",
+    bandwidth_label: s.BANDWIDTH
+      ? parseInt(s.BANDWIDTH) >= 1_000_000
+        ? (parseInt(s.BANDWIDTH) / 1_000_000).toFixed(1) + " Mbps"
+        : Math.round(parseInt(s.BANDWIDTH) / 1_000) + " Kbps"
+      : "",
+    resolution:  s.RESOLUTION || "",
+    fps:         s["FRAME-RATE"] || "",
+    manual_url:  s.url || "",    // ← URL bersih, token via header
+    playlist_url: s.url || "",
   }));
 
   return { url: autoUrl, qualities };
@@ -109,13 +123,11 @@ const getSession = () => {
   } catch { return null; }
 };
 
-// AFTER — tambah pengecekan lebih ketat: harus ada tanggal DAN panjang > 15 char
 const isIdnSlug = (param: string) => {
   if (!param) return false;
-  // IDN slug selalu berbentuk: "nama-member-YYYY-MM-DD" atau "title-YYYY-MM-DD-..."
-  // Showroom url_key biasanya pendek tanpa tanggal, misal: "nabilazahrasr"
   return /\d{4}-\d{2}-\d{2}/.test(param) && param.length > 15;
 };
+
 interface QualityOption {
   index:           number;
   name:            string;
@@ -204,14 +216,17 @@ function useShowroomComments(roomId: number | null) {
 
 // ── HLS Player ────────────────────────────────────────────────────────────────
 function HlsPlayer({
-  src, title, qualities, onQualityChange, currentQuality, qualityMode, onModeChange, isIdn,
+  src, title, qualities, onQualityChange, currentQuality, qualityMode, onModeChange, isIdn, token,
 }: {
-  src: string; title: string; qualities: QualityOption[];
+  src: string;
+  title: string;
+  qualities: QualityOption[];
   onQualityChange: (q: QualityOption | null) => void;
   currentQuality: QualityOption | null;
   qualityMode: "auto" | "manual";
   onModeChange: (mode: "auto" | "manual") => void;
   isIdn: boolean;
+  token?: string;  // ← token untuk inject ke header setiap HLS request
 }) {
   const videoRef = useRef<HTMLVideoElement>(null);
   const hlsRef   = useRef<Hls | null>(null);
@@ -250,24 +265,38 @@ function HlsPlayer({
       liveSyncDurationCount:       3,
       liveMaxLatencyDurationCount: 10,
       liveDurationInfinity:        true,
-      fragLoadingTimeOut:             10000,
-      fragLoadingMaxRetry:            6,
-      fragLoadingRetryDelay:          1000,
-      fragLoadingMaxRetryTimeout:     8000,
-      manifestLoadingTimeOut:         10000,
-      manifestLoadingMaxRetry:        4,
-      manifestLoadingRetryDelay:      1000,
-      levelLoadingTimeOut:            10000,
-      levelLoadingMaxRetry:           4,
-      levelLoadingRetryDelay:         1000,
-      startLevel:              qualityMode === "auto" ? -1 : undefined,
-      abrEwmaDefaultEstimate:  500_000,
-      abrBandWidthFactor:      0.8,
-      abrBandWidthUpFactor:    0.7,
-      abrEwmaFastLive:         3.0,
-      abrEwmaSlowLive:         9.0,
-      nudgeOffset:    0.3,
-      nudgeMaxRetry:  5,
+      fragLoadingTimeOut:          10000,
+      fragLoadingMaxRetry:         6,
+      fragLoadingRetryDelay:       1000,
+      fragLoadingMaxRetryTimeout:  8000,
+      manifestLoadingTimeOut:      10000,
+      manifestLoadingMaxRetry:     4,
+      manifestLoadingRetryDelay:   1000,
+      levelLoadingTimeOut:         10000,
+      levelLoadingMaxRetry:        4,
+      levelLoadingRetryDelay:      1000,
+      startLevel:             qualityMode === "auto" ? -1 : undefined,
+      abrEwmaDefaultEstimate: 500_000,
+      abrBandWidthFactor:     0.8,
+      abrBandWidthUpFactor:   0.7,
+      abrEwmaFastLive:        3.0,
+      abrEwmaSlowLive:        9.0,
+      nudgeOffset:   0.3,
+      nudgeMaxRetry: 5,
+
+      // ── Inject x-api-token ke setiap HLS request (manifest + segment) ──────
+      ...(token && {
+        xhrSetup: (xhr: XMLHttpRequest) => {
+          xhr.setRequestHeader("x-api-token", token);
+        },
+        fetchSetup: (context: any, initParams: any) => {
+          initParams.headers = {
+            ...initParams.headers,
+            "x-api-token": token,
+          };
+          return new Request(context.url, initParams);
+        },
+      }),
     });
 
     hlsRef.current = hls;
@@ -302,7 +331,19 @@ function HlsPlayer({
         retryRef.current = setTimeout(() => {
           const v = videoRef.current;
           if (!v) return;
-          const newHls = new Hls({ lowLatencyMode: false, maxBufferLength: 30 });
+          const newHls = new Hls({
+            lowLatencyMode: false,
+            maxBufferLength: 30,
+            ...(token && {
+              xhrSetup: (xhr: XMLHttpRequest) => {
+                xhr.setRequestHeader("x-api-token", token);
+              },
+              fetchSetup: (context: any, initParams: any) => {
+                initParams.headers = { ...initParams.headers, "x-api-token": token };
+                return new Request(context.url, initParams);
+              },
+            }),
+          });
           newHls.loadSource(src);
           newHls.attachMedia(v);
           newHls.on(Hls.Events.MANIFEST_PARSED, () => v.play().catch(() => {}));
@@ -312,7 +353,7 @@ function HlsPlayer({
     });
 
     return destroyHls;
-  }, [src, destroyHls]); // eslint-disable-line
+  }, [src, token, destroyHls]); // eslint-disable-line
 
   return (
     <div className="relative w-full rounded-2xl overflow-hidden bg-black shadow-2xl">
@@ -606,6 +647,7 @@ function LiveStream() {
   const [qualityMode,       setQualityMode]       = useState<"auto" | "manual">("auto");
   const [currentQuality,    setCurrentQuality]    = useState<QualityOption | null>(null);
   const [hlsUrl,            setHlsUrl]            = useState("");
+  const [streamToken,       setStreamToken]       = useState("");   // ← token state
   const [memberShow,        setMemberShow]        = useState<any>(null);
   const [memberHlsUrl,      setMemberHlsUrl]      = useState("");
   const [memberRoomId,      setMemberRoomId]      = useState<number | null>(null);
@@ -652,7 +694,6 @@ function LiveStream() {
     const token = session.token;
     if (!uid || !token) { setMembershipLoading(false); return false; }
     try {
-      // Gunakan /profile sama seperti UserInfoCard untuk baca membership_type
       const res = await fetch(`${API_BASE}/profile/${uid}?apikey=${API_KEY}`, {
         headers: { Authorization: `Bearer ${token}` },
       });
@@ -724,11 +765,10 @@ function LiveStream() {
     } catch { setVerifyError("Terjadi kesalahan saat verifikasi. Silakan coba lagi."); setVerifying(false); }
   };
 
-  // ── loadIdnStream — generate token lalu get stream URL via ctv ───────────
+  // ── loadIdnStream ─────────────────────────────────────────────────────────
   const loadIdnStream = useCallback(async () => {
     setLoading(true); setError("");
     try {
-      // 1. Validasi show masih live di IDN API
       const idnRes = await fetch(IDN_API);
       const idnData = await idnRes.json();
       if (!idnData || idnData.status !== 200 || !Array.isArray(idnData.data)) {
@@ -738,13 +778,14 @@ function LiveStream() {
       if (!show) { setError("Show tidak ditemukan atau sudah berakhir"); setLoading(false); return; }
       setIdnShow(show);
 
-      // 2. Generate token → get stream URL via ctv
+      // Generate token → simpan → get stream URL
       const token = await generateStreamToken(show.slug, true);
+      setStreamToken(token);  // ← simpan token ke state
       const { url: streamUrl, qualities: streamQualities } = await getStreamURL(token, show.slug, true);
       setQualities(streamQualities);
       setHlsUrl(streamUrl);
 
-      // 3. Fetch theater lineup (opsional)
+      // Fetch theater lineup (opsional)
       try {
         const theaterRes = await fetch(`https://v2.jkt48connect.com/api/jkt48/theater?apikey=${API_KEY}`);
         const theaterData = await theaterRes.json();
@@ -769,7 +810,7 @@ function LiveStream() {
     }
   }, [playbackId]);
 
-  // ── loadMemberStream — generate token lalu get stream URL via ctv ─────────
+  // ── loadMemberStream ──────────────────────────────────────────────────────
   const loadMemberStream = useCallback(async () => {
     setLoading(true); setError("");
     try {
@@ -788,25 +829,24 @@ function LiveStream() {
       setMemberShow(show);
 
       if (show.is_group || show.url_key === "jkt48-official") {
-        // Group/theater stream → generate token via slug/identifier
         const identifier = show.identifier || show.slug || show.url_key;
         try {
           const token = await generateStreamToken(identifier, true);
+          setStreamToken(token);  // ← simpan token ke state
           const { url: streamUrl, qualities: streamQualities } = await getStreamURL(token, identifier, true);
           setQualities(streamQualities);
           setMemberHlsUrl(streamUrl);
         } catch {
-          // fallback ke streaming_url_list
           const streamUrl = show.streaming_url_list?.[0]?.url || null;
           if (!streamUrl) { setError("URL stream tidak tersedia"); setLoading(false); return; }
           setMemberHlsUrl(streamUrl);
         }
       } else {
-        // Member biasa (Showroom) → gunakan showId jika ada, fallback streaming_url_list
         const showId = show.showid || show.show_id || null;
         if (showId) {
           try {
             const token = await generateStreamToken(String(showId), false);
+            setStreamToken(token);  // ← simpan token ke state
             const { url: streamUrl, qualities: streamQualities } = await getStreamURL(token, String(showId), false);
             setQualities(streamQualities);
             setMemberHlsUrl(streamUrl);
@@ -816,7 +856,6 @@ function LiveStream() {
             setMemberHlsUrl(streamUrl);
           }
         } else {
-          // Tidak ada showId → langsung pakai streaming_url_list
           const streamUrl = show.streaming_url_list?.[0]?.url || null;
           if (!streamUrl) { setError("URL stream tidak tersedia"); setLoading(false); return; }
           setMemberHlsUrl(streamUrl);
@@ -834,17 +873,18 @@ function LiveStream() {
   const handleQualityChange = (q: QualityOption | null) => {
     setCurrentQuality(q);
     if (!q) return;
-    setHlsUrl(q.manual_url);
-    setMemberHlsUrl(q.manual_url);
+    // Set URL bersih — token sudah di-inject via HLS header
+    if (isIdn) setHlsUrl(q.manual_url);
+    else setMemberHlsUrl(q.manual_url);
   };
 
   const handleModeChange = async (mode: "auto" | "manual") => {
     setQualityMode(mode);
     if (mode === "auto") {
-      // Re-generate token untuk mendapatkan auto URL baru
       try {
         if (isIdn && idnShow?.slug) {
           const token = await generateStreamToken(idnShow.slug, true);
+          setStreamToken(token);  // ← update token
           const { url: streamUrl } = await getStreamURL(token, idnShow.slug, true);
           setHlsUrl(streamUrl);
         } else if (isMember && memberShow) {
@@ -852,10 +892,12 @@ function LiveStream() {
           const showId = memberShow.showid || memberShow.show_id || null;
           if (memberShow.is_group || memberShow.url_key === "jkt48-official") {
             const token = await generateStreamToken(identifier, true);
+            setStreamToken(token);  // ← update token
             const { url: streamUrl } = await getStreamURL(token, identifier, true);
             setMemberHlsUrl(streamUrl);
           } else if (showId) {
             const token = await generateStreamToken(String(showId), false);
+            setStreamToken(token);  // ← update token
             const { url: streamUrl } = await getStreamURL(token, String(showId), false);
             setMemberHlsUrl(streamUrl);
           }
@@ -962,6 +1004,7 @@ function LiveStream() {
     localStorage.removeItem("stream_verification");
     setIsVerified(false); setShowVerification(true);
     setIdnShow(null); setHlsUrl(""); setQualities([]);
+    setStreamToken("");
     setVerifData({ email: "", code: "" });
   };
 
@@ -980,7 +1023,6 @@ function LiveStream() {
     );
   }
 
-  // ── Login via akun membership ─────────────────────────────────────────────
   const handleMembershipLogin = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!loginForm.login.trim() || !loginForm.password) { setLoginError("Username/email dan password wajib diisi"); return; }
@@ -994,7 +1036,6 @@ function LiveStream() {
       const data = await res.json();
       if (!data.status) { setLoginError(data.message || "Login gagal"); setLoginLoading(false); return; }
 
-      // Simpan session ke sessionStorage
       const loginData = {
         isLoggedIn: true,
         token: data.data.session?.access_token,
@@ -1005,7 +1046,6 @@ function LiveStream() {
       };
       sessionStorage.setItem("userLogin", JSON.stringify(loginData));
 
-      // Cek profile: membership_type !== "free" && is_active
       const uid = data.data.user?.user_id;
       const token = data.data.session?.access_token;
       const profileRes = await fetch(`${API_BASE}/profile/${uid}?apikey=${API_KEY}`, {
@@ -1029,7 +1069,6 @@ function LiveStream() {
     return (
       <div className="min-h-screen rounded-2xl border border-gray-200 bg-white px-5 py-7 dark:border-gray-800 dark:bg-white/[0.03] xl:px-10 xl:py-12 flex items-center justify-center">
         <div className="w-full max-w-[440px]">
-          {/* Header */}
           <div className="text-center mb-6">
             <div className="inline-flex items-center justify-center w-16 h-16 rounded-2xl bg-red-50 dark:bg-red-500/10 border border-red-200 dark:border-red-500/20 mb-4">
               <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round" className="text-red-500">
@@ -1040,7 +1079,6 @@ function LiveStream() {
             <p className="text-sm text-gray-500 dark:text-gray-400">Login dengan akun membership atau gunakan kode verifikasi</p>
           </div>
 
-          {/* Tab switcher */}
           <div className="flex gap-1 p-1 rounded-xl bg-gray-100 dark:bg-gray-800 mb-5">
             <button
               onClick={() => { setAccessTab("login"); setLoginError(""); }}
@@ -1056,7 +1094,6 @@ function LiveStream() {
             </button>
           </div>
 
-          {/* Tab: Login Membership */}
           {accessTab === "login" && (
             <div className="bg-gray-50 dark:bg-gray-800/50 rounded-2xl border border-gray-200 dark:border-gray-700 p-6 mb-4">
               <form onSubmit={handleMembershipLogin} className="flex flex-col gap-4">
@@ -1082,7 +1119,6 @@ function LiveStream() {
             </div>
           )}
 
-          {/* Tab: Kode Verifikasi */}
           {accessTab === "code" && (
             <div className="bg-gray-50 dark:bg-gray-800/50 rounded-2xl border border-gray-200 dark:border-gray-700 p-6 mb-4">
               <form onSubmit={(e) => { e.preventDefault(); verifyAccess(); }} className="flex flex-col gap-4">
@@ -1189,6 +1225,7 @@ function LiveStream() {
                 qualityMode={qualityMode}
                 onModeChange={handleModeChange}
                 isIdn={true}
+                token={streamToken}
               />
             ) : isMember && memberHlsUrl ? (
               <HlsPlayer
@@ -1200,6 +1237,7 @@ function LiveStream() {
                 qualityMode={qualityMode}
                 onModeChange={handleModeChange}
                 isIdn={!!(memberShow?.is_group || memberShow?.url_key === "jkt48-official")}
+                token={streamToken}
               />
             ) : (
               <div className="aspect-video bg-gray-100 dark:bg-gray-800/50 rounded-2xl flex items-center justify-center border border-gray-200 dark:border-gray-700">
