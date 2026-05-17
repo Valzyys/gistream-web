@@ -652,7 +652,7 @@ function LiveStream() {
         headers: { Authorization: `Bearer ${token}` },
       });
       const data = await res.json();
-      if (data.status && data.data?.is_active && data.data?.membership_type === "monthly") {
+      if (data.status && data.data?.is_active) {
         setHasMembership(true); setMembershipLoading(false); return true;
       }
     } catch {}
