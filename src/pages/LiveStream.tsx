@@ -616,6 +616,10 @@ function LiveStream() {
   const [verifData,         setVerifData]         = useState({ email: "", code: "" });
   const [verifyError,       setVerifyError]       = useState("");
   const [verifying,         setVerifying]         = useState(false);
+  const [accessTab,         setAccessTab]         = useState<"login" | "code">("login");
+  const [loginForm,         setLoginForm]         = useState({ login: "", password: "" });
+  const [loginLoading,      setLoginLoading]      = useState(false);
+  const [loginError,        setLoginError]        = useState("");
   const [clientIP,          setClientIP]          = useState("");
   const [loading,           setLoading]           = useState(true);
   const [error,             setError]             = useState("");
@@ -648,11 +652,12 @@ function LiveStream() {
     const token = session.token;
     if (!uid || !token) { setMembershipLoading(false); return false; }
     try {
-      const res = await fetch(`${API_BASE}/membership/status/${uid}?apikey=${API_KEY}`, {
+      // Gunakan /profile sama seperti UserInfoCard untuk baca membership_type
+      const res = await fetch(`${API_BASE}/profile/${uid}?apikey=${API_KEY}`, {
         headers: { Authorization: `Bearer ${token}` },
       });
       const data = await res.json();
-      if (data.status && data.data?.is_active) {
+      if (data.status && data.data?.is_active && data.data?.membership_type !== "free") {
         setHasMembership(true); setMembershipLoading(false); return true;
       }
     } catch {}
@@ -975,51 +980,141 @@ function LiveStream() {
     );
   }
 
+  // ── Login via akun membership ─────────────────────────────────────────────
+  const handleMembershipLogin = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!loginForm.login.trim() || !loginForm.password) { setLoginError("Username/email dan password wajib diisi"); return; }
+    setLoginLoading(true); setLoginError("");
+    try {
+      const res = await fetch(`${API_BASE}/auth/login?apikey=${API_KEY}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ login: loginForm.login.toLowerCase().trim(), password: loginForm.password }),
+      });
+      const data = await res.json();
+      if (!data.status) { setLoginError(data.message || "Login gagal"); setLoginLoading(false); return; }
+
+      // Simpan session ke sessionStorage
+      const loginData = {
+        isLoggedIn: true,
+        token: data.data.session?.access_token,
+        sessionId: data.data.session?.id,
+        expiresAt: data.data.session?.expires_at,
+        user: data.data.user,
+        loginAt: new Date().toISOString(),
+      };
+      sessionStorage.setItem("userLogin", JSON.stringify(loginData));
+
+      // Cek profile: membership_type !== "free" && is_active
+      const uid = data.data.user?.user_id;
+      const token = data.data.session?.access_token;
+      const profileRes = await fetch(`${API_BASE}/profile/${uid}?apikey=${API_KEY}`, {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      const profileData = await profileRes.json();
+      if (profileData.status && profileData.data?.is_active && profileData.data?.membership_type !== "free") {
+        setHasMembership(true);
+        setIsVerified(true);
+        setShowVerification(false);
+        setLoginLoading(false);
+        await loadIdnStream();
+      } else {
+        setLoginError("Akun ini tidak memiliki membership aktif. Gunakan kode verifikasi.");
+        setLoginLoading(false);
+      }
+    } catch { setLoginError("Gagal terhubung ke server. Coba lagi."); setLoginLoading(false); }
+  };
+
   if (isIdn && showVerification && !isVerified) {
     return (
       <div className="min-h-screen rounded-2xl border border-gray-200 bg-white px-5 py-7 dark:border-gray-800 dark:bg-white/[0.03] xl:px-10 xl:py-12 flex items-center justify-center">
         <div className="w-full max-w-[440px]">
-          <div className="text-center mb-8">
+          {/* Header */}
+          <div className="text-center mb-6">
             <div className="inline-flex items-center justify-center w-16 h-16 rounded-2xl bg-red-50 dark:bg-red-500/10 border border-red-200 dark:border-red-500/20 mb-4">
               <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round" className="text-red-500">
                 <rect x="3" y="11" width="18" height="11" rx="2" ry="2" /><path d="M7 11V7a5 5 0 0 1 10 0v4" />
               </svg>
             </div>
-            <h3 className="text-2xl font-bold text-gray-800 dark:text-white/90 mb-1.5">Verifikasi Akses</h3>
-            <p className="text-sm text-gray-500 dark:text-gray-400">Masukkan email dan kode untuk mengakses live stream IDN Plus</p>
+            <h3 className="text-2xl font-bold text-gray-800 dark:text-white/90 mb-1.5">Akses IDN Live+</h3>
+            <p className="text-sm text-gray-500 dark:text-gray-400">Login dengan akun membership atau gunakan kode verifikasi</p>
           </div>
-          <div className="bg-gray-50 dark:bg-gray-800/50 rounded-2xl border border-gray-200 dark:border-gray-700 p-6 mb-4">
-            <form onSubmit={(e) => { e.preventDefault(); verifyAccess(); }} className="flex flex-col gap-4">
-              <div>
-                <label className="block text-xs font-semibold text-gray-600 dark:text-gray-400 mb-1.5 uppercase tracking-wide">Email</label>
-                <input type="email" value={verifData.email} onChange={(e) => { setVerifData((p) => ({ ...p, email: e.target.value })); setVerifyError(""); }} placeholder="email@example.com" required className="w-full px-4 py-3 rounded-xl border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-900/50 text-gray-900 dark:text-white text-sm outline-none focus:ring-2 focus:ring-red-500/30 focus:border-red-400 dark:focus:border-red-500 placeholder:text-gray-400 transition-all" />
-              </div>
-              <div>
-                <label className="block text-xs font-semibold text-gray-600 dark:text-gray-400 mb-1.5 uppercase tracking-wide">Verification Code</label>
-                <input type="text" value={verifData.code} onChange={(e) => { setVerifData((p) => ({ ...p, code: e.target.value })); setVerifyError(""); }} placeholder="Masukkan kode verifikasi" required className="w-full px-4 py-3 rounded-xl border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-900/50 text-gray-900 dark:text-white text-sm outline-none focus:ring-2 focus:ring-red-500/30 focus:border-red-400 dark:focus:border-red-500 placeholder:text-gray-400 tracking-widest transition-all" />
-              </div>
-              {verifyError && (
-                <div className="flex items-center gap-2.5 px-4 py-3 rounded-xl bg-red-50 dark:bg-red-500/10 border border-red-200 dark:border-red-500/20 text-red-600 dark:text-red-400 text-xs font-medium">
-                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="flex-shrink-0"><circle cx="12" cy="12" r="10" /><line x1="12" y1="8" x2="12" y2="12" /><line x1="12" y1="16" x2="12.01" y2="16" /></svg>
-                  {verifyError}
+
+          {/* Tab switcher */}
+          <div className="flex gap-1 p-1 rounded-xl bg-gray-100 dark:bg-gray-800 mb-5">
+            <button
+              onClick={() => { setAccessTab("login"); setLoginError(""); }}
+              className={`flex-1 py-2 rounded-lg text-xs font-bold transition-all cursor-pointer border-0 ${accessTab === "login" ? "bg-white dark:bg-gray-700 text-gray-900 dark:text-white shadow-sm" : "bg-transparent text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-300"}`}
+            >
+              🔑 Login Membership
+            </button>
+            <button
+              onClick={() => { setAccessTab("code"); setVerifyError(""); }}
+              className={`flex-1 py-2 rounded-lg text-xs font-bold transition-all cursor-pointer border-0 ${accessTab === "code" ? "bg-white dark:bg-gray-700 text-gray-900 dark:text-white shadow-sm" : "bg-transparent text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-300"}`}
+            >
+              🎟️ Kode Verifikasi
+            </button>
+          </div>
+
+          {/* Tab: Login Membership */}
+          {accessTab === "login" && (
+            <div className="bg-gray-50 dark:bg-gray-800/50 rounded-2xl border border-gray-200 dark:border-gray-700 p-6 mb-4">
+              <form onSubmit={handleMembershipLogin} className="flex flex-col gap-4">
+                <div>
+                  <label className="block text-xs font-semibold text-gray-600 dark:text-gray-400 mb-1.5 uppercase tracking-wide">Username / Email</label>
+                  <input type="text" value={loginForm.login} onChange={(e) => { setLoginForm((p) => ({ ...p, login: e.target.value })); setLoginError(""); }} placeholder="username / email@example.com" required className="w-full px-4 py-3 rounded-xl border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-900/50 text-gray-900 dark:text-white text-sm outline-none focus:ring-2 focus:ring-red-500/30 focus:border-red-400 dark:focus:border-red-500 placeholder:text-gray-400 transition-all" />
                 </div>
-              )}
-              <button type="submit" disabled={verifying} className={`flex items-center justify-center gap-2 px-4 py-3.5 rounded-xl border-0 text-sm font-bold text-white transition-all duration-200 mt-1 ${verifying ? "bg-red-400 cursor-not-allowed" : "bg-red-500 hover:bg-red-600 cursor-pointer shadow-lg shadow-red-500/25 hover:shadow-red-500/40 hover:-translate-y-0.5"}`}>
-                {verifying ? (<><div className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" />Memverifikasi...</>) : (<><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><polyline points="20 6 9 17 4 12" /></svg>Verifikasi Akses</>)}
-              </button>
-            </form>
-          </div>
-          <div className="bg-gray-50 dark:bg-gray-800/30 rounded-xl border border-gray-200 dark:border-gray-700/50 p-4 mb-3">
-            <p className="text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-2">Informasi</p>
-            <ul className="space-y-1">
-              {["Code verifikasi hanya dapat digunakan sekali", "IP address akan dicatat untuk keamanan", "Akses berlaku selama 5 jam", "Session tetap aktif saat refresh halaman"].map((info, i) => (
-                <li key={i} className="flex items-start gap-2 text-xs text-gray-500 dark:text-gray-400"><span className="text-gray-300 dark:text-gray-600 mt-0.5">•</span>{info}</li>
-              ))}
-            </ul>
-            <div className="mt-3 pt-3 border-t border-gray-200 dark:border-gray-700/50 text-xs text-gray-500 dark:text-gray-400">
-              Punya membership monthly?{" "}<span onClick={() => navigate("/signin")} className="text-red-500 cursor-pointer font-bold hover:underline">Login di sini</span>
+                <div>
+                  <label className="block text-xs font-semibold text-gray-600 dark:text-gray-400 mb-1.5 uppercase tracking-wide">Password</label>
+                  <input type="password" value={loginForm.password} onChange={(e) => { setLoginForm((p) => ({ ...p, password: e.target.value })); setLoginError(""); }} placeholder="Masukkan password" required className="w-full px-4 py-3 rounded-xl border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-900/50 text-gray-900 dark:text-white text-sm outline-none focus:ring-2 focus:ring-red-500/30 focus:border-red-400 dark:focus:border-red-500 placeholder:text-gray-400 transition-all" />
+                </div>
+                {loginError && (
+                  <div className="flex items-center gap-2.5 px-4 py-3 rounded-xl bg-red-50 dark:bg-red-500/10 border border-red-200 dark:border-red-500/20 text-red-600 dark:text-red-400 text-xs font-medium">
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="flex-shrink-0"><circle cx="12" cy="12" r="10" /><line x1="12" y1="8" x2="12" y2="12" /><line x1="12" y1="16" x2="12.01" y2="16" /></svg>
+                    {loginError}
+                  </div>
+                )}
+                <button type="submit" disabled={loginLoading} className={`flex items-center justify-center gap-2 px-4 py-3.5 rounded-xl border-0 text-sm font-bold text-white transition-all duration-200 mt-1 ${loginLoading ? "bg-red-400 cursor-not-allowed" : "bg-red-500 hover:bg-red-600 cursor-pointer shadow-lg shadow-red-500/25 hover:shadow-red-500/40 hover:-translate-y-0.5"}`}>
+                  {loginLoading ? (<><div className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" />Memeriksa membership...</>) : (<><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><path d="M15 3h4a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2h-4"/><polyline points="10 17 15 12 10 7"/><line x1="15" y1="12" x2="3" y2="12"/></svg>Masuk dengan Membership</>)}
+                </button>
+              </form>
+              <p className="text-[11px] text-gray-400 dark:text-gray-500 text-center mt-3">Membership aktif (non-free) dapat langsung menonton tanpa kode</p>
             </div>
-          </div>
+          )}
+
+          {/* Tab: Kode Verifikasi */}
+          {accessTab === "code" && (
+            <div className="bg-gray-50 dark:bg-gray-800/50 rounded-2xl border border-gray-200 dark:border-gray-700 p-6 mb-4">
+              <form onSubmit={(e) => { e.preventDefault(); verifyAccess(); }} className="flex flex-col gap-4">
+                <div>
+                  <label className="block text-xs font-semibold text-gray-600 dark:text-gray-400 mb-1.5 uppercase tracking-wide">Email</label>
+                  <input type="email" value={verifData.email} onChange={(e) => { setVerifData((p) => ({ ...p, email: e.target.value })); setVerifyError(""); }} placeholder="email@example.com" required className="w-full px-4 py-3 rounded-xl border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-900/50 text-gray-900 dark:text-white text-sm outline-none focus:ring-2 focus:ring-red-500/30 focus:border-red-400 dark:focus:border-red-500 placeholder:text-gray-400 transition-all" />
+                </div>
+                <div>
+                  <label className="block text-xs font-semibold text-gray-600 dark:text-gray-400 mb-1.5 uppercase tracking-wide">Verification Code</label>
+                  <input type="text" value={verifData.code} onChange={(e) => { setVerifData((p) => ({ ...p, code: e.target.value })); setVerifyError(""); }} placeholder="Masukkan kode verifikasi" required className="w-full px-4 py-3 rounded-xl border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-900/50 text-gray-900 dark:text-white text-sm outline-none focus:ring-2 focus:ring-red-500/30 focus:border-red-400 dark:focus:border-red-500 placeholder:text-gray-400 tracking-widest transition-all" />
+                </div>
+                {verifyError && (
+                  <div className="flex items-center gap-2.5 px-4 py-3 rounded-xl bg-red-50 dark:bg-red-500/10 border border-red-200 dark:border-red-500/20 text-red-600 dark:text-red-400 text-xs font-medium">
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="flex-shrink-0"><circle cx="12" cy="12" r="10" /><line x1="12" y1="8" x2="12" y2="12" /><line x1="12" y1="16" x2="12.01" y2="16" /></svg>
+                    {verifyError}
+                  </div>
+                )}
+                <button type="submit" disabled={verifying} className={`flex items-center justify-center gap-2 px-4 py-3.5 rounded-xl border-0 text-sm font-bold text-white transition-all duration-200 mt-1 ${verifying ? "bg-red-400 cursor-not-allowed" : "bg-red-500 hover:bg-red-600 cursor-pointer shadow-lg shadow-red-500/25 hover:shadow-red-500/40 hover:-translate-y-0.5"}`}>
+                  {verifying ? (<><div className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" />Memverifikasi...</>) : (<><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><polyline points="20 6 9 17 4 12" /></svg>Verifikasi Akses</>)}
+                </button>
+              </form>
+              <div className="mt-4 pt-4 border-t border-gray-200 dark:border-gray-700/50">
+                <p className="text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-2">Informasi</p>
+                <ul className="space-y-1">
+                  {["Code verifikasi hanya dapat digunakan sekali", "IP address akan dicatat untuk keamanan", "Akses berlaku selama 5 jam", "Session tetap aktif saat refresh halaman"].map((info, i) => (
+                    <li key={i} className="flex items-start gap-2 text-xs text-gray-500 dark:text-gray-400"><span className="text-gray-300 dark:text-gray-600 mt-0.5">•</span>{info}</li>
+                  ))}
+                </ul>
+              </div>
+            </div>
+          )}
+
           <button onClick={() => navigate(-1)} className="w-full py-3 rounded-xl border border-gray-200 dark:border-gray-700 bg-transparent text-gray-500 dark:text-gray-400 text-sm font-medium cursor-pointer hover:bg-gray-50 dark:hover:bg-gray-800/50 transition-colors flex items-center justify-center gap-1.5">
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="15 18 9 12 15 6" /></svg>
             Kembali
