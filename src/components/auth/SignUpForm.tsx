@@ -2,94 +2,313 @@ import { useState } from "react";
 import { Link } from "react-router";
 import { ChevronLeftIcon } from "../../icons";
 
-const GITHUB_RELEASE_API =
-  "https://api.github.com/repos/JKT48Connect/JKT48Connect-APP/releases/latest";
+const API_BASE = "https://v2.jkt48connect.com/api/jkt48connect";
+const API_KEY = "JKTCONNECT";
 
-interface GithubAsset {
-  name: string;
-  browser_download_url: string;
-  size: number;
-  download_count: number;
+// ─── Types ────────────────────────────────────────────────────────────────────
+
+interface RegisterResponse {
+  status: boolean;
+  message?: string;
+  data?: unknown;
 }
 
-interface GithubRelease {
-  tag_name: string;
-  name: string;
-  published_at: string;
-  assets: GithubAsset[];
+interface LoginResponse {
+  status: boolean;
+  message?: string;
+  data?: {
+    user: {
+      user_id: string;
+      username: string;
+      email: string;
+      full_name: string | null;
+      membership_type: string;
+      is_verified: boolean;
+    };
+    session: {
+      session_id: string;
+      access_token: string;
+      refresh_token: string;
+      expires_at: string;
+    };
+  };
 }
 
-const features = [
-  {
-    icon: (
-      <svg width="20" height="20" viewBox="0 0 24 24" fill="none"
-        stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-        <polygon points="23 7 16 12 23 17 23 7" />
-        <rect x="1" y="5" width="15" height="14" rx="2" ry="2" />
-      </svg>
-    ),
-    color: "#DC1F2E",
-    title: "Beli Tiket Show",
-    desc: "Beli tiket dan tonton show JKT48 langsung di dalam aplikasi secara real-time.",
-  },
-  {
-    icon: (
-      <svg width="20" height="20" viewBox="0 0 24 24" fill="none"
-        stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-        <path d="M20.59 13.41l-7.17 7.17a2 2 0 0 1-2.83 0L2 12V2h10l8.59 8.59a2 2 0 0 1 0 2.82z" />
-        <line x1="7" y1="7" x2="7.01" y2="7" />
-      </svg>
-    ),
-    color: "#f59e0b",
-    title: "Beli Kode Show",
-    desc: "Dapatkan kode show melalui aplikasi untuk digunakan menonton di website.",
-  },
-  {
-    icon: (
-      <svg width="20" height="20" viewBox="0 0 24 24" fill="none"
-        stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-        <path d="M12 2l3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01L12 2z" />
-      </svg>
-    ),
-    color: "#465FFF",
-    title: "Membership Bulanan",
-    desc: "Akses semua show tanpa batas selama masa membership aktif — bypass semua show.",
-  },
-  {
-    icon: (
-      <svg width="20" height="20" viewBox="0 0 24 24" fill="none"
-        stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-        <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z" />
-      </svg>
-    ),
-    color: "#10b981",
-    title: "Fitur Mendatang",
-    desc: "Lebih banyak fitur eksklusif sedang dalam pengembangan untuk member setia.",
-  },
-];
+// ─── SVG Icons ────────────────────────────────────────────────────────────────
+
+const IconEye = () => (
+  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+    <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z" />
+    <circle cx="12" cy="12" r="3" />
+  </svg>
+);
+
+const IconEyeOff = () => (
+  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+    <path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94" />
+    <path d="M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19" />
+    <line x1="1" y1="1" x2="23" y2="23" />
+  </svg>
+);
+
+const IconCheckCircle = () => (
+  <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+    <path d="M22 11.08V12a10 10 0 1 1-5.93-9.14" />
+    <polyline points="22 4 12 14.01 9 11.01" />
+  </svg>
+);
+
+const IconAlertCircle = () => (
+  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+    <circle cx="12" cy="12" r="10" />
+    <line x1="12" y1="8" x2="12" y2="12" />
+    <line x1="12" y1="16" x2="12.01" y2="16" />
+  </svg>
+);
+
+// ─── Password Strength ────────────────────────────────────────────────────────
+
+const getPasswordStrength = (p: string) => {
+  if (!p) return null;
+  let score = 0;
+  if (p.length >= 8) score++;
+  if (p.length >= 12) score++;
+  if (/[A-Z]/.test(p)) score++;
+  if (/[0-9]/.test(p)) score++;
+  if (/[^A-Za-z0-9]/.test(p)) score++;
+  if (score <= 1) return { level: 1, label: "Lemah", color: "bg-red-500" };
+  if (score <= 3) return { level: 2, label: "Sedang", color: "bg-amber-400" };
+  return { level: 3, label: "Kuat", color: "bg-green-500" };
+};
+
+const PasswordStrengthBar = ({ password }: { password: string }) => {
+  const strength = getPasswordStrength(password);
+  if (!strength) return null;
+  return (
+    <div className="flex items-center gap-2 mb-3 -mt-1">
+      <div className="flex gap-1 flex-1">
+        {[1, 2, 3].map((i) => (
+          <div
+            key={i}
+            className={`h-1 flex-1 rounded-full transition-all duration-300 ${
+              i <= strength.level ? strength.color : "bg-gray-200 dark:bg-gray-700"
+            }`}
+          />
+        ))}
+      </div>
+      <span className="text-xs font-semibold text-gray-500 dark:text-gray-400">
+        {strength.label}
+      </span>
+    </div>
+  );
+};
+
+// ─── Form Input ───────────────────────────────────────────────────────────────
+
+interface FormInputProps {
+  label: string;
+  value: string;
+  onChange: (v: string) => void;
+  placeholder?: string;
+  type?: string;
+  error?: string;
+  required?: boolean;
+  showToggle?: boolean;
+  showPassword?: boolean;
+  onToggle?: () => void;
+}
+
+const FormInput = ({
+  label,
+  value,
+  onChange,
+  placeholder,
+  type = "text",
+  error,
+  required,
+  showToggle,
+  showPassword,
+  onToggle,
+}: FormInputProps) => (
+  <div className="mb-4">
+    <label className="block text-xs font-semibold text-gray-600 dark:text-gray-400 uppercase tracking-wider mb-1.5">
+      {label} {required && <span className="text-red-500 normal-case">*</span>}
+    </label>
+    <div className="relative">
+      <input
+        type={showToggle ? (showPassword ? "text" : "password") : type}
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        placeholder={placeholder}
+        className={`w-full px-4 py-2.5 rounded-xl border text-sm bg-white dark:bg-white/[0.04] text-gray-800 dark:text-white placeholder:text-gray-400 dark:placeholder:text-gray-600 transition-colors focus:outline-none focus:ring-2 focus:ring-brand-500/30 ${
+          error
+            ? "border-red-400 dark:border-red-500/50"
+            : "border-gray-200 dark:border-gray-700 focus:border-brand-400 dark:focus:border-brand-500"
+        }`}
+      />
+      {showToggle && (
+        <button
+          type="button"
+          onClick={onToggle}
+          className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600 dark:hover:text-gray-300"
+        >
+          {showPassword ? <IconEyeOff /> : <IconEye />}
+        </button>
+      )}
+    </div>
+    {error && (
+      <div className="flex items-center gap-1.5 mt-1.5 text-red-500">
+        <IconAlertCircle />
+        <span className="text-xs">{error}</span>
+      </div>
+    )}
+  </div>
+);
+
+// ─── Main Component ───────────────────────────────────────────────────────────
 
 export default function SignUpForm() {
-  const [release, setRelease] = useState<GithubRelease | null>(null);
-  const [loadingRelease, setLoadingRelease] = useState(true);
+  const [username, setUsername] = useState("");
+  const [email, setEmail] = useState("");
+  const [fullName, setFullName] = useState("");
+  const [phone, setPhone] = useState("");
+  const [password, setPassword] = useState("");
+  const [confirmPassword, setConfirmPassword] = useState("");
+  const [referralCode, setReferralCode] = useState("");
+  const [showPassword, setShowPassword] = useState(false);
+  const [showConfirm, setShowConfirm] = useState(false);
+  const [errors, setErrors] = useState<Record<string, string>>({});
+  const [submitting, setSubmitting] = useState(false);
+  const [success, setSuccess] = useState(false);
+  const [registeredUsername, setRegisteredUsername] = useState("");
 
-  useState(() => {
-    fetch(GITHUB_RELEASE_API)
-      .then((r) => r.json())
-      .then((data: GithubRelease) => setRelease(data))
-      .catch((e) => console.error("Error fetching release:", e))
-      .finally(() => setLoadingRelease(false));
-  });
-
-  const apkAsset = release?.assets?.find((a) => a.name.endsWith(".apk"));
-
-  const formatSize = (bytes: number): string => {
-    if (!bytes) return "";
-    return (bytes / 1024 / 1024).toFixed(1) + " MB";
+  const validate = (): boolean => {
+    const e: Record<string, string> = {};
+    if (!username.trim()) e.username = "Username wajib diisi";
+    else if (username.trim().length < 3) e.username = "Minimal 3 karakter";
+    else if (!/^[a-z0-9_]+$/i.test(username.trim()))
+      e.username = "Hanya huruf, angka, dan underscore";
+    if (!email.trim()) e.email = "Email wajib diisi";
+    else if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email.trim()))
+      e.email = "Format email tidak valid";
+    if (!password) e.password = "Password wajib diisi";
+    else if (password.length < 8) e.password = "Minimal 8 karakter";
+    if (!confirmPassword) e.confirmPassword = "Konfirmasi password wajib diisi";
+    else if (password !== confirmPassword)
+      e.confirmPassword = "Password tidak cocok";
+    setErrors(e);
+    return Object.keys(e).length === 0;
   };
+
+  const handleRegister = async () => {
+    if (!validate()) return;
+    setSubmitting(true);
+    try {
+      const regRes = await fetch(`${API_BASE}/auth/register?apikey=${API_KEY}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          username: username.toLowerCase().trim(),
+          email: email.toLowerCase().trim(),
+          password,
+          full_name: fullName.trim() || undefined,
+          phone: phone.trim() || undefined,
+          referred_by: referralCode.trim() || undefined,
+        }),
+      });
+      const regData: RegisterResponse = await regRes.json();
+
+      if (!regData.status) {
+        setErrors({ submit: regData.message || "Registrasi gagal" });
+        return;
+      }
+
+      // Auto login setelah register berhasil
+      const loginRes = await fetch(`${API_BASE}/auth/login?apikey=${API_KEY}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          login: email.toLowerCase().trim(),
+          password,
+        }),
+      });
+      const loginData: LoginResponse = await loginRes.json();
+
+      if (loginData.status && loginData.data) {
+        // Simpan session ke localStorage
+        localStorage.setItem(
+          "jkt48connect_session",
+          JSON.stringify({
+            user: loginData.data.user,
+            session: loginData.data.session,
+            savedAt: new Date().toISOString(),
+          })
+        );
+        setRegisteredUsername(loginData.data.user.username);
+      } else {
+        setRegisteredUsername(username.toLowerCase().trim());
+      }
+
+      setSuccess(true);
+    } catch {
+      setErrors({ submit: "Koneksi gagal. Periksa internet dan coba lagi." });
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  // ── Success Screen ────────────────────────────────────────────────────────
+
+  if (success) {
+    return (
+      <div className="flex flex-col flex-1 w-full overflow-y-auto lg:w-1/2 no-scrollbar">
+        <div className="flex flex-col items-center justify-center flex-1 w-full max-w-md mx-auto px-6 text-center">
+          <div className="w-20 h-20 rounded-full bg-green-100 dark:bg-green-500/10 border border-green-200 dark:border-green-500/20 flex items-center justify-center mb-6 text-green-500">
+            <IconCheckCircle />
+          </div>
+          <h1 className="text-2xl font-bold text-gray-800 dark:text-white/90 mb-2">
+            Selamat Datang!
+          </h1>
+          {registeredUsername && (
+            <p className="text-brand-500 font-semibold mb-3">@{registeredUsername}</p>
+          )}
+          <p className="text-sm text-gray-500 dark:text-gray-400 leading-relaxed mb-6">
+            Akun kamu berhasil dibuat. Cek email untuk verifikasi akun.
+          </p>
+
+          <div className="w-full rounded-xl border border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-white/[0.03] p-4 mb-6 text-left space-y-3">
+            <div className="flex items-center justify-between">
+              <span className="text-xs text-gray-500 dark:text-gray-400">Membership</span>
+              <span className="text-xs font-bold text-green-600 dark:text-green-400 bg-green-100 dark:bg-green-500/10 px-2.5 py-1 rounded-full">
+                FREE
+              </span>
+            </div>
+            <div className="h-px bg-gray-200 dark:bg-gray-700" />
+            <div className="flex items-center justify-between">
+              <span className="text-xs text-gray-500 dark:text-gray-400">Sesi tersimpan</span>
+              <span className="flex items-center gap-1.5 text-xs font-semibold text-green-600 dark:text-green-400">
+                <span className="w-1.5 h-1.5 rounded-full bg-green-500 inline-block" />
+                Aktif
+              </span>
+            </div>
+          </div>
+
+          <Link
+            to="/"
+            className="w-full flex items-center justify-center gap-2 px-4 py-3 rounded-xl bg-brand-500 hover:bg-brand-600 text-white text-sm font-semibold transition-colors"
+          >
+            Mulai Jelajahi
+          </Link>
+        </div>
+      </div>
+    );
+  }
+
+  // ── Register Form ─────────────────────────────────────────────────────────
 
   return (
     <div className="flex flex-col flex-1 w-full overflow-y-auto lg:w-1/2 no-scrollbar">
-      <div className="w-full max-w-md mx-auto mb-5 sm:pt-10">
+      <div className="w-full max-w-md mx-auto mb-5 sm:pt-10 px-6">
         <Link
           to="/"
           className="inline-flex items-center text-sm text-gray-500 transition-colors hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-300"
@@ -99,171 +318,139 @@ export default function SignUpForm() {
         </Link>
       </div>
 
-      <div className="flex flex-col justify-center flex-1 w-full max-w-md mx-auto">
-        <div>
-          {/* ── Header ── */}
-          <div className="mb-6">
-            <h1 className="mb-2 font-semibold text-gray-800 text-title-sm dark:text-white/90 sm:text-title-md">
-              Buat Akun
-            </h1>
-            <p className="text-sm text-gray-500 dark:text-gray-400">
-              Registrasi akun JKT48Connect
-            </p>
-          </div>
-
-          {/* ── Notice Card ── */}
-          <div className="rounded-2xl border border-orange-200 bg-orange-50 dark:border-orange-500/20 dark:bg-orange-500/5 p-4 mb-6">
-            <div className="flex gap-3">
-              <div className="flex-shrink-0 mt-0.5">
-                <div className="flex items-center justify-center w-8 h-8 rounded-lg bg-orange-100 dark:bg-orange-500/15">
-                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none"
-                    stroke="#f97316" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
-                    <circle cx="12" cy="12" r="10" />
-                    <line x1="12" y1="8" x2="12" y2="12" />
-                    <line x1="12" y1="16" x2="12.01" y2="16" />
-                  </svg>
-                </div>
-              </div>
-              <div>
-                <h3 className="text-sm font-semibold text-orange-700 dark:text-orange-400 mb-1">
-                  Registrasi Hanya Tersedia di Aplikasi
-                </h3>
-                <p className="text-xs text-orange-600 dark:text-orange-400/80 leading-relaxed">
-                  Pembuatan akun tidak dapat dilakukan melalui website. Silakan download aplikasi
-                  <strong> JKT48Connect</strong> untuk mendaftar dan menikmati semua fitur.
-                </p>
-              </div>
-            </div>
-          </div>
-
-          {/* ── Features ── */}
-          <div className="mb-6">
-            <p className="text-xs font-semibold text-gray-400 dark:text-gray-500 uppercase tracking-wider mb-3">
-              Yang bisa kamu lakukan di aplikasi
-            </p>
-            <div className="space-y-2.5">
-              {features.map((f, i) => (
-                <div
-                  key={i}
-                  className="flex items-start gap-3 p-3 rounded-xl border border-gray-100 bg-gray-50 dark:border-gray-800 dark:bg-white/[0.02]"
-                >
-                  <div
-                    className="flex items-center justify-center w-9 h-9 rounded-lg flex-shrink-0"
-                    style={{
-                      backgroundColor: `${f.color}15`,
-                      border: `1px solid ${f.color}25`,
-                      color: f.color,
-                    }}
-                  >
-                    {f.icon}
-                  </div>
-                  <div className="flex-1 min-w-0">
-                    <h4 className="text-sm font-semibold text-gray-800 dark:text-white/90 mb-0.5">
-                      {f.title}
-                    </h4>
-                    <p className="text-xs text-gray-500 dark:text-gray-400 leading-relaxed">
-                      {f.desc}
-                    </p>
-                  </div>
-                </div>
-              ))}
-            </div>
-          </div>
-
-          {/* ── Membership Info ── */}
-          <div className="rounded-xl border border-brand-200 bg-brand-50 dark:border-brand-500/20 dark:bg-brand-500/5 p-4 mb-6">
-            <div className="flex items-start gap-3">
-              <div className="flex items-center justify-center w-8 h-8 rounded-lg bg-brand-100 dark:bg-brand-500/15 flex-shrink-0">
-                <svg width="16" height="16" viewBox="0 0 24 24" fill="none"
-                  stroke="#465FFF" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                  <path d="M12 2l3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01L12 2z" />
-                </svg>
-              </div>
-              <div>
-                <h4 className="text-sm font-semibold text-brand-700 dark:text-brand-400 mb-1">
-                  Tentang Membership
-                </h4>
-                <p className="text-xs text-brand-600 dark:text-brand-400/80 leading-relaxed">
-                  Dengan membership aktif, <strong>semua show terbuka tanpa batas</strong> selama
-                  periode berlaku. Tidak perlu beli tiket per-show — cukup login akun membership
-                  di website untuk langsung menonton.
-                </p>
-              </div>
-            </div>
-          </div>
-
-          {/* ── Download Button ── */}
-          <div className="space-y-3">
-            {loadingRelease ? (
-              <div className="flex items-center justify-center gap-2 w-full px-4 py-3 rounded-xl bg-brand-500 text-white text-sm font-medium">
-                <div className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" />
-                Memuat info rilis...
-              </div>
-            ) : apkAsset ? (
-              <a
-                href={apkAsset.browser_download_url}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="flex items-center justify-center gap-2 w-full px-4 py-3 rounded-xl bg-brand-500 hover:bg-brand-600 text-white text-sm font-semibold transition-colors shadow-sm"
-              >
-                <svg width="16" height="16" viewBox="0 0 24 24" fill="none"
-                  stroke="white" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
-                  <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
-                  <polyline points="7 10 12 15 17 10" />
-                  <line x1="12" y1="15" x2="12" y2="3" />
-                </svg>
-                Download Aplikasi
-                {release?.tag_name && (
-                  <span className="text-white/70 font-normal text-xs">
-                    {release.tag_name}
-                    {apkAsset.size ? ` · ${formatSize(apkAsset.size)}` : ""}
-                  </span>
-                )}
-              </a>
-            ) : (
-              <a
-                href="https://github.com/JKT48Connect/JKT48Connect-APP/releases/latest"
-                target="_blank"
-                rel="noopener noreferrer"
-                className="flex items-center justify-center gap-2 w-full px-4 py-3 rounded-xl bg-brand-500 hover:bg-brand-600 text-white text-sm font-semibold transition-colors"
-              >
-                <svg width="16" height="16" viewBox="0 0 24 24" fill="none"
-                  stroke="white" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
-                  <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
-                  <polyline points="7 10 12 15 17 10" />
-                  <line x1="12" y1="15" x2="12" y2="3" />
-                </svg>
-                Download Aplikasi
-              </a>
-            )}
-
-            <a
-              href="https://github.com/JKT48Connect/JKT48Connect-APP/releases"
-              target="_blank"
-              rel="noopener noreferrer"
-              className="flex items-center justify-center gap-1.5 w-full px-4 py-2.5 rounded-xl border border-gray-200 dark:border-gray-800 text-gray-500 dark:text-gray-400 text-sm font-medium hover:bg-gray-50 dark:hover:bg-white/[0.03] transition-colors"
-            >
-              <svg width="14" height="14" viewBox="0 0 24 24" fill="none"
-                stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                <path d="M9 19c-5 1.5-5-2.5-7-3m14 6v-3.87a3.37 3.37 0 0 0-.94-2.61c3.14-.35 6.44-1.54 6.44-7A5.44 5.44 0 0 0 20 4.77 5.07 5.07 0 0 0 19.91 1S18.73.65 16 2.48a13.38 13.38 0 0 0-7 0C6.27.65 5.09 1 5.09 1A5.07 5.07 0 0 0 5 4.77a5.44 5.44 0 0 0-1.5 3.78c0 5.42 3.3 6.61 6.44 7A3.37 3.37 0 0 0 9 18.13V22" />
-              </svg>
-              Lihat semua versi di GitHub
-            </a>
-          </div>
-
-                    {/* ── Sign In Link ── */}
-          <div className="mt-5">
-            <p className="text-sm font-normal text-center text-gray-700 dark:text-gray-400 sm:text-start">
-              Sudah punya akun?{" "}
-              <Link
-                to="/signin"
-                className="text-brand-500 hover:text-brand-600 dark:text-brand-400"
-              >
-                Sign In
-              </Link>
-            </p>
-          </div>
+      <div className="flex flex-col justify-center flex-1 w-full max-w-md mx-auto px-6 pb-10">
+        {/* ── Header ── */}
+        <div className="mb-6">
+          <h1 className="mb-1 font-semibold text-gray-800 text-title-sm dark:text-white/90 sm:text-title-md">
+            Buat Akun
+          </h1>
+          <p className="text-sm text-gray-500 dark:text-gray-400">
+            Registrasi akun JKT48Connect — gratis selamanya
+          </p>
         </div>
+
+        {/* ── Section: Identitas ── */}
+        <p className="text-xs font-bold text-gray-400 dark:text-gray-500 uppercase tracking-widest mb-4">
+          Identitas
+        </p>
+
+        <FormInput
+          label="Username"
+          value={username}
+          onChange={(v) => { setUsername(v); setErrors((e) => ({ ...e, username: "" })); }}
+          placeholder="contoh: sakura_jkt48"
+          error={errors.username}
+          required
+        />
+        <FormInput
+          label="Email"
+          value={email}
+          onChange={(v) => { setEmail(v); setErrors((e) => ({ ...e, email: "" })); }}
+          placeholder="email@kamu.com"
+          type="email"
+          error={errors.email}
+          required
+        />
+        <FormInput
+          label="Nama Lengkap"
+          value={fullName}
+          onChange={setFullName}
+          placeholder="Opsional"
+        />
+        <FormInput
+          label="No. HP"
+          value={phone}
+          onChange={setPhone}
+          placeholder="Opsional"
+          type="tel"
+        />
+
+        {/* ── Section: Keamanan ── */}
+        <p className="text-xs font-bold text-gray-400 dark:text-gray-500 uppercase tracking-widest mb-4 mt-2">
+          Keamanan
+        </p>
+
+        <FormInput
+          label="Password"
+          value={password}
+          onChange={(v) => { setPassword(v); setErrors((e) => ({ ...e, password: "" })); }}
+          placeholder="Minimal 8 karakter"
+          error={errors.password}
+          required
+          showToggle
+          showPassword={showPassword}
+          onToggle={() => setShowPassword((v) => !v)}
+        />
+        <PasswordStrengthBar password={password} />
+
+        <FormInput
+          label="Konfirmasi Password"
+          value={confirmPassword}
+          onChange={(v) => { setConfirmPassword(v); setErrors((e) => ({ ...e, confirmPassword: "" })); }}
+          placeholder="Ulangi password"
+          error={errors.confirmPassword}
+          required
+          showToggle
+          showPassword={showConfirm}
+          onToggle={() => setShowConfirm((v) => !v)}
+        />
+
+        {/* ── Section: Referral ── */}
+        <p className="text-xs font-bold text-gray-400 dark:text-gray-500 uppercase tracking-widest mb-4 mt-2">
+          Referral
+        </p>
+
+        <FormInput
+          label="Kode Referral"
+          value={referralCode}
+          onChange={setReferralCode}
+          placeholder="Opsional"
+        />
+
+        {/* ── Submit Error ── */}
+        {errors.submit && (
+          <div className="flex items-center gap-2 p-3 rounded-xl border border-red-200 dark:border-red-500/20 bg-red-50 dark:bg-red-500/5 mb-4">
+            <span className="text-red-500"><IconAlertCircle /></span>
+            <p className="text-xs text-red-600 dark:text-red-400">{errors.submit}</p>
+          </div>
+        )}
+
+        {/* ── CTA ── */}
+        <button
+          onClick={handleRegister}
+          disabled={submitting}
+          className="flex items-center justify-center gap-2 w-full px-4 py-3 rounded-xl bg-brand-500 hover:bg-brand-600 disabled:opacity-50 disabled:cursor-not-allowed text-white text-sm font-semibold transition-colors shadow-sm mt-2"
+        >
+          {submitting ? (
+            <>
+              <div className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" />
+              Mendaftarkan...
+            </>
+          ) : (
+            "Daftar Sekarang"
+          )}
+        </button>
+
+        {/* ── Footer ── */}
+        <p className="text-sm text-center text-gray-500 dark:text-gray-400 mt-5">
+          Sudah punya akun?{" "}
+          <Link to="/signin" className="text-brand-500 hover:text-brand-600 dark:text-brand-400 font-medium">
+            Sign In
+          </Link>
+        </p>
+
+        <p className="text-xs text-center text-gray-400 dark:text-gray-600 mt-3 leading-relaxed">
+          Dengan mendaftar, kamu menyetujui{" "}
+          <a href="https://jkt48connect.com/tos" target="_blank" rel="noopener noreferrer"
+            className="underline hover:text-gray-600 dark:hover:text-gray-400">
+            Syarat & Ketentuan
+          </a>{" "}
+          dan{" "}
+          <a href="https://jkt48connect.com/privacy" target="_blank" rel="noopener noreferrer"
+            className="underline hover:text-gray-600 dark:hover:text-gray-400">
+            Kebijakan Privasi
+          </a>
+        </p>
       </div>
     </div>
   );
