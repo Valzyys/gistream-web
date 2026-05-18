@@ -1,17 +1,13 @@
-import { useEffect, useState } from "react";
+import { useEffect, useState, useCallback } from "react";
 import PageMeta from "../components/common/PageMeta";
 
-// ── API ──────────────────────────────────────────────────────────────────────
-const IDN_PLUS_API =
-  "https://v2.jkt48connect.com/api/jkt48/idnplus?apikey=JKTCONNECT";
-const THEATER_API =
-  "https://v2.jkt48connect.com/api/jkt48/theater?apikey=JKTCONNECT";
-
-const DEFAULT_IMG =
-  "https://res.cloudinary.com/haymzm4wp/image/upload/v1760105848/bi5ej2hgh0cc2uowu5xr.jpg";
-
+// ── Constants ────────────────────────────────────────────────────────────────
+const IDN_PLUS_API = "https://v2.jkt48connect.com/api/jkt48/idnplus?apikey=JKTCONNECT";
+const THEATER_API = "https://v2.jkt48connect.com/api/jkt48/theater?apikey=JKTCONNECT";
+const TICKETS_API = "https://v2.jkt48connect.com/api/tickets";
+const DEFAULT_IMG = "https://res.cloudinary.com/haymzm4wp/image/upload/v1760105848/bi5ej2hgh0cc2uowu5xr.jpg";
 const ALLOWED_THEATER_TYPES = ["SHOW", "EVENT"];
-const TELEGRAM_BOT_URL = "https://t.me/gistream_bot";
+const TICKET_PRICE = 7000;
 
 // ── Types ────────────────────────────────────────────────────────────────────
 interface NormalizedShow {
@@ -28,11 +24,63 @@ interface NormalizedShow {
   birthdayMembers: any[];
   source: "idn" | "theater";
   price?: number;
-  currency?: string;
   showId?: string;
 }
 
+interface PaymentMethod {
+  channel_code: string;
+  channel_name: string;
+  fee?: number | string;
+  min?: number;
+  max?: number;
+}
+
+interface PaymentMethods {
+  virtual_account?: PaymentMethod[];
+  emoney?: PaymentMethod[];
+  retail?: PaymentMethod[];
+  pulsa?: PaymentMethod[];
+}
+
+interface TicketOrder {
+  ticket_id: string;
+  ref_id: string;
+  ybp_trx_id: string;
+  show_id: string;
+  show_title: string;
+  amount: number;
+  amount_to_pay: number;
+  fee: number;
+  method: string;
+  method_name: string;
+  category: string;
+  payment_url: string | null;
+  checkout_url: string | null;
+  nomor_va: string | null;
+  qr_image: string | null;
+  expired_at: string;
+}
+
+interface UserTicketStatus {
+  has_ticket: boolean;
+  has_pending: boolean;
+  ticket: { ref_id: string; paid_at: string } | null;
+  pending_ticket: { ref_id: string; expired_at: string } | null;
+}
+
 type FilterType = "all" | "live" | "scheduled";
+type ModalStep = "method" | "confirm" | "payment" | "success" | "already_paid";
+
+// ── Auth helper ──────────────────────────────────────────────────────────────
+function getLoginData() {
+  try {
+    const ls = localStorage.getItem("userLogin");
+    if (ls) return JSON.parse(ls);
+    const ss = sessionStorage.getItem("userLogin");
+    if (ss) return JSON.parse(ss);
+  } catch {}
+  return null;
+}
 
 // ── Normalize ────────────────────────────────────────────────────────────────
 function normalizeShow(show: any, src: "idn" | "theater"): NormalizedShow {
@@ -45,32 +93,24 @@ function normalizeShow(show: any, src: "idn" | "theater"): NormalizedShow {
       scheduledAt: show.scheduled_at ? show.scheduled_at * 1000 : null,
       image: show.image_url || DEFAULT_IMG,
       creator: show.creator?.name || "JKT48",
-      type: null,
-      referenceCode: null,
-      isBirthday: false,
-      birthdayMembers: [],
+      type: null, referenceCode: null,
+      isBirthday: false, birthdayMembers: [],
       source: "idn",
       price: show.idnliveplus?.liveroom_price,
-      currency: show.idnliveplus?.currency_code,
       showId: show.showId,
     };
   }
-
   let scheduledAt: number | null = null;
   if (show.date && show.start_time) {
-    const datePart = show.date.split("T")[0];
-    scheduledAt = new Date(`${datePart}T${show.start_time}+07:00`).getTime();
+    scheduledAt = new Date(`${show.date.split("T")[0]}T${show.start_time}+07:00`).getTime();
   } else if (show.date) {
     scheduledAt = new Date(show.date).getTime();
   }
-
-  const isPast = scheduledAt ? scheduledAt < Date.now() : false;
-
   return {
     id: show.link || `theater-${show.schedule_id}`,
     title: show.title,
     description: show.short_description || null,
-    status: isPast ? "past" : "scheduled",
+    status: scheduledAt && scheduledAt < Date.now() ? "past" : "scheduled",
     scheduledAt,
     image: show.poster || show.banner || DEFAULT_IMG,
     creator: "JKT48",
@@ -82,18 +122,17 @@ function normalizeShow(show: any, src: "idn" | "theater"): NormalizedShow {
   };
 }
 
-// ── Countdown Hook ───────────────────────────────────────────────────────────
+// ── Countdown ────────────────────────────────────────────────────────────────
 function useCountdown(target: number | null, active: boolean) {
   const [cd, setCd] = useState({ days: 0, hours: 0, mins: 0, secs: 0 });
-
   useEffect(() => {
     if (!target || !active) return;
     const tick = () => {
       const diff = Math.max(0, target - Date.now());
       setCd({
-        days: Math.floor(diff / (1000 * 60 * 60 * 24)),
-        hours: Math.floor((diff / (1000 * 60 * 60)) % 24),
-        mins: Math.floor((diff / (1000 * 60)) % 60),
+        days: Math.floor(diff / 86400000),
+        hours: Math.floor((diff / 3600000) % 24),
+        mins: Math.floor((diff / 60000) % 60),
         secs: Math.floor((diff / 1000) % 60),
       });
     };
@@ -101,783 +140,737 @@ function useCountdown(target: number | null, active: boolean) {
     const iv = setInterval(tick, 1000);
     return () => clearInterval(iv);
   }, [target, active]);
-
   return cd;
 }
 
-// ── Telegram Icon ────────────────────────────────────────────────────────────
-function TelegramIcon({ size = 14 }: { size?: number }) {
-  return (
-    <svg
-      width={size}
-      height={size}
-      viewBox="0 0 24 24"
-      fill="currentColor"
-      xmlns="http://www.w3.org/2000/svg"
-    >
-      <path d="M11.944 0A12 12 0 0 0 0 12a12 12 0 0 0 12 12 12 12 0 0 0 12-12A12 12 0 0 0 12 0a12 12 0 0 0-.056 0zm4.962 7.224c.1-.002.321.023.465.14a.506.506 0 0 1 .171.325c.016.093.036.306.02.472-.18 1.898-.962 6.502-1.36 8.627-.168.9-.499 1.201-.82 1.23-.696.065-1.225-.46-1.9-.902-1.056-.693-1.653-1.124-2.678-1.8-1.185-.78-.417-1.21.258-1.91.177-.184 3.247-2.977 3.307-3.23.007-.032.014-.15-.056-.212s-.174-.041-.249-.024c-.106.024-1.793 1.14-5.061 3.345-.48.33-.913.49-1.302.48-.428-.008-1.252-.241-1.865-.44-.752-.245-1.349-.374-1.297-.789.027-.216.325-.437.893-.663 3.498-1.524 5.83-2.529 6.998-3.014 3.332-1.386 4.025-1.627 4.476-1.635z" />
-    </svg>
-  );
+// ── Payment Modal ─────────────────────────────────────────────────────────────
+interface PaymentModalProps {
+  show: NormalizedShow;
+  onClose: () => void;
+  onSuccess: (showId: string) => void;
+  loginData: any;
 }
 
-// ── Show Card ────────────────────────────────────────────────────────────────
-function ShowCard({ show }: { show: NormalizedShow }) {
-  const isLive = show.status === "live";
-  const showCountdown =
-    !!show.scheduledAt && !isLive && show.scheduledAt > Date.now();
-  const cd = useCountdown(show.scheduledAt, showCountdown);
+function PaymentModal({ show, onClose, onSuccess, loginData }: PaymentModalProps) {
+  const [step, setStep] = useState<ModalStep>("method");
+  const [methods, setMethods] = useState<PaymentMethods>({});
+  const [loadingMethods, setLoadingMethods] = useState(true);
+  const [selectedMethod, setSelectedMethod] = useState<PaymentMethod | null>(null);
+  const [order, setOrder] = useState<TicketOrder | null>(null);
+  const [creating, setCreating] = useState(false);
+  const [checking, setChecking] = useState(false);
+  const [pollStatus, setPollStatus] = useState<"pending" | "paid" | "expired">("pending");
+  const [paymentTimer, setPaymentTimer] = useState(0);
+  const [error, setError] = useState("");
 
-  const formatDate = (ts: number) =>
-    new Date(ts).toLocaleDateString("id-ID", {
-      weekday: "long",
-      day: "numeric",
-      month: "long",
-      year: "numeric",
-    });
+  // Load methods
+  useEffect(() => {
+    fetch(`${TICKETS_API}/methods`)
+      .then((r) => r.json())
+      .then((d) => {
+        const pm: PaymentMethods = d.data?.payment_methods || {};
+        // Filter hanya yang aktif (semua kategori)
+        setMethods(pm);
+      })
+      .catch(() => setError("Gagal memuat metode pembayaran"))
+      .finally(() => setLoadingMethods(false));
+  }, []);
 
-  const formatTime = (ts: number) =>
-    new Date(ts).toLocaleTimeString("id-ID", {
-      hour: "2-digit",
-      minute: "2-digit",
-    }) + " WIB";
+  // Payment countdown
+  useEffect(() => {
+    if (step !== "payment" || !order) return;
+    const expiry = new Date(order.expired_at).getTime();
+    const tick = () => setPaymentTimer(Math.max(0, Math.floor((expiry - Date.now()) / 1000)));
+    tick();
+    const iv = setInterval(tick, 1000);
+    return () => clearInterval(iv);
+  }, [step, order]);
+
+  // Auto-poll setelah masuk step payment
+  useEffect(() => {
+    if (step !== "payment" || !order) return;
+    let stopped = false;
+
+    const poll = async () => {
+      if (stopped) return;
+      setChecking(true);
+      try {
+        const res = await fetch(`${TICKETS_API}/check/${order.ref_id}`);
+        const data = await res.json();
+        if (data.ticket_status === "paid") {
+          setPollStatus("paid");
+          setStep("success");
+          onSuccess(show.id);
+          return;
+        }
+        if (data.ticket_status === "expired") {
+          setPollStatus("expired");
+          return;
+        }
+      } catch {}
+      setChecking(false);
+      if (!stopped) setTimeout(poll, 15000);
+    };
+
+    const timer = setTimeout(poll, 5000);
+    return () => { stopped = true; clearTimeout(timer); };
+  }, [step, order]);
+
+  const handleCreateOrder = async () => {
+    if (!selectedMethod) return;
+    setCreating(true);
+    setError("");
+    try {
+      const res = await fetch(`${TICKETS_API}/buy`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          user_id: loginData.user.user_id,
+          show_id: show.id,
+          show_title: show.title,
+          show_source: show.source,
+          show_image: show.image,
+          show_date: show.scheduledAt ? new Date(show.scheduledAt).toISOString() : null,
+          method: selectedMethod.channel_code,
+          customer_name: loginData.user.full_name || loginData.user.username,
+          customer_email: loginData.user.email,
+        }),
+      });
+      const data = await res.json();
+      if (!data.status) {
+        if (res.status === 409) {
+          setStep("already_paid");
+          return;
+        }
+        setError(data.message || "Gagal membuat order");
+        return;
+      }
+      setOrder(data.data);
+      setStep("payment");
+    } catch {
+      setError("Koneksi gagal. Coba lagi.");
+    } finally {
+      setCreating(false);
+    }
+  };
+
+  const handleManualCheck = async () => {
+    if (!order || checking) return;
+    setChecking(true);
+    try {
+      const res = await fetch(`${TICKETS_API}/check/${order.ref_id}`);
+      const data = await res.json();
+      if (data.ticket_status === "paid") {
+        setPollStatus("paid");
+        setStep("success");
+        onSuccess(show.id);
+      } else if (data.ticket_status === "expired") {
+        setPollStatus("expired");
+      }
+    } catch {}
+    setChecking(false);
+  };
+
+  const allMethods = [
+    ...(methods.virtual_account || []),
+    ...(methods.emoney || []),
+    ...(methods.retail || []),
+    ...(methods.pulsa || []),
+  ];
+
+  const categoryLabel: Record<string, string> = {
+    virtual_account: "Virtual Account",
+    emoney: "E-Money",
+    retail: "Retail",
+    pulsa: "Pulsa",
+    qris: "QRIS",
+  };
+
+  const categoryOf = (code: string): string => {
+    if (methods.virtual_account?.find((m) => m.channel_code === code)) return "virtual_account";
+    if (methods.emoney?.find((m) => m.channel_code === code)) return "emoney";
+    if (methods.retail?.find((m) => m.channel_code === code)) return "retail";
+    if (methods.pulsa?.find((m) => m.channel_code === code)) return "pulsa";
+    return "qris";
+  };
+
+  const fmtTimer = (s: number) => `${Math.floor(s / 60).toString().padStart(2, "0")}:${(s % 60).toString().padStart(2, "0")}`;
 
   return (
     <div
-      style={{
-        background: "var(--card-bg, #fff)",
-        border: "1px solid var(--card-border, #e5e7eb)",
-        borderRadius: 16,
-        overflow: "hidden",
-        display: "flex",
-        flexDirection: "column",
-        transition: "box-shadow 0.2s, transform 0.2s",
-        cursor: "default",
-      }}
-      className="show-schedule-card dark:bg-white/[0.03] dark:border-gray-800"
-      onMouseEnter={(e) => {
-        (e.currentTarget as HTMLDivElement).style.transform = "translateY(-2px)";
-        (e.currentTarget as HTMLDivElement).style.boxShadow =
-          "0 8px 24px rgba(0,0,0,0.10)";
-      }}
-      onMouseLeave={(e) => {
-        (e.currentTarget as HTMLDivElement).style.transform = "translateY(0)";
-        (e.currentTarget as HTMLDivElement).style.boxShadow = "none";
-      }}
+      className="fixed inset-0 z-50 flex items-end sm:items-center justify-center p-0 sm:p-4"
+      style={{ background: "rgba(0,0,0,0.6)", backdropFilter: "blur(4px)" }}
+      onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}
     >
-      {/* ── Poster ── */}
+      <div
+        className="w-full sm:max-w-md bg-white dark:bg-gray-900 rounded-t-2xl sm:rounded-2xl overflow-hidden"
+        style={{ maxHeight: "92vh", display: "flex", flexDirection: "column" }}
+      >
+        {/* ── Header ── */}
+        <div className="flex items-center justify-between px-5 py-4 border-b border-gray-100 dark:border-gray-800 flex-shrink-0">
+          <div className="flex items-center gap-3">
+            {step === "confirm" && (
+              <button onClick={() => setStep("method")} className="text-gray-400 hover:text-gray-600 mr-1">
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                  <polyline points="15 18 9 12 15 6" />
+                </svg>
+              </button>
+            )}
+            <div>
+              <h2 className="text-sm font-bold text-gray-800 dark:text-white">
+                {step === "method" && "Pilih Metode Pembayaran"}
+                {step === "confirm" && "Konfirmasi Pembelian"}
+                {step === "payment" && "Selesaikan Pembayaran"}
+                {step === "success" && "Pembelian Berhasil!"}
+                {step === "already_paid" && "Tiket Sudah Dimiliki"}
+              </h2>
+              <p className="text-xs text-gray-500 dark:text-gray-400 mt-0.5 line-clamp-1">{show.title}</p>
+            </div>
+          </div>
+          {step !== "payment" && (
+            <button onClick={onClose} className="text-gray-400 hover:text-gray-600 dark:hover:text-gray-300">
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <line x1="18" y1="6" x2="6" y2="18" /><line x1="6" y1="6" x2="18" y2="18" />
+              </svg>
+            </button>
+          )}
+        </div>
+
+        {/* ── Content ── */}
+        <div className="overflow-y-auto flex-1 p-5">
+
+          {/* ── STEP: METHOD ── */}
+          {step === "method" && (
+            <div>
+              {/* Show info */}
+              <div className="flex gap-3 p-3 rounded-xl bg-gray-50 dark:bg-white/[0.04] border border-gray-200 dark:border-gray-700 mb-5">
+                <img src={show.image} alt={show.title} className="w-16 h-10 object-cover rounded-lg flex-shrink-0" onError={(e) => { (e.target as HTMLImageElement).src = DEFAULT_IMG; }} />
+                <div className="flex-1 min-w-0">
+                  <p className="text-xs font-bold text-gray-800 dark:text-white line-clamp-2">{show.title}</p>
+                  <p className="text-xs text-brand-500 font-semibold mt-0.5">Rp 7.000</p>
+                </div>
+              </div>
+
+              {error && (
+                <div className="mb-4 p-3 rounded-xl bg-red-50 dark:bg-red-500/10 border border-red-200 dark:border-red-500/20 text-xs text-red-600 dark:text-red-400">
+                  {error}
+                </div>
+              )}
+
+              {loadingMethods ? (
+                <div className="flex items-center justify-center gap-2 py-8 text-gray-400">
+                  <div className="w-5 h-5 border-2 border-gray-200 border-t-brand-500 rounded-full animate-spin" />
+                  <span className="text-sm">Memuat metode...</span>
+                </div>
+              ) : (
+                <div className="space-y-4">
+                  {(Object.entries(methods) as [string, PaymentMethod[]][]).map(([cat, items]) => (
+                    items.length > 0 && (
+                      <div key={cat}>
+                        <p className="text-xs font-bold text-gray-400 dark:text-gray-500 uppercase tracking-wider mb-2">
+                          {categoryLabel[cat] || cat}
+                        </p>
+                        <div className="space-y-2">
+                          {items.map((m) => (
+                            <button
+                              key={m.channel_code}
+                              onClick={() => { setSelectedMethod(m); setStep("confirm"); }}
+                              className={`w-full flex items-center justify-between p-3 rounded-xl border transition-all text-left ${
+                                selectedMethod?.channel_code === m.channel_code
+                                  ? "border-brand-500 bg-brand-50 dark:bg-brand-500/10"
+                                  : "border-gray-200 dark:border-gray-700 hover:border-brand-300 dark:hover:border-brand-500/40 bg-white dark:bg-white/[0.02]"
+                              }`}
+                            >
+                              <div className="flex items-center gap-3">
+                                <div className="w-8 h-8 rounded-lg bg-gray-100 dark:bg-white/10 flex items-center justify-center flex-shrink-0">
+                                  <span className="text-xs font-black text-gray-600 dark:text-gray-300">
+                                    {m.channel_code.slice(0, 2)}
+                                  </span>
+                                </div>
+                                <div>
+                                  <p className="text-sm font-semibold text-gray-800 dark:text-white">{m.channel_name}</p>
+                                  <p className="text-xs text-gray-400">
+                                    Fee: {typeof m.fee === "number" ? `Rp ${m.fee.toLocaleString("id-ID")}` : m.fee || "-"}
+                                  </p>
+                                </div>
+                              </div>
+                              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#9ca3af" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                                <polyline points="9 18 15 12 9 6" />
+                              </svg>
+                            </button>
+                          ))}
+                        </div>
+                      </div>
+                    )
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* ── STEP: CONFIRM ── */}
+          {step === "confirm" && selectedMethod && (
+            <div className="space-y-4">
+              {/* Show info */}
+              <div className="flex gap-3 p-3 rounded-xl bg-gray-50 dark:bg-white/[0.04] border border-gray-200 dark:border-gray-700">
+                <img src={show.image} alt={show.title} className="w-16 h-10 object-cover rounded-lg flex-shrink-0" onError={(e) => { (e.target as HTMLImageElement).src = DEFAULT_IMG; }} />
+                <div className="flex-1 min-w-0">
+                  <p className="text-xs font-bold text-gray-800 dark:text-white line-clamp-2">{show.title}</p>
+                  {show.scheduledAt && (
+                    <p className="text-xs text-gray-500 dark:text-gray-400 mt-0.5">
+                      {new Date(show.scheduledAt).toLocaleDateString("id-ID", { weekday: "long", day: "numeric", month: "long" })}
+                    </p>
+                  )}
+                </div>
+              </div>
+
+              {/* Summary */}
+              <div className="rounded-xl border border-gray-200 dark:border-gray-700 overflow-hidden">
+                {[
+                  { label: "Harga Tiket", value: "Rp 7.000" },
+                  { label: "Fee Pembayaran", value: typeof selectedMethod.fee === "number" ? `Rp ${selectedMethod.fee.toLocaleString("id-ID")}` : selectedMethod.fee || "Lihat saat bayar" },
+                  { label: "Metode", value: selectedMethod.channel_name },
+                ].map((row, i) => (
+                  <div key={i} className={`flex items-center justify-between px-4 py-3 ${i < 2 ? "border-b border-gray-100 dark:border-gray-800" : ""}`}>
+                    <span className="text-sm text-gray-500 dark:text-gray-400">{row.label}</span>
+                    <span className="text-sm font-semibold text-gray-800 dark:text-white">{row.value}</span>
+                  </div>
+                ))}
+              </div>
+
+              {error && (
+                <div className="p-3 rounded-xl bg-red-50 dark:bg-red-500/10 border border-red-200 dark:border-red-500/20 text-xs text-red-600 dark:text-red-400">
+                  {error}
+                </div>
+              )}
+
+              <button
+                onClick={handleCreateOrder}
+                disabled={creating}
+                className="w-full flex items-center justify-center gap-2 py-3 rounded-xl bg-brand-500 hover:bg-brand-600 disabled:opacity-50 text-white text-sm font-bold transition-colors"
+              >
+                {creating ? (
+                  <><div className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" />Membuat Order...</>
+                ) : (
+                  <>Bayar Sekarang →</>
+                )}
+              </button>
+            </div>
+          )}
+
+          {/* ── STEP: PAYMENT ── */}
+          {step === "payment" && order && (
+            <div className="space-y-4">
+              {/* Timer */}
+              <div className={`flex items-center justify-between p-3 rounded-xl border ${
+                paymentTimer < 300
+                  ? "bg-red-50 dark:bg-red-500/10 border-red-200 dark:border-red-500/20"
+                  : "bg-brand-50 dark:bg-brand-500/10 border-brand-200 dark:border-brand-500/20"
+              }`}>
+                <div className="flex items-center gap-2">
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke={paymentTimer < 300 ? "#ef4444" : "#465FFF"} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                    <circle cx="12" cy="12" r="10" /><polyline points="12 6 12 12 16 14" />
+                  </svg>
+                  <span className={`text-xs font-medium ${paymentTimer < 300 ? "text-red-600 dark:text-red-400" : "text-brand-600 dark:text-brand-400"}`}>
+                    Selesaikan dalam
+                  </span>
+                </div>
+                <span className={`text-sm font-black tabular-nums ${paymentTimer < 300 ? "text-red-600 dark:text-red-400" : "text-brand-600 dark:text-brand-400"}`}>
+                  {fmtTimer(paymentTimer)}
+                </span>
+              </div>
+
+              {/* Payment detail by category */}
+              {order.nomor_va && (
+                <div className="p-4 rounded-xl border border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-white/[0.03]">
+                  <p className="text-xs text-gray-500 dark:text-gray-400 mb-1">Nomor Virtual Account</p>
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="text-lg font-black text-gray-800 dark:text-white tracking-wider">{order.nomor_va}</span>
+                    <button
+                      onClick={() => navigator.clipboard.writeText(order.nomor_va!)}
+                      className="text-xs font-semibold text-brand-500 hover:text-brand-600 bg-brand-50 dark:bg-brand-500/10 px-3 py-1.5 rounded-lg border border-brand-200 dark:border-brand-500/20"
+                    >
+                      Salin
+                    </button>
+                  </div>
+                  <p className="text-xs text-gray-400 mt-2">Bank: <strong>{order.method_name}</strong></p>
+                </div>
+              )}
+
+              {order.qr_image && (
+                <div className="flex flex-col items-center p-4 rounded-xl border border-gray-200 dark:border-gray-700 bg-white dark:bg-white/[0.03]">
+                  <p className="text-xs font-semibold text-gray-500 dark:text-gray-400 mb-3">Scan QR Code</p>
+                  <img src={order.qr_image} alt="QR Code" className="w-48 h-48 rounded-xl" />
+                </div>
+              )}
+
+              {(order.checkout_url || order.payment_url) && !order.nomor_va && !order.qr_image && (
+                
+                  href={order.checkout_url || order.payment_url!}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="flex items-center justify-center gap-2 w-full py-3 rounded-xl bg-brand-500 hover:bg-brand-600 text-white text-sm font-bold transition-colors"
+                >
+                  Buka Halaman Pembayaran →
+                </a>
+              )}
+
+              {/* Amount */}
+              <div className="flex items-center justify-between p-3 rounded-xl bg-gray-50 dark:bg-white/[0.04] border border-gray-200 dark:border-gray-700">
+                <span className="text-xs text-gray-500 dark:text-gray-400">Total Bayar</span>
+                <span className="text-base font-black text-gray-800 dark:text-white">
+                  Rp {order.amount_to_pay.toLocaleString("id-ID")}
+                </span>
+              </div>
+
+              {pollStatus === "expired" && (
+                <div className="p-3 rounded-xl bg-red-50 dark:bg-red-500/10 border border-red-200 dark:border-red-500/20 text-xs text-red-600 dark:text-red-400 text-center">
+                  ⏰ Order sudah expired. Tutup dan buat order baru.
+                </div>
+              )}
+
+              {/* Manual check */}
+              <button
+                onClick={handleManualCheck}
+                disabled={checking || pollStatus === "expired"}
+                className="w-full flex items-center justify-center gap-2 py-2.5 rounded-xl border border-gray-200 dark:border-gray-700 text-sm font-semibold text-gray-600 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-white/[0.04] disabled:opacity-40 transition-colors"
+              >
+                {checking ? (
+                  <><div className="w-3.5 h-3.5 border-2 border-gray-300 border-t-gray-600 rounded-full animate-spin" />Mengecek...</>
+                ) : (
+                  <>
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                      <polyline points="23 4 23 10 17 10" /><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10" />
+                    </svg>
+                    Cek Status Pembayaran
+                  </>
+                )}
+              </button>
+            </div>
+          )}
+
+          {/* ── STEP: SUCCESS ── */}
+          {step === "success" && (
+            <div className="flex flex-col items-center text-center py-6 gap-4">
+              <div className="w-16 h-16 rounded-full bg-green-100 dark:bg-green-500/10 border border-green-200 dark:border-green-500/20 flex items-center justify-center text-green-500">
+                <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+                  <path d="M22 11.08V12a10 10 0 1 1-5.93-9.14" /><polyline points="22 4 12 14.01 9 11.01" />
+                </svg>
+              </div>
+              <div>
+                <h3 className="text-lg font-bold text-gray-800 dark:text-white mb-1">Tiket Berhasil Dibeli!</h3>
+                <p className="text-sm text-gray-500 dark:text-gray-400 leading-relaxed">
+                  Pembayaran untuk <strong className="text-gray-700 dark:text-gray-200">{show.title}</strong> telah dikonfirmasi.
+                </p>
+              </div>
+              <div className="w-full p-3 rounded-xl bg-green-50 dark:bg-green-500/10 border border-green-200 dark:border-green-500/20">
+                <p className="text-xs text-green-700 dark:text-green-400">
+                  ✅ Tiket tersimpan di akun kamu. Status show akan berubah menjadi <strong>"Dibeli"</strong>.
+                </p>
+              </div>
+              <button onClick={onClose} className="w-full py-3 rounded-xl bg-brand-500 hover:bg-brand-600 text-white text-sm font-bold transition-colors">
+                Selesai
+              </button>
+            </div>
+          )}
+
+          {/* ── STEP: ALREADY PAID ── */}
+          {step === "already_paid" && (
+            <div className="flex flex-col items-center text-center py-6 gap-4">
+              <div className="w-16 h-16 rounded-full bg-blue-100 dark:bg-blue-500/10 flex items-center justify-center text-blue-500">
+                <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+                  <path d="M20.59 13.41l-7.17 7.17a2 2 0 0 1-2.83 0L2 12V2h10l8.59 8.59a2 2 0 0 1 0 2.82z" /><line x1="7" y1="7" x2="7.01" y2="7" />
+                </svg>
+              </div>
+              <div>
+                <h3 className="text-lg font-bold text-gray-800 dark:text-white mb-1">Sudah Punya Tiket!</h3>
+                <p className="text-sm text-gray-500 dark:text-gray-400">Kamu sudah membeli tiket untuk show ini sebelumnya.</p>
+              </div>
+              <button onClick={onClose} className="w-full py-3 rounded-xl bg-brand-500 hover:bg-brand-600 text-white text-sm font-bold transition-colors">
+                Tutup
+              </button>
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ── Show Card ─────────────────────────────────────────────────────────────────
+interface ShowCardProps {
+  show: NormalizedShow;
+  ticketStatus: UserTicketStatus | null;
+  isLoggedIn: boolean;
+  onBuy: (show: NormalizedShow) => void;
+}
+
+function ShowCard({ show, ticketStatus, isLoggedIn, onBuy }: ShowCardProps) {
+  const isLive = show.status === "live";
+  const showCountdown = !!show.scheduledAt && !isLive && show.scheduledAt > Date.now();
+  const cd = useCountdown(show.scheduledAt, showCountdown);
+  const isPaid = ticketStatus?.has_ticket;
+  const isPending = ticketStatus?.has_pending && !isPaid;
+
+  const formatDate = (ts: number) =>
+    new Date(ts).toLocaleDateString("id-ID", { weekday: "long", day: "numeric", month: "long", year: "numeric" });
+  const formatTime = (ts: number) =>
+    new Date(ts).toLocaleTimeString("id-ID", { hour: "2-digit", minute: "2-digit" }) + " WIB";
+
+  return (
+    <div
+      className="show-schedule-card dark:bg-white/[0.03] dark:border-gray-800"
+      style={{ background: "#fff", border: "1px solid #e5e7eb", borderRadius: 16, overflow: "hidden", display: "flex", flexDirection: "column", transition: "box-shadow 0.2s, transform 0.2s" }}
+    >
+      {/* Poster */}
       <div style={{ position: "relative", width: "100%", aspectRatio: "16/9", overflow: "hidden", background: "#f3f4f6" }}>
-        <img
-          src={show.image}
-          alt={show.title}
-          style={{ width: "100%", height: "100%", objectFit: "cover", display: "block" }}
-          onError={(e) => {
-            (e.target as HTMLImageElement).src = DEFAULT_IMG;
-          }}
-        />
-
-        {/* Gradient overlay */}
-        <div style={{
-          position: "absolute", inset: 0,
-          background: "linear-gradient(to top, rgba(0,0,0,0.55) 0%, transparent 60%)",
-        }} />
-
-        {/* Status badge */}
-        <div style={{
-          position: "absolute", top: 10, left: 10,
-          display: "inline-flex", alignItems: "center", gap: 5,
-          padding: "4px 10px",
-          borderRadius: 999,
-          fontSize: 11, fontWeight: 700, letterSpacing: "0.05em",
-          background: isLive ? "#DC1F2E" : "#465FFF",
-          color: "#fff",
-        }}>
-          <span style={{
-            width: 6, height: 6, borderRadius: "50%", background: "#fff",
-            ...(isLive ? { animation: "pulse 1.5s infinite" } : {}),
-          }} />
+        <img src={show.image} alt={show.title} style={{ width: "100%", height: "100%", objectFit: "cover" }}
+          onError={(e) => { (e.target as HTMLImageElement).src = DEFAULT_IMG; }} />
+        <div style={{ position: "absolute", inset: 0, background: "linear-gradient(to top, rgba(0,0,0,0.55) 0%, transparent 60%)" }} />
+        <div style={{ position: "absolute", top: 10, left: 10, display: "inline-flex", alignItems: "center", gap: 5, padding: "4px 10px", borderRadius: 999, fontSize: 11, fontWeight: 700, background: isLive ? "#DC1F2E" : "#465FFF", color: "#fff" }}>
+          <span style={{ width: 6, height: 6, borderRadius: "50%", background: "#fff", ...(isLive ? { animation: "pulse 1.5s infinite" } : {}) }} />
           {isLive ? "LIVE" : "SCHEDULED"}
         </div>
-
-        {/* Source badge */}
-        <div style={{
-          position: "absolute", top: 10, right: 10,
-          padding: "3px 8px",
-          borderRadius: 6,
-          fontSize: 10, fontWeight: 700,
-          background: "rgba(0,0,0,0.55)",
-          backdropFilter: "blur(4px)",
-          color: "rgba(255,255,255,0.9)",
-        }}>
+        <div style={{ position: "absolute", top: 10, right: 10, padding: "3px 8px", borderRadius: 6, fontSize: 10, fontWeight: 700, background: "rgba(0,0,0,0.55)", backdropFilter: "blur(4px)", color: "rgba(255,255,255,0.9)" }}>
           {show.source === "idn" ? "IDN Live+" : "Theater"}
         </div>
-
-        {/* Show ID */}
-        {show.showId && (
-          <div style={{
-            position: "absolute", bottom: 8, right: 8,
-            padding: "2px 7px",
-            borderRadius: 6,
-            fontSize: 10, fontFamily: "monospace", fontWeight: 700,
-            background: "rgba(0,0,0,0.55)",
-            backdropFilter: "blur(4px)",
-            color: "rgba(255,255,255,0.9)",
-          }}>
-            {show.showId}
+        {/* Tiket status badge di poster */}
+        {isPaid && (
+          <div style={{ position: "absolute", bottom: 8, left: 8, display: "inline-flex", alignItems: "center", gap: 4, padding: "3px 9px", borderRadius: 999, fontSize: 10, fontWeight: 700, background: "rgba(34,197,94,0.9)", color: "#fff" }}>
+            ✓ Dibeli
+          </div>
+        )}
+        {isPending && (
+          <div style={{ position: "absolute", bottom: 8, left: 8, display: "inline-flex", alignItems: "center", gap: 4, padding: "3px 9px", borderRadius: 999, fontSize: 10, fontWeight: 700, background: "rgba(251,191,36,0.9)", color: "#000" }}>
+            ⏳ Menunggu Bayar
           </div>
         )}
       </div>
 
-      {/* ── Body ── */}
+      {/* Body */}
       <div style={{ padding: "14px 16px 16px", display: "flex", flexDirection: "column", gap: 10, flex: 1 }}>
-
-        {/* Title */}
-        <h3 style={{
-          margin: 0, fontSize: 14, fontWeight: 700, lineHeight: 1.4,
-          color: "var(--title-color, #111827)",
-          display: "-webkit-box",
-          WebkitLineClamp: 2,
-          WebkitBoxOrient: "vertical",
-          overflow: "hidden",
-        }}
-          className="dark:text-white"
-        >
+        <h3 className="dark:text-white" style={{ margin: 0, fontSize: 14, fontWeight: 700, lineHeight: 1.4, color: "#111827", display: "-webkit-box", WebkitLineClamp: 2, WebkitBoxOrient: "vertical", overflow: "hidden" }}>
           {show.title}
         </h3>
 
-        {/* Badges row */}
+        {/* Badges */}
         <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
-          {/* Type badge (theater) */}
           {show.source === "theater" && show.type && (
-            <span style={{
-              fontSize: 10, fontWeight: 700, letterSpacing: "0.04em",
-              padding: "3px 9px", borderRadius: 999,
-              background: show.type === "EVENT"
-                ? "rgba(255,215,0,0.12)"
-                : "rgba(220,31,46,0.12)",
-              color: show.type === "EVENT" ? "#b45309" : "#DC1F2E",
-              border: `1px solid ${show.type === "EVENT" ? "rgba(255,215,0,0.3)" : "rgba(220,31,46,0.25)"}`,
-            }}
+            <span style={{ fontSize: 10, fontWeight: 700, padding: "3px 9px", borderRadius: 999, background: show.type === "EVENT" ? "rgba(255,215,0,0.12)" : "rgba(220,31,46,0.12)", color: show.type === "EVENT" ? "#b45309" : "#DC1F2E", border: `1px solid ${show.type === "EVENT" ? "rgba(255,215,0,0.3)" : "rgba(220,31,46,0.25)"}` }}
               className={show.type === "EVENT" ? "dark:text-yellow-400" : "dark:text-red-400"}
             >
-              {show.type}
-              {show.referenceCode ? ` · ${show.referenceCode}` : ""}
+              {show.type}{show.referenceCode ? ` · ${show.referenceCode}` : ""}
             </span>
           )}
-
-          {/* Price badge (idn) */}
-          {show.source === "idn" && show.price !== undefined && (
-            <span style={{
-              display: "inline-flex", alignItems: "center", gap: 4,
-              fontSize: 10, fontWeight: 700,
-              padding: "3px 9px", borderRadius: 999,
-              background: "rgba(255,215,0,0.12)",
-              color: "#92400e",
-              border: "1px solid rgba(255,215,0,0.3)",
-            }}
-              className="dark:text-yellow-400"
-            >
-              🎟️ Rp 7.000
-            </span>
-          )}
+          <span style={{ fontSize: 10, fontWeight: 700, padding: "3px 9px", borderRadius: 999, background: "rgba(255,215,0,0.12)", color: "#92400e", border: "1px solid rgba(255,215,0,0.3)" }}
+            className="dark:text-yellow-400">
+            🎟️ Rp 7.000
+          </span>
         </div>
-
-        {/* Birthday members */}
-        {show.isBirthday && show.birthdayMembers?.length > 0 && (
-          <div style={{ display: "flex", gap: 4, flexWrap: "wrap" }}>
-            {show.birthdayMembers.map((m: any) => (
-              <div key={m.name} style={{
-                display: "flex", alignItems: "center", gap: 4,
-                background: "rgba(236,72,153,0.08)",
-                border: "1px solid rgba(236,72,153,0.2)",
-                borderRadius: 999, padding: "2px 8px 2px 3px",
-                fontSize: 11,
-              }}>
-                <img
-                  src={m.img_alt || m.img}
-                  alt={m.name}
-                  style={{ width: 18, height: 18, borderRadius: "50%", objectFit: "cover" }}
-                  onError={(e) => { (e.target as HTMLImageElement).style.display = "none"; }}
-                />
-                <span style={{ color: "#be185d" }} className="dark:text-pink-400">
-                  🎂 {m.name}
-                </span>
-              </div>
-            ))}
-          </div>
-        )}
 
         {/* Countdown */}
         {showCountdown && (
-          <div style={{
-            display: "flex", alignItems: "center", gap: 4,
-            padding: "8px 10px",
-            borderRadius: 10,
-            background: "rgba(70,95,255,0.06)",
-            border: "1px solid rgba(70,95,255,0.12)",
-          }}>
-            {[
-              { val: cd.days, label: "Hari" },
-              { val: cd.hours, label: "Jam" },
-              { val: cd.mins, label: "Mnt" },
-              { val: cd.secs, label: "Dtk" },
-            ].map((u, i) => (
+          <div style={{ display: "flex", alignItems: "center", gap: 4, padding: "8px 10px", borderRadius: 10, background: "rgba(70,95,255,0.06)", border: "1px solid rgba(70,95,255,0.12)" }}>
+            {[{ val: cd.days, label: "Hari" }, { val: cd.hours, label: "Jam" }, { val: cd.mins, label: "Mnt" }, { val: cd.secs, label: "Dtk" }].map((u, i) => (
               <div key={u.label} style={{ display: "flex", alignItems: "center", flex: 1 }}>
-                {i > 0 && (
-                  <span style={{
-                    fontSize: 16, fontWeight: 700,
-                    color: "rgba(70,95,255,0.4)",
-                    marginRight: 4,
-                  }}>:</span>
-                )}
+                {i > 0 && <span style={{ fontSize: 16, fontWeight: 700, color: "rgba(70,95,255,0.4)", marginRight: 4 }}>:</span>}
                 <div style={{ textAlign: "center", flex: 1 }}>
-                  <div style={{
-                    fontSize: 18, fontWeight: 800, lineHeight: 1,
-                    color: "#465FFF",
-                    fontVariantNumeric: "tabular-nums",
-                  }}>
-                    {String(u.val).padStart(2, "0")}
-                  </div>
-                  <div style={{
-                    fontSize: 9, fontWeight: 600, marginTop: 2,
-                    color: "rgba(70,95,255,0.6)",
-                    textTransform: "uppercase", letterSpacing: "0.05em",
-                  }}>
-                    {u.label}
-                  </div>
+                  <div style={{ fontSize: 18, fontWeight: 800, lineHeight: 1, color: "#465FFF", fontVariantNumeric: "tabular-nums" }}>{String(u.val).padStart(2, "0")}</div>
+                  <div style={{ fontSize: 9, fontWeight: 600, marginTop: 2, color: "rgba(70,95,255,0.6)", textTransform: "uppercase" }}>{u.label}</div>
                 </div>
               </div>
             ))}
           </div>
         )}
 
-        {/* Meta info */}
+        {/* Meta */}
         <div style={{ display: "flex", flexDirection: "column", gap: 5, marginTop: "auto" }}>
           {show.scheduledAt && (
-            <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
-              <svg width="13" height="13" viewBox="0 0 24 24" fill="none"
-                stroke="#9ca3af" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                <rect x="3" y="4" width="18" height="18" rx="2" ry="2" />
-                <line x1="16" y1="2" x2="16" y2="6" />
-                <line x1="8" y1="2" x2="8" y2="6" />
-                <line x1="3" y1="10" x2="21" y2="10" />
-              </svg>
-              <span style={{ fontSize: 12, color: "#6b7280" }} className="dark:text-gray-400">
-                {formatDate(show.scheduledAt)}
-              </span>
-            </div>
-          )}
-
-          {show.scheduledAt && (
-            <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
-              <svg width="13" height="13" viewBox="0 0 24 24" fill="none"
-                stroke="#9ca3af" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                <circle cx="12" cy="12" r="10" />
-                <polyline points="12 6 12 12 16 14" />
-              </svg>
-              <span style={{ fontSize: 12, color: "#6b7280" }} className="dark:text-gray-400">
-                {formatTime(show.scheduledAt)}
-              </span>
-            </div>
-          )}
-
-          {show.description && (
-            <div style={{
-              marginTop: 4,
-              padding: "8px 10px",
-              borderRadius: 8,
-              background: "rgba(0,0,0,0.03)",
-              border: "1px solid rgba(0,0,0,0.06)",
-            }}
-              className="dark:bg-white/[0.03] dark:border-white/[0.06]"
-            >
-              <p style={{
-                margin: 0, fontSize: 11, lineHeight: 1.6,
-                color: "#6b7280", whiteSpace: "pre-line",
-              }}
-                className="dark:text-gray-400"
-              >
-                {show.description}
-              </p>
-            </div>
-          )}
-        </div>
-
-        {/* ── Buy Button ── */}
-        <a
-          href={TELEGRAM_BOT_URL}
-          target="_blank"
-          rel="noopener noreferrer"
-          style={{
-            display: "flex",
-            alignItems: "center",
-            justifyContent: "center",
-            gap: 7,
-            marginTop: 6,
-            padding: "9px 16px",
-            borderRadius: 10,
-            fontSize: 13,
-            fontWeight: 700,
-            textDecoration: "none",
-            cursor: "pointer",
-            transition: "all 0.15s",
-            background: "linear-gradient(135deg, #229ED9 0%, #1a8bbf 100%)",
-            color: "#fff",
-            border: "none",
-            boxShadow: "0 2px 8px rgba(34,158,217,0.30)",
-            letterSpacing: "0.01em",
-          }}
-          className="buy-btn"
-          onMouseEnter={(e) => {
-            (e.currentTarget as HTMLAnchorElement).style.transform = "translateY(-1px)";
-            (e.currentTarget as HTMLAnchorElement).style.boxShadow = "0 4px 14px rgba(34,158,217,0.42)";
-          }}
-          onMouseLeave={(e) => {
-            (e.currentTarget as HTMLAnchorElement).style.transform = "translateY(0)";
-            (e.currentTarget as HTMLAnchorElement).style.boxShadow = "0 2px 8px rgba(34,158,217,0.30)";
-          }}
-        >
-          <TelegramIcon size={15} />
-          Beli Tiket via Telegram
-        </a>
-      </div>
-    </div>
-  );
-}
-
-// ── Filter Tabs ──────────────────────────────────────────────────────────────
-const filterTabs: { key: FilterType; label: string; icon: string }[] = [
-  { key: "all", label: "Semua", icon: "" },
-  { key: "live", label: "Live", icon: "" },
-  { key: "scheduled", label: "Scheduled", icon: "" },
-];
-
-// ── Purchase Info Section ────────────────────────────────────────────────────
-function PurchaseInfoSection() {
-  return (
-    <div style={{
-      margin: "0 24px 24px",
-      borderRadius: 14,
-      overflow: "hidden",
-      border: "1px solid rgba(34,158,217,0.2)",
-    }}>
-      {/* Header strip */}
-      <div style={{
-        padding: "12px 16px",
-        background: "linear-gradient(135deg, #229ED9 0%, #1a8bbf 100%)",
-        display: "flex",
-        alignItems: "center",
-        gap: 8,
-      }}>
-        <div style={{
-          width: 28, height: 28,
-          borderRadius: 8,
-          background: "rgba(255,255,255,0.2)",
-          display: "flex", alignItems: "center", justifyContent: "center",
-          flexShrink: 0,
-        }}>
-          <svg width="15" height="15" viewBox="0 0 24 24" fill="none"
-            stroke="#fff" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
-            <circle cx="12" cy="12" r="10" />
-            <line x1="12" y1="8" x2="12" y2="12" />
-            <line x1="12" y1="16" x2="12.01" y2="16" />
-          </svg>
-        </div>
-        <span style={{ fontSize: 13, fontWeight: 700, color: "#fff", letterSpacing: "0.01em" }}>
-          Cara Pembelian Tiket
-        </span>
-      </div>
-
-      {/* Body */}
-      <div style={{
-        padding: "16px",
-        background: "rgba(34,158,217,0.04)",
-        display: "flex",
-        flexDirection: "column",
-        gap: 12,
-      }}
-        className="dark:bg-[rgba(34,158,217,0.06)]"
-      >
-        <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
-
-          {/* Option 1 — Telegram */}
-          <div style={{
-            display: "flex", alignItems: "flex-start", gap: 12,
-            padding: "12px 14px",
-            borderRadius: 10,
-            background: "#fff",
-            border: "1px solid rgba(34,158,217,0.15)",
-            boxShadow: "0 1px 4px rgba(0,0,0,0.05)",
-          }}
-            className="dark:bg-white/[0.04] dark:border-[rgba(34,158,217,0.2)]"
-          >
-            <div style={{
-              width: 36, height: 36, flexShrink: 0,
-              borderRadius: 10,
-              background: "linear-gradient(135deg, #229ED9 0%, #1a8bbf 100%)",
-              display: "flex", alignItems: "center", justifyContent: "center",
-            }}>
-              <TelegramIcon size={18} />
-            </div>
-            <div style={{ flex: 1 }}>
-              <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 4 }}>
-                <span style={{
-                  fontSize: 13, fontWeight: 700,
-                  color: "#111827",
-                }}
-                  className="dark:text-white"
-                >
-                  Bot Telegram
-                </span>
-                <span style={{
-                  fontSize: 10, fontWeight: 700,
-                  padding: "2px 7px", borderRadius: 999,
-                  background: "rgba(34,158,217,0.1)",
-                  color: "#0e7dad",
-                  border: "1px solid rgba(34,158,217,0.25)",
-                }}
-                  className="dark:text-blue-300"
-                >
-                  Otomatis
-                </span>
-              </div>
-              <p style={{ margin: 0, fontSize: 12, color: "#6b7280", lineHeight: 1.5 }}
-                className="dark:text-gray-400"
-              >
-                Kirim perintah{" "}
-                <code style={{
-                  padding: "1px 6px", borderRadius: 5,
-                  background: "rgba(34,158,217,0.1)",
-                  color: "#0e7dad",
-                  fontSize: 11, fontWeight: 700,
-                  fontFamily: "monospace",
-                }}>/buy</code>
-                {" "}di bot Telegram kami untuk pembelian tiket secara otomatis.
-              </p>
-              <a
-                href={TELEGRAM_BOT_URL}
-                target="_blank"
-                rel="noopener noreferrer"
-                style={{
-                  display: "inline-flex", alignItems: "center", gap: 5,
-                  marginTop: 8,
-                  padding: "5px 11px",
-                  borderRadius: 7,
-                  fontSize: 11, fontWeight: 700,
-                  textDecoration: "none",
-                  background: "linear-gradient(135deg, #229ED9 0%, #1a8bbf 100%)",
-                  color: "#fff",
-                  boxShadow: "0 2px 6px rgba(34,158,217,0.3)",
-                }}
-              >
-                <TelegramIcon size={12} />
-                @gistream_bot
-              </a>
-            </div>
-          </div>
-
-          {/* Option 2 — App */}
-          <div style={{
-            display: "flex", alignItems: "flex-start", gap: 12,
-            padding: "12px 14px",
-            borderRadius: 10,
-            background: "#fff",
-            border: "1px solid rgba(70,95,255,0.15)",
-            boxShadow: "0 1px 4px rgba(0,0,0,0.05)",
-          }}
-            className="dark:bg-white/[0.04] dark:border-[rgba(70,95,255,0.2)]"
-          >
-            <div style={{
-              width: 36, height: 36, flexShrink: 0,
-              borderRadius: 10,
-              background: "linear-gradient(135deg, #465FFF 0%, #3a4fd4 100%)",
-              display: "flex", alignItems: "center", justifyContent: "center",
-            }}>
-              <svg width="18" height="18" viewBox="0 0 24 24" fill="none"
-                stroke="#fff" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                <rect x="5" y="2" width="14" height="20" rx="2" ry="2" />
-                <line x1="12" y1="18" x2="12.01" y2="18" />
-              </svg>
-            </div>
-            <div style={{ flex: 1 }}>
-              <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 4 }}>
-                <span style={{
-                  fontSize: 13, fontWeight: 700,
-                  color: "#111827",
-                }}
-                  className="dark:text-white"
-                >
-                  Aplikasi JKT48Connect
-                </span>
-                <span style={{
-                  fontSize: 10, fontWeight: 700,
-                  padding: "2px 7px", borderRadius: 999,
-                  background: "rgba(70,95,255,0.1)",
-                  color: "#465FFF",
-                  border: "1px solid rgba(70,95,255,0.2)",
-                }}
-                  className="dark:text-indigo-400"
-                >
-                  All-in-One
-                </span>
-              </div>
-              <p style={{ margin: 0, fontSize: 12, color: "#6b7280", lineHeight: 1.5 }}
-                className="dark:text-gray-400"
-              >
-                Punya aplikasi JKT48Connect? Beli tiket langsung dari aplikasi dan tonton show{" "}
-                <strong style={{ color: "#465FFF" }} className="dark:text-indigo-400">
-                  tanpa perlu berpindah platform
-                </strong>
-                . Pengalaman menonton lebih nyaman!
-              </p>
-              <div style={{
-                display: "inline-flex", alignItems: "center", gap: 5,
-                marginTop: 8,
-                padding: "5px 11px",
-                borderRadius: 7,
-                fontSize: 11, fontWeight: 700,
-                background: "rgba(70,95,255,0.08)",
-                color: "#465FFF",
-                border: "1px solid rgba(70,95,255,0.2)",
-              }}
-                className="dark:text-indigo-400"
-              >
-                <svg width="12" height="12" viewBox="0 0 24 24" fill="none"
-                  stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
-                  <polyline points="20 6 9 17 4 12" />
+            <>
+              <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="#9ca3af" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                  <rect x="3" y="4" width="18" height="18" rx="2" ry="2" /><line x1="16" y1="2" x2="16" y2="6" /><line x1="8" y1="2" x2="8" y2="6" /><line x1="3" y1="10" x2="21" y2="10" />
                 </svg>
-                Beli & tonton langsung di aplikasi
+                <span className="dark:text-gray-400" style={{ fontSize: 12, color: "#6b7280" }}>{formatDate(show.scheduledAt)}</span>
               </div>
-            </div>
-          </div>
+              <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="#9ca3af" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                  <circle cx="12" cy="12" r="10" /><polyline points="12 6 12 12 16 14" />
+                </svg>
+                <span className="dark:text-gray-400" style={{ fontSize: 12, color: "#6b7280" }}>{formatTime(show.scheduledAt)}</span>
+              </div>
+            </>
+          )}
         </div>
+
+        {/* ── Buy / Status Button ── */}
+        {isPaid ? (
+          <div style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: 7, marginTop: 6, padding: "9px 16px", borderRadius: 10, background: "rgba(34,197,94,0.1)", border: "1px solid rgba(34,197,94,0.2)", color: "#16a34a", fontSize: 13, fontWeight: 700 }}
+            className="dark:text-green-400">
+            ✓ Tiket Sudah Dibeli
+          </div>
+        ) : isPending ? (
+          <div style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: 7, marginTop: 6, padding: "9px 16px", borderRadius: 10, background: "rgba(251,191,36,0.1)", border: "1px solid rgba(251,191,36,0.2)", color: "#92400e", fontSize: 13, fontWeight: 700 }}
+            className="dark:text-yellow-400">
+            ⏳ Pembayaran Pending
+          </div>
+        ) : !isLoggedIn ? (
+          <a href="/signin" style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: 7, marginTop: 6, padding: "9px 16px", borderRadius: 10, fontSize: 13, fontWeight: 700, textDecoration: "none", background: "#f3f4f6", color: "#374151", border: "1px solid #e5e7eb" }}
+            className="dark:bg-white/10 dark:text-gray-300 dark:border-gray-700">
+            Login untuk Beli Tiket
+          </a>
+        ) : (
+          <button
+            onClick={() => onBuy(show)}
+            style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: 7, marginTop: 6, padding: "9px 16px", borderRadius: 10, fontSize: 13, fontWeight: 700, cursor: "pointer", transition: "all 0.15s", background: "linear-gradient(135deg, #465FFF 0%, #3a4fd4 100%)", color: "#fff", border: "none", boxShadow: "0 2px 8px rgba(70,95,255,0.30)" }}
+          >
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+              <path d="M20.59 13.41l-7.17 7.17a2 2 0 0 1-2.83 0L2 12V2h10l8.59 8.59a2 2 0 0 1 0 2.82z" /><line x1="7" y1="7" x2="7.01" y2="7" />
+            </svg>
+            Beli Tiket — Rp 7.000
+          </button>
+        )}
       </div>
     </div>
   );
 }
 
-// ── Main Page ────────────────────────────────────────────────────────────────
+// ── Main Page ─────────────────────────────────────────────────────────────────
 const ShowSchedulePage: React.FC = () => {
   const [shows, setShows] = useState<NormalizedShow[]>([]);
   const [loading, setLoading] = useState(true);
   const [filter, setFilter] = useState<FilterType>("all");
   const [dataSource, setDataSource] = useState<"idn" | "theater" | null>(null);
+  const [ticketStatuses, setTicketStatuses] = useState<Record<string, UserTicketStatus>>({});
+  const [buyingShow, setBuyingShow] = useState<NormalizedShow | null>(null);
+  const loginData = getLoginData();
+  const isLoggedIn = !!loginData?.isLoggedIn;
 
+  // Fetch shows
   useEffect(() => {
     const fetchAll = async () => {
       setLoading(true);
-
-      // ── Prioritas 1: IDN Plus ──────────────────────────────────────────────
       try {
         const res = await fetch(IDN_PLUS_API);
         const json = await res.json();
-
         if (json.status === 200 && Array.isArray(json.data) && json.data.length > 0) {
           const idnShows = json.data
-            .filter((s: any) => {
-              const name = (s.creator?.name || "").toLowerCase();
-              return name.includes("jkt48") || name.includes("jkt 48");
-            })
+            .filter((s: any) => (s.creator?.name || "").toLowerCase().includes("jkt48"))
             .map((s: any) => normalizeShow(s, "idn"))
-            .sort((a: NormalizedShow, b: NormalizedShow) => {
-              if (!a.scheduledAt) return 1;
-              if (!b.scheduledAt) return -1;
-              return a.scheduledAt - b.scheduledAt;
-            });
-
+            .sort((a: NormalizedShow, b: NormalizedShow) => (a.scheduledAt || 0) - (b.scheduledAt || 0));
           if (idnShows.length > 0) {
-            setShows(idnShows);
-            setDataSource("idn");
-            setLoading(false);
-            return;
+            setShows(idnShows); setDataSource("idn"); setLoading(false); return;
           }
         }
-      } catch (e) {
-        console.error("Error fetching IDN Plus:", e);
-      }
-
-      // ── Fallback: Theater ──────────────────────────────────────────────────
+      } catch {}
       try {
         const res = await fetch(THEATER_API);
         const json = await res.json();
-
         if (json.success && Array.isArray(json.data)) {
           const theaterShows = json.data
-            .filter((s: any) =>
-              ALLOWED_THEATER_TYPES.includes((s.type || "").toUpperCase())
-            )
+            .filter((s: any) => ALLOWED_THEATER_TYPES.includes((s.type || "").toUpperCase()))
             .map((s: any) => normalizeShow(s, "theater"))
             .filter((s: NormalizedShow) => s.status !== "past")
-            .sort((a: NormalizedShow, b: NormalizedShow) => {
-              if (!a.scheduledAt) return 1;
-              if (!b.scheduledAt) return -1;
-              return a.scheduledAt - b.scheduledAt;
-            });
-
-          setShows(theaterShows);
-          setDataSource("theater");
+            .sort((a: NormalizedShow, b: NormalizedShow) => (a.scheduledAt || 0) - (b.scheduledAt || 0));
+          setShows(theaterShows); setDataSource("theater");
         }
-      } catch (e) {
-        console.error("Error fetching Theater:", e);
-      }
-
+      } catch {}
       setLoading(false);
     };
-
     fetchAll();
   }, []);
 
-  const filtered =
-    filter === "all"
-      ? shows
-      : shows.filter((s) => s.status === filter);
+  // Fetch ticket statuses setelah shows loaded & user login
+  useEffect(() => {
+    if (!isLoggedIn || shows.length === 0) return;
+    const userId = loginData.user.user_id;
 
+    const fetchStatuses = async () => {
+      const entries = await Promise.all(
+        shows.map(async (show) => {
+          try {
+            const res = await fetch(`${TICKETS_API}/user/${userId}/show/${encodeURIComponent(show.id)}`);
+            const data = await res.json();
+            return [show.id, data] as [string, UserTicketStatus];
+          } catch {
+            return [show.id, { has_ticket: false, has_pending: false, ticket: null, pending_ticket: null }] as [string, UserTicketStatus];
+          }
+        })
+      );
+      setTicketStatuses(Object.fromEntries(entries));
+    };
+
+    fetchStatuses();
+  }, [shows, isLoggedIn]);
+
+  const handleBuySuccess = useCallback((showId: string) => {
+    setTicketStatuses((prev) => ({
+      ...prev,
+      [showId]: { has_ticket: true, has_pending: false, ticket: { ref_id: "", paid_at: new Date().toISOString() }, pending_ticket: null },
+    }));
+  }, []);
+
+  const filtered = filter === "all" ? shows : shows.filter((s) => s.status === filter);
   const liveCount = shows.filter((s) => s.status === "live").length;
   const scheduledCount = shows.filter((s) => s.status === "scheduled").length;
 
+  const filterTabs = [
+    { key: "all" as FilterType, label: "Semua" },
+    { key: "live" as FilterType, label: "Live" },
+    { key: "scheduled" as FilterType, label: "Scheduled" },
+  ];
+
   return (
     <>
-      <PageMeta
-        title="Jadwal Show JKT48 | GiStream"
-        description="Jadwal show JKT48 dari IDN Live Plus dan Theater — GiStream"
-      />
-
+      <PageMeta title="Jadwal Show JKT48 | GiStream" description="Jadwal show JKT48 dari IDN Live Plus dan Theater" />
       <div className="rounded-2xl border border-gray-200 bg-white dark:border-gray-800 dark:bg-white/[0.03] overflow-hidden">
 
-        {/* ── Page Header ── */}
+        {/* Header */}
         <div className="px-6 py-5 border-b border-gray-200 dark:border-gray-800">
           <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
-
-            {/* Title */}
             <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
-              <div style={{
-                width: 44, height: 44, borderRadius: 12, flexShrink: 0,
-                background: "rgba(70,95,255,0.08)",
-                border: "1px solid rgba(70,95,255,0.15)",
-                display: "flex", alignItems: "center", justifyContent: "center",
-              }}>
-                <svg width="22" height="22" viewBox="0 0 24 24" fill="none"
-                  stroke="#465FFF" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                  <path d="M2 10s3.5 4 10 4 10-4 10-4" />
-                  <path d="M2 10V4a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v6" />
-                  <path d="M2 10v10a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V10" />
-                  <path d="M12 14v4" />
+              <div style={{ width: 44, height: 44, borderRadius: 12, background: "rgba(70,95,255,0.08)", border: "1px solid rgba(70,95,255,0.15)", display: "flex", alignItems: "center", justifyContent: "center" }}>
+                <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#465FFF" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                  <rect x="3" y="4" width="18" height="18" rx="2" ry="2" /><line x1="16" y1="2" x2="16" y2="6" /><line x1="8" y1="2" x2="8" y2="6" /><line x1="3" y1="10" x2="21" y2="10" />
                 </svg>
               </div>
               <div>
-                <h1 className="text-lg font-bold text-gray-800 dark:text-white" style={{ margin: 0 }}>
-                  Jadwal Show JKT48
-                </h1>
-                <div style={{ display: "flex", alignItems: "center", gap: 6, marginTop: 3 }}>
-                  <span style={{
-                    fontSize: 11, fontWeight: 600,
-                    padding: "2px 8px", borderRadius: 999,
-                    background: dataSource === "idn"
-                      ? "rgba(70,95,255,0.08)"
-                      : "rgba(220,31,46,0.08)",
-                    color: dataSource === "idn" ? "#465FFF" : "#DC1F2E",
-                    border: `1px solid ${dataSource === "idn"
-                      ? "rgba(70,95,255,0.2)"
-                      : "rgba(220,31,46,0.2)"}`,
-                  }}>
-                    {dataSource === "idn"
-                      ? "IDN Live Plus"
-                      : dataSource === "theater"
-                      ? "Theater (Fallback)"
-                      : "Memuat..."}
-                  </span>
-                </div>
+                <h1 className="text-lg font-bold text-gray-800 dark:text-white" style={{ margin: 0 }}>Jadwal Show JKT48</h1>
+                <span style={{ fontSize: 11, fontWeight: 600, padding: "2px 8px", borderRadius: 999, marginTop: 3, display: "inline-block", background: dataSource === "idn" ? "rgba(70,95,255,0.08)" : "rgba(220,31,46,0.08)", color: dataSource === "idn" ? "#465FFF" : "#DC1F2E", border: `1px solid ${dataSource === "idn" ? "rgba(70,95,255,0.2)" : "rgba(220,31,46,0.2)"}` }}>
+                  {dataSource === "idn" ? "IDN Live Plus" : dataSource === "theater" ? "Theater (Fallback)" : "Memuat..."}
+                </span>
               </div>
             </div>
-
-            {/* Stats */}
             {!loading && shows.length > 0 && (
               <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
                 {liveCount > 0 && (
-                  <div style={{
-                    display: "inline-flex", alignItems: "center", gap: 6,
-                    padding: "5px 12px", borderRadius: 999,
-                    background: "rgba(220,31,46,0.08)",
-                    border: "1px solid rgba(220,31,46,0.2)",
-                  }}>
-                    <span style={{
-                      width: 7, height: 7, borderRadius: "50%",
-                      background: "#DC1F2E",
-                      animation: "pulse 1.5s infinite",
-                    }} />
-                    <span style={{ fontSize: 12, fontWeight: 700, color: "#DC1F2E" }}>
-                      {liveCount} LIVE
-                    </span>
+                  <div style={{ display: "inline-flex", alignItems: "center", gap: 6, padding: "5px 12px", borderRadius: 999, background: "rgba(220,31,46,0.08)", border: "1px solid rgba(220,31,46,0.2)" }}>
+                    <span style={{ width: 7, height: 7, borderRadius: "50%", background: "#DC1F2E", animation: "pulse 1.5s infinite" }} />
+                    <span style={{ fontSize: 12, fontWeight: 700, color: "#DC1F2E" }}>{liveCount} LIVE</span>
                   </div>
                 )}
-                <div style={{
-                  display: "inline-flex", alignItems: "center", gap: 6,
-                  padding: "5px 12px", borderRadius: 999,
-                  background: "rgba(70,95,255,0.08)",
-                  border: "1px solid rgba(70,95,255,0.2)",
-                }}>
-                  <svg width="12" height="12" viewBox="0 0 24 24" fill="none"
-                    stroke="#465FFF" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                    <rect x="3" y="4" width="18" height="18" rx="2" ry="2" />
-                    <line x1="16" y1="2" x2="16" y2="6" />
-                    <line x1="8" y1="2" x2="8" y2="6" />
-                    <line x1="3" y1="10" x2="21" y2="10" />
-                  </svg>
-                  <span style={{ fontSize: 12, fontWeight: 700, color: "#465FFF" }}>
-                    {scheduledCount} Scheduled
-                  </span>
+                <div style={{ display: "inline-flex", alignItems: "center", gap: 6, padding: "5px 12px", borderRadius: 999, background: "rgba(70,95,255,0.08)", border: "1px solid rgba(70,95,255,0.2)" }}>
+                  <span style={{ fontSize: 12, fontWeight: 700, color: "#465FFF" }}>{scheduledCount} Scheduled</span>
                 </div>
               </div>
             )}
           </div>
 
-          {/* ── Filter Tabs ── */}
-          <div style={{
-            display: "flex", gap: 4, marginTop: 16,
-            padding: 4, borderRadius: 12,
-            background: "rgba(0,0,0,0.04)",
-            width: "fit-content",
-          }}
-            className="dark:bg-white/[0.04]"
-          >
+          {/* Filter Tabs */}
+          <div style={{ display: "flex", gap: 4, marginTop: 16, padding: 4, borderRadius: 12, background: "rgba(0,0,0,0.04)", width: "fit-content" }} className="dark:bg-white/[0.04]">
             {filterTabs.map((tab) => {
-              const count =
-                tab.key === "all"
-                  ? shows.length
-                  : shows.filter((s) => s.status === tab.key).length;
+              const count = tab.key === "all" ? shows.length : shows.filter((s) => s.status === tab.key).length;
               const isActive = filter === tab.key;
-
               return (
-                <button
-                  key={tab.key}
-                  onClick={() => setFilter(tab.key)}
-                  style={{
-                    display: "flex", alignItems: "center", gap: 6,
-                    padding: "6px 14px", borderRadius: 8,
-                    fontSize: 12, fontWeight: 600,
-                    border: "none", cursor: "pointer",
-                    transition: "all 0.15s",
-                    background: isActive ? "#fff" : "transparent",
-                    color: isActive ? "#111827" : "#6b7280",
-                    boxShadow: isActive ? "0 1px 4px rgba(0,0,0,0.10)" : "none",
-                  }}
-                  className={isActive
-                    ? "dark:bg-white/10 dark:text-white"
-                    : "dark:text-gray-400 dark:hover:text-gray-300"
-                  }
+                <button key={tab.key} onClick={() => setFilter(tab.key)}
+                  style={{ display: "flex", alignItems: "center", gap: 6, padding: "6px 14px", borderRadius: 8, fontSize: 12, fontWeight: 600, border: "none", cursor: "pointer", transition: "all 0.15s", background: isActive ? "#fff" : "transparent", color: isActive ? "#111827" : "#6b7280", boxShadow: isActive ? "0 1px 4px rgba(0,0,0,0.10)" : "none" }}
+                  className={isActive ? "dark:bg-white/10 dark:text-white" : "dark:text-gray-400"}
                 >
-                  <span>{tab.icon}</span>
                   {tab.label}
                   {!loading && count > 0 && (
-                    <span style={{
-                      padding: "1px 7px", borderRadius: 999,
-                      fontSize: 10, fontWeight: 700,
-                      background: isActive ? "#465FFF" : "rgba(0,0,0,0.08)",
-                      color: isActive ? "#fff" : "#6b7280",
-                    }}
+                    <span style={{ padding: "1px 7px", borderRadius: 999, fontSize: 10, fontWeight: 700, background: isActive ? "#465FFF" : "rgba(0,0,0,0.08)", color: isActive ? "#fff" : "#6b7280" }}
                       className={!isActive ? "dark:bg-white/10 dark:text-gray-400" : ""}
-                    >
-                      {count}
-                    </span>
+                    >{count}</span>
                   )}
                 </button>
               );
@@ -885,156 +878,67 @@ const ShowSchedulePage: React.FC = () => {
           </div>
         </div>
 
-        {/* ── Content ── */}
+        {/* Content */}
         <div style={{ padding: 24 }}>
           {loading ? (
-            /* Loading */
-            <div style={{
-              display: "flex", flexDirection: "column",
-              alignItems: "center", justifyContent: "center",
-              gap: 12, padding: "64px 0",
-            }}>
-              <div style={{
-                width: 36, height: 36,
-                border: "3px solid rgba(70,95,255,0.15)",
-                borderTop: "3px solid #465FFF",
-                borderRadius: "50%",
-                animation: "spin 0.8s linear infinite",
-              }} />
-              <p style={{ margin: 0, fontSize: 14, color: "#9ca3af" }}>
-                Memuat jadwal show...
-              </p>
+            <div style={{ display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: 12, padding: "64px 0" }}>
+              <div style={{ width: 36, height: 36, border: "3px solid rgba(70,95,255,0.15)", borderTop: "3px solid #465FFF", borderRadius: "50%", animation: "spin 0.8s linear infinite" }} />
+              <p style={{ margin: 0, fontSize: 14, color: "#9ca3af" }}>Memuat jadwal show...</p>
             </div>
           ) : filtered.length === 0 ? (
-            /* Empty */
-            <div style={{
-              display: "flex", flexDirection: "column",
-              alignItems: "center", justifyContent: "center",
-              gap: 12, padding: "64px 0", textAlign: "center",
-            }}>
-              <svg width="52" height="52" viewBox="0 0 24 24" fill="none"
-                stroke="#d1d5db" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
-                <path d="M2 4h20v2H2z" />
-                <path d="M4 6c0 4 2 8 8 14" />
-                <path d="M20 6c0 4-2 8-8 14" />
-                <path d="M4 6v14" />
-                <path d="M20 6v14" />
-              </svg>
-              <div>
-                <h3 style={{
-                  margin: "0 0 6px",
-                  fontSize: 16, fontWeight: 700,
-                  color: "#374151",
-                }}
-                  className="dark:text-gray-300"
-                >
-                  Belum Ada Jadwal Show
-                </h3>
-                <p style={{ margin: 0, fontSize: 13, color: "#9ca3af" }}>
-                  {filter !== "all"
-                    ? `Tidak ada show dengan status "${filter}" saat ini.`
-                    : "Jadwal show akan muncul di sini saat tersedia."}
-                </p>
-              </div>
+            <div style={{ display: "flex", flexDirection: "column", alignItems: "center", padding: "64px 0", textAlign: "center", gap: 12 }}>
+              <p className="text-gray-500 dark:text-gray-400 text-sm">Tidak ada show yang ditampilkan.</p>
               {filter !== "all" && (
-                <button
-                  onClick={() => setFilter("all")}
-                  style={{
-                    marginTop: 4,
-                    padding: "8px 20px",
-                    borderRadius: 10,
-                    border: "none",
-                    background: "#465FFF",
-                    color: "#fff",
-                    fontSize: 13, fontWeight: 600,
-                    cursor: "pointer",
-                  }}
-                >
-                  Lihat Semua Show
+                <button onClick={() => setFilter("all")} style={{ padding: "8px 20px", borderRadius: 10, border: "none", background: "#465FFF", color: "#fff", fontSize: 13, fontWeight: 600, cursor: "pointer" }}>
+                  Lihat Semua
                 </button>
               )}
             </div>
           ) : (
-            /* Grid */
-            <div style={{
-              display: "grid",
-              gridTemplateColumns: "repeat(auto-fill, minmax(280px, 1fr))",
-              gap: 16,
-            }}>
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(280px, 1fr))", gap: 16 }}>
               {filtered.map((show) => (
-                <ShowCard key={show.id} show={show} />
+                <ShowCard
+                  key={show.id}
+                  show={show}
+                  ticketStatus={ticketStatuses[show.id] || null}
+                  isLoggedIn={isLoggedIn}
+                  onBuy={(s) => setBuyingShow(s)}
+                />
               ))}
             </div>
           )}
         </div>
 
-        {/* ── Purchase Info Section ── */}
-        {!loading && <PurchaseInfoSection />}
-
-        {/* ── Footer ── */}
+        {/* Footer */}
         {!loading && filtered.length > 0 && (
-          <div style={{
-            padding: "12px 24px",
-            borderTop: "1px solid",
-            display: "flex",
-            alignItems: "center",
-            justifyContent: "space-between",
-            flexWrap: "wrap",
-            gap: 8,
-          }}
-            className="border-gray-100 dark:border-gray-800"
-          >
+          <div style={{ padding: "12px 24px", borderTop: "1px solid", display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: 8 }} className="border-gray-100 dark:border-gray-800">
             <p style={{ margin: 0, fontSize: 12, color: "#9ca3af" }}>
-              Menampilkan{" "}
-              <strong style={{ color: "#6b7280" }} className="dark:text-gray-300">
-                {filtered.length}
-              </strong>{" "}
-              show
-              {dataSource === "theater" && (
-                <span style={{
-                  marginLeft: 8,
-                  fontSize: 11, fontWeight: 600,
-                  padding: "2px 8px", borderRadius: 999,
-                  background: "rgba(245,158,11,0.1)",
-                  color: "#d97706",
-                  border: "1px solid rgba(245,158,11,0.2)",
-                }}>
-                  ⚠️ Menggunakan data Theater (IDN tidak tersedia)
-                </span>
-              )}
+              Menampilkan <strong style={{ color: "#6b7280" }} className="dark:text-gray-300">{filtered.length}</strong> show
             </p>
-
-            <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
-              <span style={{ display: "flex", alignItems: "center", gap: 5, fontSize: 11, color: "#9ca3af" }}>
-                <span style={{ width: 8, height: 8, borderRadius: "50%", background: "#DC1F2E", display: "inline-block" }} />
-                Live
-              </span>
-              <span style={{ display: "flex", alignItems: "center", gap: 5, fontSize: 11, color: "#9ca3af" }}>
-                <span style={{ width: 8, height: 8, borderRadius: "50%", background: "#465FFF", display: "inline-block" }} />
-                Scheduled
-              </span>
-            </div>
+            {!isLoggedIn && (
+              <a href="/signin" style={{ fontSize: 11, fontWeight: 600, color: "#465FFF", textDecoration: "none" }}>
+                Login untuk beli tiket →
+              </a>
+            )}
           </div>
         )}
 
-        {/* ── Keyframes ── */}
         <style>{`
-          @keyframes spin {
-            to { transform: rotate(360deg); }
-          }
-          @keyframes pulse {
-            0%, 100% { opacity: 1; transform: scale(1); }
-            50% { opacity: 0.5; transform: scale(0.85); }
-          }
-          .show-schedule-card:hover {
-            transform: translateY(-2px);
-            box-shadow: 0 8px 24px rgba(0,0,0,0.10);
-          }
-          .buy-btn:hover {
-            filter: brightness(1.05);
-          }
+          @keyframes spin { to { transform: rotate(360deg); } }
+          @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.5; } }
+          .show-schedule-card:hover { transform: translateY(-2px); box-shadow: 0 8px 24px rgba(0,0,0,0.10); }
         `}</style>
       </div>
+
+      {/* Payment Modal */}
+      {buyingShow && loginData && (
+        <PaymentModal
+          show={buyingShow}
+          onClose={() => setBuyingShow(null)}
+          onSuccess={handleBuySuccess}
+          loginData={loginData}
+        />
+      )}
     </>
   );
 };
