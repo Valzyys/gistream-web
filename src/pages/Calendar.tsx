@@ -503,7 +503,7 @@ function PaymentModal({ show, onClose, onSuccess, loginData }: PaymentModalProps
                   <img src={order.qr_image} alt="QR Code" className="w-48 h-48 rounded-xl" />
                 </div>
               )}
-
+             <a>
              {(order.checkout_url || order.payment_url) && !order.nomor_va && !order.qr_image && (
                 
                   href={order.checkout_url || order.payment_url!}
