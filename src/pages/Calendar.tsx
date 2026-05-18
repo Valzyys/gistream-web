@@ -7,7 +7,7 @@ const THEATER_API = "https://v2.jkt48connect.com/api/jkt48/theater?apikey=JKTCON
 const TICKETS_API = "https://v2.jkt48connect.com/api/tickets";
 const DEFAULT_IMG = "https://res.cloudinary.com/haymzm4wp/image/upload/v1760105848/bi5ej2hgh0cc2uowu5xr.jpg";
 const ALLOWED_THEATER_TYPES = ["SHOW", "EVENT"];
-const TICKET_PRICE = 7000;
+//const TICKET_PRICE = 7000;
 
 // ── Types ────────────────────────────────────────────────────────────────────
 interface NormalizedShow {
