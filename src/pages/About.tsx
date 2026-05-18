@@ -1,3 +1,4 @@
+import { useState, useEffect } from "react";
 import { Link } from "react-router";
 import PageBreadcrumb from "../components/common/PageBreadCrumb";
 import PageMeta from "../components/common/PageMeta";
@@ -140,6 +141,23 @@ const StatCard = ({ value, label }: StatCardProps) => (
 // ─── Page ─────────────────────────────────────────────────────────────────────
 
 export default function AboutGiStream() {
+  const [isDark, setIsDark] = useState(false);
+
+  useEffect(() => {
+    const check = () =>
+      setIsDark(document.documentElement.classList.contains("dark"));
+    check();
+
+    const observer = new MutationObserver(check);
+    observer.observe(document.documentElement, {
+      attributes: true,
+      attributeFilter: ["class"],
+    });
+    return () => observer.disconnect();
+  }, []);
+
+  const shadowColor = isDark ? "white" : "black";
+
   return (
     <div>
       <PageMeta
@@ -176,14 +194,11 @@ export default function AboutGiStream() {
 
             <div className="flex-1">
               <div className="flex flex-wrap items-center gap-2 mb-2">
-                <h1 className="text-2xl font-bold sm:text-3xl leading-none tracking-tight">
-  <LineShadowText
-    className="text-gray-800 dark:text-white/90"
-    shadowColor="currentColor"
-  >
-    GiStream
-  </LineShadowText>
-</h1>
+                <h1 className="text-2xl font-bold sm:text-3xl leading-none tracking-tight text-gray-800 dark:text-white/90">
+                  <LineShadowText shadowColor={shadowColor}>
+                    GiStream
+                  </LineShadowText>
+                </h1>
                 <Badge color="gray">Unofficial</Badge>
               </div>
               <p className="text-gray-500 dark:text-gray-400 text-sm sm:text-base leading-relaxed max-w-xl">
