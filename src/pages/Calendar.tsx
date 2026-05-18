@@ -1,5 +1,6 @@
 import { useEffect, useState, useCallback } from "react";
 import PageMeta from "../components/common/PageMeta";
+import { RainbowButton } from "../components/common/rainbow-button";
 
 // ── Constants ────────────────────────────────────────────────────────────────
 const IDN_PLUS_API = "https://v2.jkt48connect.com/api/jkt48/idnplus?apikey=JKTCONNECT";
@@ -890,13 +891,13 @@ function ShowCard({ show, ticketStatus, isLoggedIn, onBuy, onOpenPending }: Show
             Login untuk Beli Tiket
           </a>
         ) : (
-          <button
+          <RainbowButton
             onClick={() => onBuy(show)}
-            style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: 7, marginTop: 6, padding: "9px 16px", borderRadius: 10, fontSize: 13, fontWeight: 700, cursor: "pointer", transition: "all 0.15s", background: "linear-gradient(135deg, #465FFF 0%, #3a4fd4 100%)", color: "#fff", border: "none", boxShadow: "0 2px 8px rgba(70,95,255,0.30)" }}
+            className="w-full mt-1.5 flex items-center justify-center gap-1.5 text-[13px] font-bold py-[9px]"
           >
             <IconTicket size={14} color="white" />
             Beli Tiket — Rp 7.000
-          </button>
+          </RainbowButton>
         )}
       </div>
     </div>
