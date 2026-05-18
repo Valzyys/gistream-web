@@ -109,7 +109,7 @@ export default function VideoOpening() {
         {/* Content Grid: Video + Description */}
         <div className="mt-5 grid grid-cols-1 gap-6 lg:grid-cols-2 lg:gap-8 lg:items-center">
           {/* Video dengan Backlight */}
-          <Backlight blur={50} className="w-full rounded-xl" color="rgba(255,80,130,0.35)">
+          <Backlight blur={50} className="w-full rounded-xl">
             <div
               className="relative overflow-hidden rounded-xl w-full"
               style={{ aspectRatio: "16/9" }}
