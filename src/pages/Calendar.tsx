@@ -165,7 +165,7 @@ function PaymentModal({ show, onClose, onSuccess, loginData }: PaymentModalProps
 
   // Load methods
   useEffect(() => {
-    fetch(`${TICKETS_API}/methods`)
+    fetch(`${TICKETS_API}/methods?apikey=JKTCONNECT`)
       .then((r) => r.json())
       .then((d) => {
         const pm: PaymentMethods = d.data?.payment_methods || {};
@@ -194,7 +194,7 @@ function PaymentModal({ show, onClose, onSuccess, loginData }: PaymentModalProps
       if (stopped) return;
       setChecking(true);
       try {
-        const res = await fetch(`${TICKETS_API}/check/${order.ref_id}`);
+        const res = await fetch(`${TICKETS_API}/check/${order.ref_id}?apikey=JKTCONNECT`);
         const data = await res.json();
         if (data.ticket_status === "paid") {
           setPollStatus("paid");
@@ -220,7 +220,7 @@ function PaymentModal({ show, onClose, onSuccess, loginData }: PaymentModalProps
     setCreating(true);
     setError("");
     try {
-      const res = await fetch(`${TICKETS_API}/buy`, {
+      const res = await fetch(`${TICKETS_API}/buy?apikey=JKTCONNECT`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -257,7 +257,7 @@ function PaymentModal({ show, onClose, onSuccess, loginData }: PaymentModalProps
     if (!order || checking) return;
     setChecking(true);
     try {
-      const res = await fetch(`${TICKETS_API}/check/${order.ref_id}`);
+      const res = await fetch(`${TICKETS_API}/check/${order.ref_id}?apikey=JKTCONNECT`);
       const data = await res.json();
       if (data.ticket_status === "paid") {
         setPollStatus("paid");
@@ -771,7 +771,7 @@ const ShowSchedulePage: React.FC = () => {
       const entries = await Promise.all(
         shows.map(async (show) => {
           try {
-            const res = await fetch(`${TICKETS_API}/user/${userId}/show/${encodeURIComponent(show.id)}`);
+            const res = await fetch(`${TICKETS_API}/user/${userId}/show/${encodeURIComponent(show.id)}?apikey=JKTCONNECT`);
             const data = await res.json();
             return [show.id, data] as [string, UserTicketStatus];
           } catch {
