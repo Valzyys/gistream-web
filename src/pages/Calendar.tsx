@@ -505,15 +505,15 @@ function PaymentModal({ show, onClose, onSuccess, loginData }: PaymentModalProps
               )}
 
              {(order.checkout_url || order.payment_url) && !order.nomor_va && !order.qr_image && (
-  
-    href={order.checkout_url || order.payment_url!}
-    target="_blank"
-    rel="noopener noreferrer"
-    className="flex items-center justify-center gap-2 w-full py-3 rounded-xl bg-brand-500 hover:bg-brand-600 text-white text-sm font-bold transition-colors"
-  >
-    Buka Halaman Pembayaran →
-  </a>
-)}
+                
+                  href={order.checkout_url || order.payment_url!}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="flex items-center justify-center gap-2 w-full py-3 rounded-xl bg-brand-500 hover:bg-brand-600 text-white text-sm font-bold transition-colors"
+                >
+                  Buka Halaman Pembayaran →
+                </a>
+              )}
 
               {/* Amount */}
               <div className="flex items-center justify-between p-3 rounded-xl bg-gray-50 dark:bg-white/[0.04] border border-gray-200 dark:border-gray-700">
