@@ -1,6 +1,6 @@
 import React from "react";
 import { cn } from "../../lib/utils";
-import { AnimatedGridPattern } from "../common/AnimatedPatern";
+import { AnimatedGridPattern } from "../../components/common/AnimatedPatern";
 import { Link } from "react-router";
 import ThemeTogglerTwo from "../../components/common/ThemeTogglerTwo";
 
