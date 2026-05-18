@@ -169,7 +169,6 @@ function PaymentModal({ show, onClose, onSuccess, loginData }: PaymentModalProps
       .then((r) => r.json())
       .then((d) => {
         const pm: PaymentMethods = d.data?.payment_methods || {};
-        // Filter hanya yang aktif (semua kategori)
         setMethods(pm);
       })
       .catch(() => setError("Gagal memuat metode pembayaran"))
@@ -271,27 +270,12 @@ function PaymentModal({ show, onClose, onSuccess, loginData }: PaymentModalProps
     setChecking(false);
   };
 
-  const allMethods = [
-    ...(methods.virtual_account || []),
-    ...(methods.emoney || []),
-    ...(methods.retail || []),
-    ...(methods.pulsa || []),
-  ];
-
   const categoryLabel: Record<string, string> = {
     virtual_account: "Virtual Account",
     emoney: "E-Money",
     retail: "Retail",
     pulsa: "Pulsa",
     qris: "QRIS",
-  };
-
-  const categoryOf = (code: string): string => {
-    if (methods.virtual_account?.find((m) => m.channel_code === code)) return "virtual_account";
-    if (methods.emoney?.find((m) => m.channel_code === code)) return "emoney";
-    if (methods.retail?.find((m) => m.channel_code === code)) return "retail";
-    if (methods.pulsa?.find((m) => m.channel_code === code)) return "pulsa";
-    return "qris";
   };
 
   const fmtTimer = (s: number) => `${Math.floor(s / 60).toString().padStart(2, "0")}:${(s % 60).toString().padStart(2, "0")}`;
@@ -342,7 +326,6 @@ function PaymentModal({ show, onClose, onSuccess, loginData }: PaymentModalProps
           {/* ── STEP: METHOD ── */}
           {step === "method" && (
             <div>
-              {/* Show info */}
               <div className="flex gap-3 p-3 rounded-xl bg-gray-50 dark:bg-white/[0.04] border border-gray-200 dark:border-gray-700 mb-5">
                 <img src={show.image} alt={show.title} className="w-16 h-10 object-cover rounded-lg flex-shrink-0" onError={(e) => { (e.target as HTMLImageElement).src = DEFAULT_IMG; }} />
                 <div className="flex-1 min-w-0">
@@ -411,7 +394,6 @@ function PaymentModal({ show, onClose, onSuccess, loginData }: PaymentModalProps
           {/* ── STEP: CONFIRM ── */}
           {step === "confirm" && selectedMethod && (
             <div className="space-y-4">
-              {/* Show info */}
               <div className="flex gap-3 p-3 rounded-xl bg-gray-50 dark:bg-white/[0.04] border border-gray-200 dark:border-gray-700">
                 <img src={show.image} alt={show.title} className="w-16 h-10 object-cover rounded-lg flex-shrink-0" onError={(e) => { (e.target as HTMLImageElement).src = DEFAULT_IMG; }} />
                 <div className="flex-1 min-w-0">
@@ -424,7 +406,6 @@ function PaymentModal({ show, onClose, onSuccess, loginData }: PaymentModalProps
                 </div>
               </div>
 
-              {/* Summary */}
               <div className="rounded-xl border border-gray-200 dark:border-gray-700 overflow-hidden">
                 {[
                   { label: "Harga Tiket", value: "Rp 7.000" },
@@ -480,7 +461,7 @@ function PaymentModal({ show, onClose, onSuccess, loginData }: PaymentModalProps
                 </span>
               </div>
 
-              {/* Payment detail by category */}
+              {/* Virtual Account */}
               {order.nomor_va && (
                 <div className="p-4 rounded-xl border border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-white/[0.03]">
                   <p className="text-xs text-gray-500 dark:text-gray-400 mb-1">Nomor Virtual Account</p>
@@ -497,15 +478,17 @@ function PaymentModal({ show, onClose, onSuccess, loginData }: PaymentModalProps
                 </div>
               )}
 
+              {/* QR Code */}
               {order.qr_image && (
                 <div className="flex flex-col items-center p-4 rounded-xl border border-gray-200 dark:border-gray-700 bg-white dark:bg-white/[0.03]">
                   <p className="text-xs font-semibold text-gray-500 dark:text-gray-400 mb-3">Scan QR Code</p>
                   <img src={order.qr_image} alt="QR Code" className="w-48 h-48 rounded-xl" />
                 </div>
               )}
-             <a>
-             {(order.checkout_url || order.payment_url) && !order.nomor_va && !order.qr_image && (
-                
+
+              {/* Payment URL — INI BAGIAN YANG DIFIX */}
+              {(order.checkout_url || order.payment_url) && !order.nomor_va && !order.qr_image && (
+                <a
                   href={order.checkout_url || order.payment_url!}
                   target="_blank"
                   rel="noopener noreferrer"
@@ -634,7 +617,6 @@ function ShowCard({ show, ticketStatus, isLoggedIn, onBuy }: ShowCardProps) {
         <div style={{ position: "absolute", top: 10, right: 10, padding: "3px 8px", borderRadius: 6, fontSize: 10, fontWeight: 700, background: "rgba(0,0,0,0.55)", backdropFilter: "blur(4px)", color: "rgba(255,255,255,0.9)" }}>
           {show.source === "idn" ? "IDN Live+" : "Theater"}
         </div>
-        {/* Tiket status badge di poster */}
         {isPaid && (
           <div style={{ position: "absolute", bottom: 8, left: 8, display: "inline-flex", alignItems: "center", gap: 4, padding: "3px 9px", borderRadius: 999, fontSize: 10, fontWeight: 700, background: "rgba(34,197,94,0.9)", color: "#fff" }}>
             ✓ Dibeli
@@ -780,7 +762,7 @@ const ShowSchedulePage: React.FC = () => {
     fetchAll();
   }, []);
 
-  // Fetch ticket statuses setelah shows loaded & user login
+  // Fetch ticket statuses
   useEffect(() => {
     if (!isLoggedIn || shows.length === 0) return;
     const userId = loginData.user.user_id;
