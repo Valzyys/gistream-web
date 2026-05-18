@@ -1,6 +1,7 @@
 import { Link } from "react-router";
 import PageBreadcrumb from "../components/common/PageBreadCrumb";
 import PageMeta from "../components/common/PageMeta";
+import { LineShadowText } from "../components/ui/text/line-shadow-text";
 
 // ─── SVG Icons ───────────────────────────────────────────────────────────────
 
@@ -175,9 +176,14 @@ export default function AboutGiStream() {
 
             <div className="flex-1">
               <div className="flex flex-wrap items-center gap-2 mb-2">
-                <h1 className="text-2xl font-bold text-gray-800 dark:text-white/90 sm:text-3xl">
-                  GiStream
-                </h1>
+                <h1 className="text-2xl font-bold sm:text-3xl leading-none tracking-tight">
+  <LineShadowText
+    className="text-gray-800 dark:text-white/90"
+    shadowColor="currentColor"
+  >
+    GiStream
+  </LineShadowText>
+</h1>
                 <Badge color="gray">Unofficial</Badge>
               </div>
               <p className="text-gray-500 dark:text-gray-400 text-sm sm:text-base leading-relaxed max-w-xl">
