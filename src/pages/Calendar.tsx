@@ -296,7 +296,7 @@ function PaymentModal({ show, onClose, onSuccess, onCancelled, loginData, pendin
   // Load payment methods
   useEffect(() => {
     if (pendingOrder) return;
-    fetch(`${TICKETS_API}/methods`)
+    fetch(`${TICKETS_API}/methods?apikey=JKTCONNECT`)
       .then((r) => r.json())
       .then((d) => {
         const raw = d.data?.payment_methods || {};
