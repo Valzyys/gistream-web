@@ -777,6 +777,7 @@ interface ShowCardProps {
   show: NormalizedShow;
   ticketStatus: UserTicketStatus | null;
   isLoggedIn: boolean;
+  membershipType?: string; // ← tambah ini
   onBuy: (show: NormalizedShow) => void;
   onOpenPending: (show: NormalizedShow) => void;
 }
@@ -787,6 +788,7 @@ function ShowCard({ show, ticketStatus, isLoggedIn, onBuy, onOpenPending }: Show
   const cd = useCountdown(show.scheduledAt, showCountdown);
   const isPaid = ticketStatus?.has_ticket;
   const isPending = ticketStatus?.has_pending && !isPaid;
+  const hasMembership = !!membershipType && membershipType !== "free"; // ← tambah ini
 
   const formatDate = (ts: number) =>
     new Date(ts).toLocaleDateString("id-ID", { weekday: "long", day: "numeric", month: "long", year: "numeric" });
@@ -872,33 +874,42 @@ function ShowCard({ show, ticketStatus, isLoggedIn, onBuy, onOpenPending }: Show
         </div>
 
         {/* Action Button */}
-        {isPaid ? (
-          <div style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: 7, marginTop: 6, padding: "9px 16px", borderRadius: 10, background: "rgba(34,197,94,0.1)", border: "1px solid rgba(34,197,94,0.2)", color: "#16a34a", fontSize: 13, fontWeight: 700 }}
-            className="dark:text-green-400">
-            <IconCheck size={14} color="#16a34a" /> Tiket Sudah Dibeli
-          </div>
-        ) : isPending ? (
-          <button
-            onClick={() => onOpenPending(show)}
-            style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: 7, marginTop: 6, padding: "9px 16px", borderRadius: 10, background: "rgba(251,191,36,0.1)", border: "1px solid rgba(251,191,36,0.25)", color: "#92400e", fontSize: 13, fontWeight: 700, cursor: "pointer", width: "100%", transition: "background 0.15s" }}
-            className="dark:text-yellow-400 hover:bg-amber-100 dark:hover:bg-amber-500/15"
-          >
-            <IconClock size={14} color="#92400e" /> Lanjutkan Pembayaran
-          </button>
-        ) : !isLoggedIn ? (
-          <a href="/signin" style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: 7, marginTop: 6, padding: "9px 16px", borderRadius: 10, fontSize: 13, fontWeight: 700, textDecoration: "none", background: "#f3f4f6", color: "#374151", border: "1px solid #e5e7eb" }}
-            className="dark:bg-white/10 dark:text-gray-300 dark:border-gray-700">
-            Login untuk Beli Tiket
-          </a>
-        ) : (
-          <RainbowButton
-            onClick={() => onBuy(show)}
-            className="w-full mt-1.5 flex items-center justify-center gap-1.5 text-[13px] font-bold py-[9px]"
-          >
-            <IconTicket size={14} color="white" />
-            Beli Tiket — Rp 7.000
-          </RainbowButton>
-        )}
+        {/* Action Button */}
+{isPaid ? (
+  <div style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: 7, marginTop: 6, padding: "9px 16px", borderRadius: 10, background: "rgba(34,197,94,0.1)", border: "1px solid rgba(34,197,94,0.2)", color: "#16a34a", fontSize: 13, fontWeight: 700 }}
+    className="dark:text-green-400">
+    <IconCheck size={14} color="#16a34a" /> Tiket Sudah Dibeli
+  </div>
+) : isPending ? (
+  <button
+    onClick={() => onOpenPending(show)}
+    style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: 7, marginTop: 6, padding: "9px 16px", borderRadius: 10, background: "rgba(251,191,36,0.1)", border: "1px solid rgba(251,191,36,0.25)", color: "#92400e", fontSize: 13, fontWeight: 700, cursor: "pointer", width: "100%", transition: "background 0.15s" }}
+    className="dark:text-yellow-400 hover:bg-amber-100 dark:hover:bg-amber-500/15"
+  >
+    <IconClock size={14} color="#92400e" /> Lanjutkan Pembayaran
+  </button>
+) : !isLoggedIn ? (
+  <a href="/signin" style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: 7, marginTop: 6, padding: "9px 16px", borderRadius: 10, fontSize: 13, fontWeight: 700, textDecoration: "none", background: "#f3f4f6", color: "#374151", border: "1px solid #e5e7eb" }}
+    className="dark:bg-white/10 dark:text-gray-300 dark:border-gray-700">
+    Login untuk Beli Tiket
+  </a>
+// ↓ BLOK BARU — membership aktif
+) : hasMembership ? (
+  <div
+    style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: 7, marginTop: 6, padding: "9px 16px", borderRadius: 10, background: "rgba(70,95,255,0.08)", border: "1px solid rgba(70,95,255,0.2)", color: "#465FFF", fontSize: 13, fontWeight: 700 }}
+    className="dark:text-brand-400"
+  >
+    <IconCheck size={14} color="#465FFF" /> Sudah Terbeli
+  </div>
+) : (
+  <RainbowButton
+    onClick={() => onBuy(show)}
+    className="w-full mt-1.5 flex items-center justify-center gap-1.5 text-[13px] font-bold py-[9px]"
+  >
+    <IconTicket size={14} color="white" />
+    Beli Tiket — Rp 7.000
+  </RainbowButton>
+)}
       </div>
     </div>
   );
