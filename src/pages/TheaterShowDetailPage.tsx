@@ -197,7 +197,6 @@ function NoticeBox() {
 function MemberCard({ member }: { member: Jkt48Member }) {
   const [imgErr, setImgErr] = useState(false);
   const fixImgDomain = (url: string) =>
-  const fixImgDomain = (url: string) =>
   url?.replace("https://jkt48.com", "https://img.jkt48connect.com/jkt48/members") || "";
   return (
     <div className="flex flex-col items-center gap-2 group">
