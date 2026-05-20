@@ -782,7 +782,7 @@ interface ShowCardProps {
   onOpenPending: (show: NormalizedShow) => void;
 }
 
-function ShowCard({ show, ticketStatus, isLoggedIn, onBuy, onOpenPending }: ShowCardProps) {
+function ShowCard({ show, ticketStatus, isLoggedIn, membershipType, onBuy, onOpenPending }: ShowCardProps) {
   const isLive = show.status === "live";
   const showCountdown = !!show.scheduledAt && !isLive && show.scheduledAt > Date.now();
   const cd = useCountdown(show.scheduledAt, showCountdown);
