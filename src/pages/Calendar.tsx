@@ -997,7 +997,8 @@ const ShowSchedulePage: React.FC = () => {
   const filtered = filter === "all" ? shows : shows.filter((s) => s.status === filter);
   const liveCount = shows.filter((s) => s.status === "live").length;
   const scheduledCount = shows.filter((s) => s.status === "scheduled").length;
-
+  const membershipType = loginData?.user?.membership_type || "free";
+  
   const filterTabs: { key: FilterType; label: string }[] = [
     { key: "all", label: "Semua" },
     { key: "live", label: "Live" },
@@ -1081,6 +1082,7 @@ const ShowSchedulePage: React.FC = () => {
                   show={show}
                   ticketStatus={ticketStatuses[show.id] || null}
                   isLoggedIn={isLoggedIn}
+                  membershipType={membershipType} // ← tambah ini
                   onBuy={(s) => setBuyingShow(s)}
                   onOpenPending={(s) => setPendingShow(s)}
                 />
