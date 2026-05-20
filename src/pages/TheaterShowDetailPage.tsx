@@ -663,53 +663,58 @@ const TheaterShowDetailPage: React.FC = () => {
                       <p className="text-xs font-bold text-gray-500 dark:text-gray-400 uppercase tracking-widest">Tiket</p>
                     </div>
                     <div className="p-4 flex flex-col gap-3">
-                      <div className="flex items-center justify-between">
-                        <span className="text-sm text-gray-500 dark:text-gray-400">Harga</span>
-                        <span className="text-lg font-black text-[#DC1F2E]">{formatPrice(data.default_price)}</span>
-                      </div>
-                      <div className="flex items-center justify-between">
-                        <span className="text-sm text-gray-500 dark:text-gray-400">Total Kuota</span>
-                        <span className="text-sm font-bold text-gray-800 dark:text-white">{data.total_quota} tiket</span>
-                      </div>
-                      <div className="flex items-center justify-between">
-                        <span className="text-sm text-gray-500 dark:text-gray-400">Maks. Beli</span>
-                        <span className="text-sm font-bold text-gray-800 dark:text-white">{data.max_purchase} tiket</span>
-                      </div>
+  <div className="flex items-center justify-between">
+    <span className="text-sm text-gray-500 dark:text-gray-400">Harga</span>
+    <span className="text-lg font-black text-[#DC1F2E]">Rp 7.000</span>
+  </div>
+  <div className="flex items-center justify-between">
+    <span className="text-sm text-gray-500 dark:text-gray-400">Total Kuota</span>
+    <span className="text-sm font-bold text-gray-800 dark:text-white">{data.total_quota} tiket</span>
+  </div>
+  <div className="flex items-center justify-between">
+    <span className="text-sm text-gray-500 dark:text-gray-400">Maks. Beli</span>
+    <span className="text-sm font-bold text-gray-800 dark:text-white">{data.max_purchase} tiket per orang</span>
+  </div>
 
-                      <div className="pt-1 pb-0.5 border-t border-gray-100 dark:border-gray-800 mt-1">
-                        {/* Check if any active sale period */}
-                        {(() => {
-                          const now = Date.now();
-                         
-                          const allEnded = data.sales_period.length > 0 && data.sales_period.every(
-                            (p) => now > new Date(p.end_date).getTime()
-                          );
-                          if (allEnded) {
-                            return (
-                              <div className="flex items-center gap-2 px-4 py-3 rounded-xl bg-gray-50 dark:bg-gray-800/50 border border-gray-200 dark:border-gray-700">
-                                <IconAlert size={14} color="#9ca3af" />
-                                <span className="text-xs font-semibold text-gray-500 dark:text-gray-400">
-                                  Maaf, tidak ada tiket yang dapat dibeli saat ini
-                                </span>
-                              </div>
-                            );
-                          }
-                          return (
-                            <a
-                              href="https://jkt48.com/theater/schedule"
-                              target="_blank"
-                              rel="noopener noreferrer"
-                              className="flex items-center justify-center gap-2 w-full py-3.5 rounded-xl bg-[#e84c8b] hover:bg-[#d43d7b] text-white text-sm font-bold cursor-pointer shadow-lg shadow-pink-500/25 hover:shadow-pink-500/40 hover:-translate-y-0.5 transition-all duration-200 no-underline"
-                              style={{ textDecoration: "none" }}
-                            >
-                              <IconTicket size={15} color="white" />
-                              Beli Tiket Show
-                              <IconExternalLink size={13} color="rgba(255,255,255,0.7)" />
-                            </a>
-                          );
-                        })()}
-                      </div>
-                    </div>
+  <div className="pt-1 pb-0.5 border-t border-gray-100 dark:border-gray-800 mt-1">
+    {(() => {
+      const loginData = (() => {
+        try {
+          const ls = localStorage.getItem("userLogin");
+          if (ls) return JSON.parse(ls);
+          const ss = sessionStorage.getItem("userLogin");
+          if (ss) return JSON.parse(ss);
+        } catch {}
+        return null;
+      })();
+      const membershipType = loginData?.user?.membership_type || "free";
+      const hasMembership = !!membershipType && membershipType !== "free";
+
+      if (hasMembership) {
+        return (
+          <div className="flex items-center justify-center gap-2 px-4 py-3 rounded-xl bg-brand-50 dark:bg-brand-500/10 border border-brand-200 dark:border-brand-500/20">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#465FFF" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+              <polyline points="20 6 9 17 4 12" />
+            </svg>
+            <span className="text-xs font-bold text-brand-600 dark:text-brand-400">
+              Sudah Terbeli (Membership Aktif)
+            </span>
+          </div>
+        );
+      }
+
+      return (
+        <button
+          onClick={() => navigate("/jadwal")}
+          className="flex items-center justify-center gap-2 w-full py-3.5 rounded-xl bg-[#e84c8b] hover:bg-[#d43d7b] text-white text-sm font-bold cursor-pointer shadow-lg shadow-pink-500/25 hover:shadow-pink-500/40 hover:-translate-y-0.5 transition-all duration-200 border-0"
+        >
+          <IconTicket size={15} color="white" />
+          Beli Tiket — Rp 7.000
+        </button>
+      );
+    })()}
+  </div>
+</div>
                   </div>
 
                   {/* Set list & layout info */}
