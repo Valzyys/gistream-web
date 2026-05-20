@@ -678,9 +678,7 @@ const TheaterShowDetailPage: React.FC = () => {
                         {/* Check if any active sale period */}
                         {(() => {
                           const now = Date.now();
-                          const hasActiveSale = data.sales_period.some(
-                            (p) => now >= new Date(p.start_date).getTime() && now <= new Date(p.end_date).getTime()
-                          );
+                         
                           const allEnded = data.sales_period.length > 0 && data.sales_period.every(
                             (p) => now > new Date(p.end_date).getTime()
                           );
