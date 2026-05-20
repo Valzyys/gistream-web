@@ -196,11 +196,13 @@ function NoticeBox() {
 // ── Member Card ───────────────────────────────────────────────────────────────
 function MemberCard({ member }: { member: Jkt48Member }) {
   const [imgErr, setImgErr] = useState(false);
+  const fixImgDomain = (url: string) =>
+  url?.replace("https://jkt48.com", "https://img.jkt48connect.com") || "";
   return (
     <div className="flex flex-col items-center gap-2 group">
       <div className="relative w-full aspect-[3/4] rounded-xl overflow-hidden bg-gray-100 dark:bg-gray-800 border border-gray-200 dark:border-gray-700 shadow-sm group-hover:shadow-md transition-shadow">
         <img
-          src={imgErr ? DEFAULT_IMG : member.img}
+         src={imgErr ? DEFAULT_IMG : fixImgDomain(member.img)}
           alt={member.name}
           className="w-full h-full object-cover object-top group-hover:scale-105 transition-transform duration-300"
           onError={() => setImgErr(true)}
