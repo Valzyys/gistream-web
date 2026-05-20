@@ -191,8 +191,20 @@ function NoticeBox() {
 // ── Member Card ───────────────────────────────────────────────────────────────
 function MemberCard({ member }: { member: Jkt48Member }) {
   const [imgErr, setImgErr] = useState(false);
-  const fixImgDomain = (url: string) =>
-  url?.replace("https://jkt48.com", "https://img.jkt48connect.com/jkt48/members") || "";
+ const fixImgDomain = (url: string): string => {
+  if (!url) return "";
+
+  // Handle double-path format dari API theater:
+  // "https://jkt48.com/api/v1/storages/https://jkt48.com/api/v1/storages/media/jkt48-member/xxx.jpg"
+  // Extract hanya bagian filename setelah "media/jkt48-member/"
+  const memberPathMatch = url.match(/media\/jkt48-member\/(.+)$/);
+  if (memberPathMatch) {
+    return `https://img.jkt48connect.com/jkt48/members/api/v1/storages/media/jkt48-member/${memberPathMatch[1]}`;
+  }
+
+  // Fallback: replace domain biasa jika formatnya sudah bersih
+  return url.replace(/https?:\/\/jkt48\.com/, "https://img.jkt48connect.com/jkt48/members");
+};
   return (
     <div className="flex flex-col items-center gap-2 group">
       <div className="relative w-full aspect-[3/4] rounded-xl overflow-hidden bg-gray-100 dark:bg-gray-800 border border-gray-200 dark:border-gray-700 shadow-sm group-hover:shadow-md transition-shadow">
