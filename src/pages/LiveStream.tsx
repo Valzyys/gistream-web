@@ -11,6 +11,7 @@ const API_BASE  = "https://v2.jkt48connect.com/api/jkt48connect";
 const API_KEY   = "JKTCONNECT";
 const IDN_API   = "https://v2.jkt48connect.com/api/jkt48/idnplus?apikey=JKTCONNECT";
 const LIVE_API  = "https://v2.jkt48connect.com/api/jkt48/live?apikey=JKTCONNECT";
+const TICKETS_API = "https://v2.jkt48connect.com/api/tickets";
 
 // ── GiStream token constants ──────────────────────────────────────────────────
 const PARTNER_KID    = "jkt48connect-v1";
@@ -88,7 +89,6 @@ async function getStreamURL(
   const data = await res.json();
   if (!data.success) throw new Error(data.message || "Gagal mendapatkan stream URL");
 
-  // URL bersih — token dikirim via HLS xhrSetup/fetchSetup header, bukan query param
   const streams: any[] = data.streams || [];
   const autoUrl = streams[0]?.url || "";
 
@@ -104,7 +104,7 @@ async function getStreamURL(
       : "",
     resolution:  s.RESOLUTION || "",
     fps:         s["FRAME-RATE"] || "",
-    manual_url:  s.url || "",    // ← URL bersih, token via header
+    manual_url:  s.url || "",
     playlist_url: s.url || "",
   }));
 
@@ -226,7 +226,7 @@ function HlsPlayer({
   qualityMode: "auto" | "manual";
   onModeChange: (mode: "auto" | "manual") => void;
   isIdn: boolean;
-  token?: string;  // ← token untuk inject ke header setiap HLS request
+  token?: string;
 }) {
   const videoRef = useRef<HTMLVideoElement>(null);
   const hlsRef   = useRef<Hls | null>(null);
@@ -283,8 +283,6 @@ function HlsPlayer({
       abrEwmaSlowLive:        9.0,
       nudgeOffset:   0.3,
       nudgeMaxRetry: 5,
-
-      // ── Inject x-api-token ke setiap HLS request (manifest + segment) ──────
       ...(token && {
         xhrSetup: (xhr: XMLHttpRequest) => {
           xhr.setRequestHeader("x-api-token", token);
@@ -647,12 +645,14 @@ function LiveStream() {
   const [qualityMode,       setQualityMode]       = useState<"auto" | "manual">("auto");
   const [currentQuality,    setCurrentQuality]    = useState<QualityOption | null>(null);
   const [hlsUrl,            setHlsUrl]            = useState("");
-  const [streamToken,       setStreamToken]       = useState("");   // ← token state
+  const [streamToken,       setStreamToken]       = useState("");
   const [memberShow,        setMemberShow]        = useState<any>(null);
   const [memberHlsUrl,      setMemberHlsUrl]      = useState("");
   const [memberRoomId,      setMemberRoomId]      = useState<number | null>(null);
   const [membershipLoading, setMembershipLoading] = useState(isIdn);
   const [hasMembership,     setHasMembership]     = useState(false);
+  const [hasTicket,         setHasTicket]         = useState(false);  // ← ticket gate
+  const [accessSource,      setAccessSource]      = useState<"ticket" | "membership" | "code" | null>(null); // ← how user got access
   const [isVerified,        setIsVerified]        = useState(false);
   const [showVerification,  setShowVerification]  = useState(false);
   const [verifData,         setVerifData]         = useState({ email: "", code: "" });
@@ -686,23 +686,50 @@ function LiveStream() {
     } catch { return "unknown"; }
   };
 
-  const checkMembership = useCallback(async () => {
-    setMembershipLoading(true);
+  // ── Cek tiket via Tickets API ─────────────────────────────────────────────
+  // Menggunakan slug (playbackId) langsung sesuai URL pattern:
+  // /live/dream-bakudan-2026-05-21-260510221648  →  slug = dream-bakudan-2026-05-21-260510221648
+  // endpoint: GET /tickets/user/{userId}/show/{slug}
+  const checkTicket = useCallback(async (): Promise<boolean> => {
     const session = getSession();
-    if (!session) { setMembershipLoading(false); return false; }
+    if (!session) return false;
+    const uid = session.user?.user_id;
+    if (!uid || !playbackId) return false;
+    try {
+      const res = await fetch(
+        `${TICKETS_API}/user/${uid}/show/${encodeURIComponent(playbackId)}?apikey=${API_KEY}`
+      );
+      if (!res.ok) return false;
+      const data = await res.json();
+      // has_ticket = true berarti tiket sudah dibayar lunas
+      if (data.has_ticket === true) {
+        setHasTicket(true);
+        setAccessSource("ticket");
+        return true;
+      }
+      return false;
+    } catch {
+      return false;
+    }
+  }, [playbackId]);
+
+  const checkMembership = useCallback(async (): Promise<boolean> => {
+    const session = getSession();
+    if (!session) return false;
     const uid = session.user?.user_id;
     const token = session.token;
-    if (!uid || !token) { setMembershipLoading(false); return false; }
+    if (!uid || !token) return false;
     try {
       const res = await fetch(`${API_BASE}/profile/${uid}?apikey=${API_KEY}`, {
         headers: { Authorization: `Bearer ${token}` },
       });
       const data = await res.json();
       if (data.status && data.data?.is_active && data.data?.membership_type !== "free") {
-        setHasMembership(true); setMembershipLoading(false); return true;
+        setHasMembership(true);
+        setAccessSource("membership");
+        return true;
       }
     } catch {}
-    setMembershipLoading(false);
     return false;
   }, []);
 
@@ -716,7 +743,9 @@ function LiveStream() {
       if (hoursDiff > 5) { localStorage.removeItem("stream_verification"); setShowVerification(true); return false; }
       const ip = await fetchClientIP();
       if (info.ip !== ip) { info.ip = ip; localStorage.setItem("stream_verification", JSON.stringify(info)); }
-      setIsVerified(true); setShowVerification(false);
+      setIsVerified(true);
+      setShowVerification(false);
+      setAccessSource("code");
       setVerifData({ email: info.email, code: info.code });
       return true;
     } catch { localStorage.removeItem("stream_verification"); setShowVerification(true); return false; }
@@ -748,7 +777,7 @@ function LiveStream() {
               setVerifyError("Code ini sudah digunakan dari IP address yang berbeda"); setVerifying(false); return;
             }
             localStorage.setItem("stream_verification", JSON.stringify({ email: verifData.email, code: verifData.code, ip, timestamp: Date.now(), verified: true }));
-            setIsVerified(true); setShowVerification(false); setVerifying(false); return;
+            setIsVerified(true); setShowVerification(false); setAccessSource("code"); setVerifying(false); return;
           }
         }
         setVerifyError("Code sudah tidak dapat digunakan"); setVerifying(false); return;
@@ -760,7 +789,7 @@ function LiveStream() {
       const useData = await useRes.json();
       if (useData.status) {
         localStorage.setItem("stream_verification", JSON.stringify({ email: verifData.email, code: verifData.code, ip, timestamp: Date.now(), verified: true }));
-        setIsVerified(true); setShowVerification(false); setVerifying(false);
+        setIsVerified(true); setShowVerification(false); setAccessSource("code"); setVerifying(false);
       } else { setVerifyError(useData.message || "Gagal menggunakan code"); setVerifying(false); }
     } catch { setVerifyError("Terjadi kesalahan saat verifikasi. Silakan coba lagi."); setVerifying(false); }
   };
@@ -778,14 +807,12 @@ function LiveStream() {
       if (!show) { setError("Show tidak ditemukan atau sudah berakhir"); setLoading(false); return; }
       setIdnShow(show);
 
-      // Generate token → simpan → get stream URL
       const token = await generateStreamToken(show.slug, true);
-      setStreamToken(token);  // ← simpan token ke state
+      setStreamToken(token);
       const { url: streamUrl, qualities: streamQualities } = await getStreamURL(token, show.slug, true);
       setQualities(streamQualities);
       setHlsUrl(streamUrl);
 
-      // Fetch theater lineup (opsional)
       try {
         const theaterRes = await fetch(`https://v2.jkt48connect.com/api/jkt48/theater?apikey=${API_KEY}`);
         const theaterData = await theaterRes.json();
@@ -832,7 +859,7 @@ function LiveStream() {
         const identifier = show.identifier || show.slug || show.url_key;
         try {
           const token = await generateStreamToken(identifier, true);
-          setStreamToken(token);  // ← simpan token ke state
+          setStreamToken(token);
           const { url: streamUrl, qualities: streamQualities } = await getStreamURL(token, identifier, true);
           setQualities(streamQualities);
           setMemberHlsUrl(streamUrl);
@@ -846,7 +873,7 @@ function LiveStream() {
         if (showId) {
           try {
             const token = await generateStreamToken(String(showId), false);
-            setStreamToken(token);  // ← simpan token ke state
+            setStreamToken(token);
             const { url: streamUrl, qualities: streamQualities } = await getStreamURL(token, String(showId), false);
             setQualities(streamQualities);
             setMemberHlsUrl(streamUrl);
@@ -873,7 +900,6 @@ function LiveStream() {
   const handleQualityChange = (q: QualityOption | null) => {
     setCurrentQuality(q);
     if (!q) return;
-    // Set URL bersih — token sudah di-inject via HLS header
     if (isIdn) setHlsUrl(q.manual_url);
     else setMemberHlsUrl(q.manual_url);
   };
@@ -884,7 +910,7 @@ function LiveStream() {
       try {
         if (isIdn && idnShow?.slug) {
           const token = await generateStreamToken(idnShow.slug, true);
-          setStreamToken(token);  // ← update token
+          setStreamToken(token);
           const { url: streamUrl } = await getStreamURL(token, idnShow.slug, true);
           setHlsUrl(streamUrl);
         } else if (isMember && memberShow) {
@@ -892,12 +918,12 @@ function LiveStream() {
           const showId = memberShow.showid || memberShow.show_id || null;
           if (memberShow.is_group || memberShow.url_key === "jkt48-official") {
             const token = await generateStreamToken(identifier, true);
-            setStreamToken(token);  // ← update token
+            setStreamToken(token);
             const { url: streamUrl } = await getStreamURL(token, identifier, true);
             setMemberHlsUrl(streamUrl);
           } else if (showId) {
             const token = await generateStreamToken(String(showId), false);
-            setStreamToken(token);  // ← update token
+            setStreamToken(token);
             const { url: streamUrl } = await getStreamURL(token, String(showId), false);
             setMemberHlsUrl(streamUrl);
           }
@@ -980,48 +1006,74 @@ function LiveStream() {
 
   useEffect(() => { chatEndRef.current?.scrollIntoView({ behavior: "smooth" }); }, [chatMessages]);
 
+  // ── Main init effect ──────────────────────────────────────────────────────
   useEffect(() => {
     if (isMember) {
+      // Member stream tidak perlu gate akses
       loadMemberStream();
-    } else {
-      const init = async () => {
-        await fetchClientIP();
-        const hasMember = await checkMembership();
-        if (hasMember) { setIsVerified(true); setShowVerification(false); await loadIdnStream(); }
-        else {
-          const verified = await checkExistingVerification();
-          if (verified) await loadIdnStream();
-          else setLoading(false);
-        }
-      };
-      init();
+      return;
     }
+
+    // IDN show: cek akses dengan urutan prioritas:
+    // 1. Tiket (via Tickets API, butuh login + user_id)
+    // 2. Membership aktif (non-free)
+    // 3. Kode verifikasi (localStorage / input manual)
+    const init = async () => {
+      setMembershipLoading(true);
+      await fetchClientIP();
+
+      const session = getSession();
+
+      if (session) {
+        // Gate 1: cek tiket terlebih dahulu
+        const ticketOk = await checkTicket();
+        if (ticketOk) {
+          setIsVerified(true);
+          setShowVerification(false);
+          setMembershipLoading(false);
+          await loadIdnStream();
+          return;
+        }
+
+        // Gate 2: cek membership
+        const membershipOk = await checkMembership();
+        if (membershipOk) {
+          setIsVerified(true);
+          setShowVerification(false);
+          setMembershipLoading(false);
+          await loadIdnStream();
+          return;
+        }
+      }
+
+      // Gate 3: cek kode verifikasi yang tersimpan (berlaku meski tidak login)
+      const verified = await checkExistingVerification();
+      setMembershipLoading(false);
+      if (verified) {
+        await loadIdnStream();
+      } else {
+        setLoading(false);
+      }
+    };
+
+    init();
   }, [isMember]); // eslint-disable-line
 
   useEffect(() => { if (isIdn && isVerified && !idnShow) loadIdnStream(); }, [isVerified]); // eslint-disable-line
 
   const handleLogout = () => {
     localStorage.removeItem("stream_verification");
-    setIsVerified(false); setShowVerification(true);
-    setIdnShow(null); setHlsUrl(""); setQualities([]);
+    setIsVerified(false);
+    setShowVerification(true);
+    setIdnShow(null);
+    setHlsUrl("");
+    setQualities([]);
     setStreamToken("");
+    setHasTicket(false);
+    setHasMembership(false);
+    setAccessSource(null);
     setVerifData({ email: "", code: "" });
   };
-
-  const showTitle = isIdn
-    ? (idnShow?.title || "Live Stream JKT48")
-    : (memberShow?.name || "Live Member JKT48");
-
-  if (isIdn && membershipLoading) {
-    return (
-      <div className="min-h-screen rounded-2xl border border-gray-200 bg-white dark:border-gray-800 dark:bg-white/[0.03] flex items-center justify-center">
-        <div className="text-center">
-          <div className="w-10 h-10 border-[3px] border-gray-200 dark:border-gray-700 border-t-red-500 rounded-full animate-spin mx-auto mb-4" />
-          <p className="text-sm font-medium text-gray-500 dark:text-gray-400">Memeriksa akses...</p>
-        </div>
-      </div>
-    );
-  }
 
   const handleMembershipLogin = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -1048,22 +1100,62 @@ function LiveStream() {
 
       const uid = data.data.user?.user_id;
       const token = data.data.session?.access_token;
+
+      // Setelah login, cek tiket dulu baru membership
+      const slug = playbackId || "";
+
+      // Gate 1: cek tiket
+      try {
+        const ticketRes = await fetch(
+          `${TICKETS_API}/user/${uid}/show/${encodeURIComponent(slug)}?apikey=${API_KEY}`
+        );
+        if (ticketRes.ok) {
+          const ticketData = await ticketRes.json();
+          if (ticketData.has_ticket === true) {
+            setHasTicket(true);
+            setAccessSource("ticket");
+            setIsVerified(true);
+            setShowVerification(false);
+            setLoginLoading(false);
+            await loadIdnStream();
+            return;
+          }
+        }
+      } catch {}
+
+      // Gate 2: cek membership
       const profileRes = await fetch(`${API_BASE}/profile/${uid}?apikey=${API_KEY}`, {
         headers: { Authorization: `Bearer ${token}` },
       });
       const profileData = await profileRes.json();
       if (profileData.status && profileData.data?.is_active && profileData.data?.membership_type !== "free") {
         setHasMembership(true);
+        setAccessSource("membership");
         setIsVerified(true);
         setShowVerification(false);
         setLoginLoading(false);
         await loadIdnStream();
       } else {
-        setLoginError("Akun ini tidak memiliki membership aktif. Gunakan kode verifikasi.");
+        setLoginError("Akun ini tidak memiliki tiket atau membership aktif untuk show ini. Gunakan kode verifikasi.");
         setLoginLoading(false);
       }
     } catch { setLoginError("Gagal terhubung ke server. Coba lagi."); setLoginLoading(false); }
   };
+
+  const showTitle = isIdn
+    ? (idnShow?.title || "Live Stream JKT48")
+    : (memberShow?.name || "Live Member JKT48");
+
+  if (isIdn && membershipLoading) {
+    return (
+      <div className="min-h-screen rounded-2xl border border-gray-200 bg-white dark:border-gray-800 dark:bg-white/[0.03] flex items-center justify-center">
+        <div className="text-center">
+          <div className="w-10 h-10 border-[3px] border-gray-200 dark:border-gray-700 border-t-red-500 rounded-full animate-spin mx-auto mb-4" />
+          <p className="text-sm font-medium text-gray-500 dark:text-gray-400">Memeriksa akses...</p>
+        </div>
+      </div>
+    );
+  }
 
   if (isIdn && showVerification && !isVerified) {
     return (
@@ -1076,7 +1168,7 @@ function LiveStream() {
               </svg>
             </div>
             <h3 className="text-2xl font-bold text-gray-800 dark:text-white/90 mb-1.5">Akses IDN Live+</h3>
-            <p className="text-sm text-gray-500 dark:text-gray-400">Login dengan akun membership atau gunakan kode verifikasi</p>
+            <p className="text-sm text-gray-500 dark:text-gray-400">Login untuk cek tiket/membership, atau gunakan kode verifikasi</p>
           </div>
 
           <div className="flex gap-1 p-1 rounded-xl bg-gray-100 dark:bg-gray-800 mb-5">
@@ -1084,7 +1176,7 @@ function LiveStream() {
               onClick={() => { setAccessTab("login"); setLoginError(""); }}
               className={`flex-1 py-2 rounded-lg text-xs font-bold transition-all cursor-pointer border-0 ${accessTab === "login" ? "bg-white dark:bg-gray-700 text-gray-900 dark:text-white shadow-sm" : "bg-transparent text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-300"}`}
             >
-              🔑 Login Membership
+              🔑 Login Akun
             </button>
             <button
               onClick={() => { setAccessTab("code"); setVerifyError(""); }}
@@ -1096,6 +1188,15 @@ function LiveStream() {
 
           {accessTab === "login" && (
             <div className="bg-gray-50 dark:bg-gray-800/50 rounded-2xl border border-gray-200 dark:border-gray-700 p-6 mb-4">
+              {/* Info badge: login akan cek tiket dulu */}
+              <div className="flex items-start gap-2 px-3 py-2.5 rounded-xl bg-blue-50 dark:bg-blue-500/10 border border-blue-200 dark:border-blue-500/20 mb-4">
+                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="#3b82f6" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="flex-shrink-0 mt-0.5">
+                  <circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/>
+                </svg>
+                <p className="text-[11px] text-blue-700 dark:text-blue-400 leading-relaxed">
+                  Login akan otomatis cek <strong>tiket show ini</strong> dan <strong>membership aktif</strong> kamu.
+                </p>
+              </div>
               <form onSubmit={handleMembershipLogin} className="flex flex-col gap-4">
                 <div>
                   <label className="block text-xs font-semibold text-gray-600 dark:text-gray-400 mb-1.5 uppercase tracking-wide">Username / Email</label>
@@ -1112,10 +1213,10 @@ function LiveStream() {
                   </div>
                 )}
                 <button type="submit" disabled={loginLoading} className={`flex items-center justify-center gap-2 px-4 py-3.5 rounded-xl border-0 text-sm font-bold text-white transition-all duration-200 mt-1 ${loginLoading ? "bg-red-400 cursor-not-allowed" : "bg-red-500 hover:bg-red-600 cursor-pointer shadow-lg shadow-red-500/25 hover:shadow-red-500/40 hover:-translate-y-0.5"}`}>
-                  {loginLoading ? (<><div className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" />Memeriksa membership...</>) : (<><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><path d="M15 3h4a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2h-4"/><polyline points="10 17 15 12 10 7"/><line x1="15" y1="12" x2="3" y2="12"/></svg>Masuk dengan Membership</>)}
+                  {loginLoading ? (<><div className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" />Memeriksa akses...</>) : (<><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><path d="M15 3h4a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2h-4"/><polyline points="10 17 15 12 10 7"/><line x1="15" y1="12" x2="3" y2="12"/></svg>Masuk & Cek Akses</>)}
                 </button>
               </form>
-              <p className="text-[11px] text-gray-400 dark:text-gray-500 text-center mt-3">Membership aktif (non-free) dapat langsung menonton tanpa kode</p>
+              <p className="text-[11px] text-gray-400 dark:text-gray-500 text-center mt-3">Punya tiket show ini atau membership aktif? Login untuk akses otomatis.</p>
             </div>
           )}
 
@@ -1205,10 +1306,22 @@ function LiveStream() {
           </div>
           {isIdn && <span className="px-3 py-1.5 rounded-full bg-blue-50 dark:bg-blue-500/10 border border-blue-200 dark:border-blue-500/20 text-blue-600 dark:text-blue-400 text-[11px] font-bold">IDN Live+</span>}
           {isMember && <span className="px-3 py-1.5 rounded-full bg-emerald-50 dark:bg-emerald-500/10 border border-emerald-200 dark:border-emerald-500/20 text-emerald-600 dark:text-emerald-400 text-[11px] font-bold">Member Live</span>}
-          {isIdn && hasMembership && <span className="px-3 py-1.5 rounded-full bg-amber-50 dark:bg-amber-500/10 border border-amber-200 dark:border-amber-500/20 text-amber-600 dark:text-amber-400 text-[11px] font-bold">★ Monthly</span>}
+          {/* Access source badge */}
+          {isIdn && accessSource === "ticket" && (
+            <span className="px-3 py-1.5 rounded-full bg-green-50 dark:bg-green-500/10 border border-green-200 dark:border-green-500/20 text-green-600 dark:text-green-400 text-[11px] font-bold flex items-center gap-1">
+              <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><polyline points="20 6 9 17 4 12" /></svg>
+              Tiket Verified
+            </span>
+          )}
+          {isIdn && accessSource === "membership" && (
+            <span className="px-3 py-1.5 rounded-full bg-amber-50 dark:bg-amber-500/10 border border-amber-200 dark:border-amber-500/20 text-amber-600 dark:text-amber-400 text-[11px] font-bold">★ Monthly</span>
+          )}
+          {isIdn && accessSource === "code" && (
+            <span className="px-3 py-1.5 rounded-full bg-purple-50 dark:bg-purple-500/10 border border-purple-200 dark:border-purple-500/20 text-purple-600 dark:text-purple-400 text-[11px] font-bold">🎟️ Code</span>
+          )}
           {isIdn && idnShow && <span className="text-xs text-gray-500 dark:text-gray-400 font-medium">{idnShow.view_count?.toLocaleString() || 0} penonton</span>}
           {isMember && memberShow && <span className="text-xs text-gray-500 dark:text-gray-400">{memberShow.type?.toUpperCase()} · Mulai {new Date(memberShow.started_at).toLocaleTimeString("id-ID", { hour: "2-digit", minute: "2-digit" })} WIB</span>}
-          {isIdn && !hasMembership && isVerified && (
+          {isIdn && accessSource === "code" && isVerified && (
             <button onClick={handleLogout} className="ml-auto px-3 py-1.5 rounded-xl border border-gray-200 dark:border-gray-700 bg-transparent text-gray-500 dark:text-gray-400 text-[11px] font-semibold cursor-pointer hover:bg-gray-50 dark:hover:bg-gray-800/50 transition-colors">Logout</button>
           )}
         </div>
