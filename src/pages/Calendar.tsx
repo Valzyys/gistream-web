@@ -874,68 +874,73 @@ function ShowCard({ show, ticketStatus, isLoggedIn, membershipType, onBuy, onOpe
         </div>
 
         {/* Action Button */}
-        {/* Detail Button */}
-        
-          href={`/jadwal/${encodeURIComponent(show.id)}`}
-          style={{
-            display: "flex",
-            alignItems: "center",
-            justifyContent: "center",
-            gap: 6,
-            marginTop: 6,
-            padding: "8px 16px",
-            borderRadius: 10,
-            background: "transparent",
-            border: "1px solid #e5e7eb",
-            color: "#6b7280",
-            fontSize: 12,
-            fontWeight: 600,
-            textDecoration: "none",
-            transition: "all 0.15s",
-          }}
-          className="dark:border-gray-700 dark:text-gray-400 hover:border-brand-300 hover:text-brand-500 dark:hover:border-brand-600 dark:hover:text-brand-400"
-        >
-          <IconChevronRight size={14} color="currentColor" />
-          Lihat Detail
-        </a>
+        {/* Action Buttons */}
+        <div style={{ display: "flex", flexDirection: "column", gap: 6, marginTop: 6 }}>
+          {/* Detail Button */}
+          
+            href={`/jadwal/${encodeURIComponent(show.id)}`}
+            style={{
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "center",
+              gap: 6,
+              padding: "8px 16px",
+              borderRadius: 10,
+              background: "transparent",
+              border: "1px solid #e5e7eb",
+              color: "#6b7280",
+              fontSize: 12,
+              fontWeight: 600,
+              textDecoration: "none",
+              transition: "all 0.15s",
+            }}
+            className="dark:border-gray-700 dark:text-gray-400 hover:border-brand-300 hover:text-brand-500 dark:hover:border-brand-600 dark:hover:text-brand-400"
+          >
+            <IconChevronRight size={14} color="currentColor" />
+            Lihat Detail
+          </a>
 
-        {/* Action Button */}
-{isPaid ? (
-  <div style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: 7, marginTop: 6, padding: "9px 16px", borderRadius: 10, background: "rgba(34,197,94,0.1)", border: "1px solid rgba(34,197,94,0.2)", color: "#16a34a", fontSize: 13, fontWeight: 700 }}
-    className="dark:text-green-400">
-    <IconCheck size={14} color="#16a34a" /> Tiket Sudah Dibeli
-  </div>
-) : isPending ? (
-  <button
-    onClick={() => onOpenPending(show)}
-    style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: 7, marginTop: 6, padding: "9px 16px", borderRadius: 10, background: "rgba(251,191,36,0.1)", border: "1px solid rgba(251,191,36,0.25)", color: "#92400e", fontSize: 13, fontWeight: 700, cursor: "pointer", width: "100%", transition: "background 0.15s" }}
-    className="dark:text-yellow-400 hover:bg-amber-100 dark:hover:bg-amber-500/15"
-  >
-    <IconClock size={14} color="#92400e" /> Lanjutkan Pembayaran
-  </button>
-) : !isLoggedIn ? (
-  <a href="/signin" style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: 7, marginTop: 6, padding: "9px 16px", borderRadius: 10, fontSize: 13, fontWeight: 700, textDecoration: "none", background: "#f3f4f6", color: "#374151", border: "1px solid #e5e7eb" }}
-    className="dark:bg-white/10 dark:text-gray-300 dark:border-gray-700">
-    Login untuk Beli Tiket
-  </a>
-// ↓ BLOK BARU — membership aktif
-) : hasMembership ? (
-  <div
-    style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: 7, marginTop: 6, padding: "9px 16px", borderRadius: 10, background: "rgba(70,95,255,0.08)", border: "1px solid rgba(70,95,255,0.2)", color: "#465FFF", fontSize: 13, fontWeight: 700 }}
-    className="dark:text-brand-400"
-  >
-    <IconCheck size={14} color="#465FFF" /> Sudah Terbeli
-  </div>
-) : (
-  <RainbowButton
-    onClick={() => onBuy(show)}
-    className="w-full mt-1.5 flex items-center justify-center gap-1.5 text-[13px] font-bold py-[9px]"
-  >
-    <IconTicket size={14} color="white" />
-    Beli Tiket — Rp 7.000
-  </RainbowButton>
-)}
-      </div>
+          {/* Primary Action Button */}
+          {isPaid ? (
+            <div
+              style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: 7, padding: "9px 16px", borderRadius: 10, background: "rgba(34,197,94,0.1)", border: "1px solid rgba(34,197,94,0.2)", color: "#16a34a", fontSize: 13, fontWeight: 700 }}
+              className="dark:text-green-400"
+            >
+              <IconCheck size={14} color="#16a34a" /> Tiket Sudah Dibeli
+            </div>
+          ) : isPending ? (
+            <button
+              onClick={() => onOpenPending(show)}
+              style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: 7, padding: "9px 16px", borderRadius: 10, background: "rgba(251,191,36,0.1)", border: "1px solid rgba(251,191,36,0.25)", color: "#92400e", fontSize: 13, fontWeight: 700, cursor: "pointer", width: "100%", transition: "background 0.15s" }}
+              className="dark:text-yellow-400 hover:bg-amber-100 dark:hover:bg-amber-500/15"
+            >
+              <IconClock size={14} color="#92400e" /> Lanjutkan Pembayaran
+            </button>
+          ) : !isLoggedIn ? (
+            
+              href="/signin"
+              style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: 7, padding: "9px 16px", borderRadius: 10, fontSize: 13, fontWeight: 700, textDecoration: "none", background: "#f3f4f6", color: "#374151", border: "1px solid #e5e7eb" }}
+              className="dark:bg-white/10 dark:text-gray-300 dark:border-gray-700"
+            >
+              Login untuk Beli Tiket
+            </a>
+          ) : hasMembership ? (
+            <div
+              style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: 7, padding: "9px 16px", borderRadius: 10, background: "rgba(70,95,255,0.08)", border: "1px solid rgba(70,95,255,0.2)", color: "#465FFF", fontSize: 13, fontWeight: 700 }}
+              className="dark:text-brand-400"
+            >
+              <IconCheck size={14} color="#465FFF" /> Sudah Terbeli
+            </div>
+          ) : (
+            <RainbowButton
+              onClick={() => onBuy(show)}
+              className="w-full flex items-center justify-center gap-1.5 text-[13px] font-bold py-[9px]"
+            >
+              <IconTicket size={14} color="white" />
+              Beli Tiket — Rp 7.000
+            </RainbowButton>
+          )}
+        </div>
     </div>
   );
 }
