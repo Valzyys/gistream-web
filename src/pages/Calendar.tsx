@@ -868,7 +868,7 @@ function ShowCard({ show, ticketStatus, isLoggedIn, membershipType, onBuy, onOpe
 
           {/* Detail Button */}
           <a
-            href={`/jadwal/${encodeURIComponent(show.id)}`}
+            href={`/jadwal/${show.source === "idn" ? (show.showId ?? show.id) : show.id}`}
             style={{
               display: "flex",
               alignItems: "center",
