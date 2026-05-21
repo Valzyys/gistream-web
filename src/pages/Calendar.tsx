@@ -874,6 +874,31 @@ function ShowCard({ show, ticketStatus, isLoggedIn, membershipType, onBuy, onOpe
         </div>
 
         {/* Action Button */}
+        {/* Detail Button */}
+        
+          href={`/jadwal/${encodeURIComponent(show.id)}`}
+          style={{
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            gap: 6,
+            marginTop: 6,
+            padding: "8px 16px",
+            borderRadius: 10,
+            background: "transparent",
+            border: "1px solid #e5e7eb",
+            color: "#6b7280",
+            fontSize: 12,
+            fontWeight: 600,
+            textDecoration: "none",
+            transition: "all 0.15s",
+          }}
+          className="dark:border-gray-700 dark:text-gray-400 hover:border-brand-300 hover:text-brand-500 dark:hover:border-brand-600 dark:hover:text-brand-400"
+        >
+          <IconChevronRight size={14} color="currentColor" />
+          Lihat Detail
+        </a>
+
         {/* Action Button */}
 {isPaid ? (
   <div style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: 7, marginTop: 6, padding: "9px 16px", borderRadius: 10, background: "rgba(34,197,94,0.1)", border: "1px solid rgba(34,197,94,0.2)", color: "#16a34a", fontSize: 13, fontWeight: 700 }}
