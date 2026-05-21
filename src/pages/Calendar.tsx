@@ -249,7 +249,6 @@ function PaymentModal({ show, onClose, onSuccess, onCancelled, loginData, pendin
   const [error, setError] = useState("");
   const [copied, setCopied] = useState(false);
 
-  // If pending order: fetch its current status
   useEffect(() => {
     if (!pendingOrder) return;
     const fetchPending = async () => {
@@ -267,7 +266,6 @@ function PaymentModal({ show, onClose, onSuccess, onCancelled, loginData, pendin
           setStep("method");
           return;
         }
-        // Still pending — build minimal order object from check response
         setOrder({
           ticket_id: data.data?.ticket_id || "",
           ref_id: pendingOrder.ref_id,
@@ -294,7 +292,6 @@ function PaymentModal({ show, onClose, onSuccess, onCancelled, loginData, pendin
     fetchPending();
   }, [pendingOrder]);
 
-  // Load payment methods
   useEffect(() => {
     if (pendingOrder) return;
     fetch(`${TICKETS_API}/methods?apikey=JKTCONNECT`)
@@ -312,7 +309,6 @@ function PaymentModal({ show, onClose, onSuccess, onCancelled, loginData, pendin
       .finally(() => setLoadingMethods(false));
   }, [pendingOrder]);
 
-  // Payment countdown timer
   useEffect(() => {
     if (step !== "payment" || !order) return;
     const expiry = new Date(order.expired_at).getTime();
@@ -322,7 +318,6 @@ function PaymentModal({ show, onClose, onSuccess, onCancelled, loginData, pendin
     return () => clearInterval(iv);
   }, [step, order]);
 
-  // Auto-poll payment status
   useEffect(() => {
     if (step !== "payment" || !order) return;
     let stopped = false;
@@ -600,7 +595,6 @@ function PaymentModal({ show, onClose, onSuccess, onCancelled, loginData, pendin
           {/* PAYMENT */}
           {step === "payment" && order && (
             <div className="space-y-4">
-              {/* Timer */}
               <div className={`flex items-center justify-between p-3 rounded-xl border ${
                 timerDanger
                   ? "bg-red-50 dark:bg-red-500/10 border-red-200 dark:border-red-500/20"
@@ -617,7 +611,6 @@ function PaymentModal({ show, onClose, onSuccess, onCancelled, loginData, pendin
                 </span>
               </div>
 
-              {/* Order info */}
               <div className="p-3 rounded-xl bg-gray-50 dark:bg-white/[0.04] border border-gray-200 dark:border-gray-700 space-y-2">
                 <div className="flex justify-between items-center">
                   <span className="text-xs text-gray-500 dark:text-gray-400">Ref ID</span>
@@ -637,7 +630,6 @@ function PaymentModal({ show, onClose, onSuccess, onCancelled, loginData, pendin
                 </div>
               </div>
 
-              {/* Virtual Account */}
               {order.nomor_va && (
                 <div className="p-4 rounded-xl border border-gray-200 dark:border-gray-700 bg-white dark:bg-white/[0.03]">
                   <p className="text-xs text-gray-500 dark:text-gray-400 mb-2">Nomor Virtual Account</p>
@@ -658,7 +650,6 @@ function PaymentModal({ show, onClose, onSuccess, onCancelled, loginData, pendin
                 </div>
               )}
 
-              {/* QR Code */}
               {order.qr_image && (
                 <div className="flex flex-col items-center p-4 rounded-xl border border-gray-200 dark:border-gray-700 bg-white dark:bg-white/[0.03]">
                   <p className="text-xs font-semibold text-gray-500 dark:text-gray-400 mb-3">Scan QR Code</p>
@@ -666,7 +657,6 @@ function PaymentModal({ show, onClose, onSuccess, onCancelled, loginData, pendin
                 </div>
               )}
 
-              {/* Payment URL */}
               {(order.checkout_url || order.payment_url) && !order.nomor_va && !order.qr_image && (
                 <a
                   href={order.checkout_url || order.payment_url!}
@@ -679,7 +669,6 @@ function PaymentModal({ show, onClose, onSuccess, onCancelled, loginData, pendin
                 </a>
               )}
 
-              {/* Expired */}
               {pollStatus === "expired" && (
                 <div className="p-3 rounded-xl bg-red-50 dark:bg-red-500/10 border border-red-200 dark:border-red-500/20 flex items-center gap-2">
                   <IconClock size={14} color="#ef4444" />
@@ -693,7 +682,6 @@ function PaymentModal({ show, onClose, onSuccess, onCancelled, loginData, pendin
                 </div>
               )}
 
-              {/* Action buttons */}
               <div className="flex gap-2">
                 <button
                   onClick={handleManualCheck}
@@ -777,7 +765,7 @@ interface ShowCardProps {
   show: NormalizedShow;
   ticketStatus: UserTicketStatus | null;
   isLoggedIn: boolean;
-  membershipType?: string; // ← tambah ini
+  membershipType?: string;
   onBuy: (show: NormalizedShow) => void;
   onOpenPending: (show: NormalizedShow) => void;
 }
@@ -788,7 +776,7 @@ function ShowCard({ show, ticketStatus, isLoggedIn, membershipType, onBuy, onOpe
   const cd = useCountdown(show.scheduledAt, showCountdown);
   const isPaid = ticketStatus?.has_ticket;
   const isPending = ticketStatus?.has_pending && !isPaid;
-  const hasMembership = !!membershipType && membershipType !== "free"; // ← tambah ini
+  const hasMembership = !!membershipType && membershipType !== "free";
 
   const formatDate = (ts: number) =>
     new Date(ts).toLocaleDateString("id-ID", { weekday: "long", day: "numeric", month: "long", year: "numeric" });
@@ -834,8 +822,10 @@ function ShowCard({ show, ticketStatus, isLoggedIn, membershipType, onBuy, onOpe
 
         <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
           {show.source === "theater" && show.type && (
-            <span style={{ fontSize: 10, fontWeight: 700, padding: "3px 9px", borderRadius: 999, background: show.type === "EVENT" ? "rgba(255,215,0,0.12)" : "rgba(220,31,46,0.12)", color: show.type === "EVENT" ? "#b45309" : "#DC1F2E", border: `1px solid ${show.type === "EVENT" ? "rgba(255,215,0,0.3)" : "rgba(220,31,46,0.25)"}` }}
-              className={show.type === "EVENT" ? "dark:text-yellow-400" : "dark:text-red-400"}>
+            <span
+              style={{ fontSize: 10, fontWeight: 700, padding: "3px 9px", borderRadius: 999, background: show.type === "EVENT" ? "rgba(255,215,0,0.12)" : "rgba(220,31,46,0.12)", color: show.type === "EVENT" ? "#b45309" : "#DC1F2E", border: `1px solid ${show.type === "EVENT" ? "rgba(255,215,0,0.3)" : "rgba(220,31,46,0.25)"}` }}
+              className={show.type === "EVENT" ? "dark:text-yellow-400" : "dark:text-red-400"}
+            >
               {show.type}{show.referenceCode ? ` · ${show.referenceCode}` : ""}
             </span>
           )}
@@ -873,11 +863,11 @@ function ShowCard({ show, ticketStatus, isLoggedIn, membershipType, onBuy, onOpe
           )}
         </div>
 
-        {/* Action Button */}
         {/* Action Buttons */}
         <div style={{ display: "flex", flexDirection: "column", gap: 6, marginTop: 6 }}>
+
           {/* Detail Button */}
-          
+          <a
             href={`/jadwal/${encodeURIComponent(show.id)}`}
             style={{
               display: "flex",
@@ -917,7 +907,7 @@ function ShowCard({ show, ticketStatus, isLoggedIn, membershipType, onBuy, onOpe
               <IconClock size={14} color="#92400e" /> Lanjutkan Pembayaran
             </button>
           ) : !isLoggedIn ? (
-            
+            <a
               href="/signin"
               style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: 7, padding: "9px 16px", borderRadius: 10, fontSize: 13, fontWeight: 700, textDecoration: "none", background: "#f3f4f6", color: "#374151", border: "1px solid #e5e7eb" }}
               className="dark:bg-white/10 dark:text-gray-300 dark:border-gray-700"
@@ -941,6 +931,7 @@ function ShowCard({ show, ticketStatus, isLoggedIn, membershipType, onBuy, onOpe
             </RainbowButton>
           )}
         </div>
+      </div>
     </div>
   );
 }
@@ -1028,7 +1019,7 @@ const ShowSchedulePage: React.FC = () => {
   const liveCount = shows.filter((s) => s.status === "live").length;
   const scheduledCount = shows.filter((s) => s.status === "scheduled").length;
   const membershipType = loginData?.user?.membership_type || "free";
-  
+
   const filterTabs: { key: FilterType; label: string }[] = [
     { key: "all", label: "Semua" },
     { key: "live", label: "Live" },
@@ -1112,7 +1103,7 @@ const ShowSchedulePage: React.FC = () => {
                   show={show}
                   ticketStatus={ticketStatuses[show.id] || null}
                   isLoggedIn={isLoggedIn}
-                  membershipType={membershipType} // ← tambah ini
+                  membershipType={membershipType}
                   onBuy={(s) => setBuyingShow(s)}
                   onOpenPending={(s) => setPendingShow(s)}
                 />
