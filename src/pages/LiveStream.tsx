@@ -650,9 +650,7 @@ function LiveStream() {
   const [memberHlsUrl,      setMemberHlsUrl]      = useState("");
   const [memberRoomId,      setMemberRoomId]      = useState<number | null>(null);
   const [membershipLoading, setMembershipLoading] = useState(isIdn);
-  const [hasMembership,     setHasMembership]     = useState(false);
-  const [hasTicket,         setHasTicket]         = useState(false);  // ← ticket gate
-  const [accessSource,      setAccessSource]      = useState<"ticket" | "membership" | "code" | null>(null); // ← how user got access
+  const [accessSource,      setAccessSource]      = useState<"ticket" | "membership" | "code" | null>(null);
   const [isVerified,        setIsVerified]        = useState(false);
   const [showVerification,  setShowVerification]  = useState(false);
   const [verifData,         setVerifData]         = useState({ email: "", code: "" });
@@ -703,7 +701,6 @@ function LiveStream() {
       const data = await res.json();
       // has_ticket = true berarti tiket sudah dibayar lunas
       if (data.has_ticket === true) {
-        setHasTicket(true);
         setAccessSource("ticket");
         return true;
       }
@@ -725,7 +722,6 @@ function LiveStream() {
       });
       const data = await res.json();
       if (data.status && data.data?.is_active && data.data?.membership_type !== "free") {
-        setHasMembership(true);
         setAccessSource("membership");
         return true;
       }
@@ -1069,8 +1065,6 @@ function LiveStream() {
     setHlsUrl("");
     setQualities([]);
     setStreamToken("");
-    setHasTicket(false);
-    setHasMembership(false);
     setAccessSource(null);
     setVerifData({ email: "", code: "" });
   };
@@ -1112,7 +1106,6 @@ function LiveStream() {
         if (ticketRes.ok) {
           const ticketData = await ticketRes.json();
           if (ticketData.has_ticket === true) {
-            setHasTicket(true);
             setAccessSource("ticket");
             setIsVerified(true);
             setShowVerification(false);
@@ -1129,7 +1122,6 @@ function LiveStream() {
       });
       const profileData = await profileRes.json();
       if (profileData.status && profileData.data?.is_active && profileData.data?.membership_type !== "free") {
-        setHasMembership(true);
         setAccessSource("membership");
         setIsVerified(true);
         setShowVerification(false);
