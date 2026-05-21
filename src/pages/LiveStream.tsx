@@ -364,7 +364,7 @@ function HlsPlayer({
         }
       `}</style>
 
-      <Backlight blur={20} className="w-full">
+      <Backlight blur={50} className="w-full">
         <div className={isIdn ? "aspect-video" : ""}>
           <video
             ref={videoRef}
