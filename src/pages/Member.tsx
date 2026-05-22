@@ -1,3 +1,4 @@
+
 import { useEffect, useState, useMemo } from "react";
 import PageMeta from "../components/common/PageMeta";
 
@@ -40,22 +41,31 @@ interface CacheData {
 type FilterMode = "active" | "graduated" | "all";
 type SortMode = "name" | "generation" | "team";
 
-// ── Image URL Proxy Helper ────────────────────────────────────────────────────
-// Ganti domain jkt48.com → img.jkt48connect.com/jkt48/theater/members
-// Jika URL sudah pakai img.jkt48connect.com, biarkan apa adanya
-const proxyImageUrl = (url: string): string => {
+// ── Image URL Helper ──────────────────────────────────────────────────────────
+// Normalize: pastikan URL selalu pakai img.jkt48connect.com
+// Pola yang di-handle:
+//   https://jkt48.com/api/v1/storages/...
+//   → https://img.jkt48connect.com/jkt48/theater/members/api/v1/storages/...
+//
+// Jika sudah pakai img.jkt48connect.com → biarkan apa adanya
+const normalizeImgUrl = (url: string): string => {
   if (!url) return url;
-  if (url.includes("img.jkt48connect.com")) return url; // sudah proxy, skip
-  return url.replace(
-    "https://jkt48.com",
-    "https://img.jkt48connect.com/jkt48/theater/members"
-  );
+  // Sudah pakai proxy → tidak diubah
+  if (url.startsWith("https://img.jkt48connect.com")) return url;
+  // Dari jkt48.com → ganti ke proxy
+  if (url.startsWith("https://jkt48.com")) {
+    return url.replace(
+      "https://jkt48.com",
+      "https://img.jkt48connect.com/jkt48/theater/members"
+    );
+  }
+  return url;
 };
 
-const proxyMember = (m: Member): Member => ({
+const normalizeMember = (m: Member): Member => ({
   ...m,
-  img: proxyImageUrl(m.img),
-  img_alt: proxyImageUrl(m.img_alt),
+  img:     normalizeImgUrl(m.img),
+  img_alt: normalizeImgUrl(m.img_alt),
 });
 
 // ── Cache Helpers ─────────────────────────────────────────────────────────────
@@ -64,8 +74,8 @@ const getCache = (): CacheData | null => {
     const raw = localStorage.getItem(CACHE_KEY);
     if (!raw) return null;
     const data: CacheData = JSON.parse(raw);
-    // Migrasi cache lama: pastikan URL selalu pakai domain proxy
-    data.members = data.members.map(proxyMember);
+    // Re-normalize saat baca cache (migrasi otomatis URL lama)
+    data.members = data.members.map(normalizeMember);
     return data;
   } catch {
     return null;
@@ -200,23 +210,39 @@ const getSocialIcon = (title: string) => {
 
 // ── Member Card ──────────────────────────────────────────────────────────────
 function MemberCard({ member, isMobile }: { member: Member; isMobile: boolean }) {
-  // Fallback chain: img_alt → img → avatar placeholder
-  const getInitialSrc = () => member.img_alt || member.img;
-  const [imgSrc, setImgSrc] = useState(getInitialSrc);
-  const [errCount, setErrCount] = useState(0);
   const tc = member.team ? teamColor[member.team.toLowerCase()] : null;
 
-  const handleImgError = () => {
-    const next = errCount + 1;
-    setErrCount(next);
-    if (next === 1 && member.img && member.img !== imgSrc) {
-      // Coba fallback ke img jika img_alt gagal
-      setImgSrc(member.img);
-    } else {
-      // Semua gagal → avatar placeholder berbasis nama
-      setImgSrc(
-        `https://ui-avatars.com/api/?name=${encodeURIComponent(member.name)}&size=400&background=f3f4f6&color=9ca3af&bold=true&format=png`
-      );
+  // Fallback chain:
+  // 1. img_alt (proxy)
+  // 2. img (proxy, biasanya sama)
+  // 3. jkt48.com langsung (bypass proxy)
+  // 4. ui-avatars placeholder
+  const buildFallbacks = (m: Member): string[] => {
+    const list: string[] = [];
+    if (m.img_alt) list.push(m.img_alt);
+    if (m.img && m.img !== m.img_alt) list.push(m.img);
+    // Fallback ke jkt48.com langsung jika proxy gagal
+    const directUrl = (m.img_alt || m.img || "").replace(
+      /^https:\/\/img\.jkt48connect\.com\/jkt48\/(theater\/members|members)\//,
+      "https://jkt48.com/"
+    );
+    if (directUrl && !list.includes(directUrl)) list.push(directUrl);
+    // Avatar placeholder sebagai last resort
+    list.push(
+      `https://ui-avatars.com/api/?name=${encodeURIComponent(m.name)}&size=400&background=f3f4f6&color=9ca3af&bold=true&format=png`
+    );
+    return list;
+  };
+
+  const fallbacks = buildFallbacks(member);
+  const [imgSrc, setImgSrc] = useState(fallbacks[0]);
+  const [fbIdx, setFbIdx] = useState(0);
+
+  const handleError = () => {
+    const next = fbIdx + 1;
+    if (next < fallbacks.length) {
+      setFbIdx(next);
+      setImgSrc(fallbacks[next]);
     }
   };
 
@@ -253,7 +279,7 @@ function MemberCard({ member, isMobile }: { member: Member; isMobile: boolean })
           src={imgSrc}
           alt={member.name}
           style={{ width: "100%", height: "100%", objectFit: "cover", display: "block" }}
-          onError={handleImgError}
+          onError={handleError}
           loading="lazy"
         />
 
@@ -557,12 +583,17 @@ const MembersPage: React.FC = () => {
       const gradData: Member[] = Array.isArray(gradJson) ? gradJson : [];
 
       const map = new Map<string, Member>();
-      [...activeData, ...gradData].forEach((m) => map.set(m._id, proxyMember(m)));
+      [...activeData, ...gradData].forEach((m) => {
+        const key = m._id || m.jkt48_id || m.url;
+        if (key) map.set(key, normalizeMember(m));
+      });
       const freshMembers = Array.from(map.values());
 
       const cache = getCache();
-      const cacheStr = cache ? JSON.stringify(cache.members.map(m => m._id).sort()) : "";
-      const freshStr = JSON.stringify(freshMembers.map(m => m._id).sort());
+      const cacheStr = cache
+        ? JSON.stringify(cache.members.map(m => m._id || m.jkt48_id).sort())
+        : "";
+      const freshStr = JSON.stringify(freshMembers.map(m => m._id || m.jkt48_id).sort());
       const hasChanged = cacheStr !== freshStr;
 
       if (hasChanged || !cache) {
@@ -600,18 +631,21 @@ const MembersPage: React.FC = () => {
       const gradData: Member[] = Array.isArray(gradJson) ? gradJson : [];
 
       const map = new Map<string, Member>();
-      [...activeData, ...gradData].forEach((m) => map.set(m._id, proxyMember(m)));
+      [...activeData, ...gradData].forEach((m) => {
+        const key = m._id || m.jkt48_id || m.url;
+        if (key) map.set(key, normalizeMember(m));
+      });
       const freshMembers = Array.from(map.values());
 
       const cacheStr = JSON.stringify(
         cache.members
           .map(m => ({ id: m._id, team: m.team, gen: m.generation }))
-          .sort((a, b) => a.id.localeCompare(b.id))
+          .sort((a, b) => (a.id || "").localeCompare(b.id || ""))
       );
       const freshStr = JSON.stringify(
         freshMembers
           .map(m => ({ id: m._id, team: m.team, gen: m.generation }))
-          .sort((a, b) => a.id.localeCompare(b.id))
+          .sort((a, b) => (a.id || "").localeCompare(b.id || ""))
       );
 
       if (cacheStr !== freshStr) {
@@ -635,7 +669,9 @@ const MembersPage: React.FC = () => {
     const t = new Set<string>();
     members
       .filter((m) => !m.is_graduate)
-      .forEach((m) => { if (m.team) t.add(m.team.toLowerCase()); });
+      .forEach((m) => {
+        if (m.team) t.add(m.team.toLowerCase());
+      });
     return Array.from(t).sort();
   }, [members]);
 
@@ -1050,7 +1086,11 @@ const MembersPage: React.FC = () => {
                 gap: isMobile ? 8 : 16,
               }}>
                 {filtered.map((member) => (
-                  <MemberCard key={member._id || member.jkt48_id} member={member} isMobile={isMobile} />
+                  <MemberCard
+                    key={member._id || member.jkt48_id || member.url}
+                    member={member}
+                    isMobile={isMobile}
+                  />
                 ))}
               </div>
 
