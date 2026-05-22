@@ -41,8 +41,11 @@ type FilterMode = "active" | "graduated" | "all";
 type SortMode = "name" | "generation" | "team";
 
 // ── Image URL Proxy Helper ────────────────────────────────────────────────────
+// Ganti domain jkt48.com → img.jkt48connect.com/jkt48/theater/members
+// Jika URL sudah pakai img.jkt48connect.com, biarkan apa adanya
 const proxyImageUrl = (url: string): string => {
   if (!url) return url;
+  if (url.includes("img.jkt48connect.com")) return url; // sudah proxy, skip
   return url.replace(
     "https://jkt48.com",
     "https://img.jkt48connect.com/jkt48/theater/members"
@@ -197,8 +200,25 @@ const getSocialIcon = (title: string) => {
 
 // ── Member Card ──────────────────────────────────────────────────────────────
 function MemberCard({ member, isMobile }: { member: Member; isMobile: boolean }) {
-  const [imgSrc, setImgSrc] = useState(member.img_alt || member.img);
+  // Fallback chain: img_alt → img → avatar placeholder
+  const getInitialSrc = () => member.img_alt || member.img;
+  const [imgSrc, setImgSrc] = useState(getInitialSrc);
+  const [errCount, setErrCount] = useState(0);
   const tc = member.team ? teamColor[member.team.toLowerCase()] : null;
+
+  const handleImgError = () => {
+    const next = errCount + 1;
+    setErrCount(next);
+    if (next === 1 && member.img && member.img !== imgSrc) {
+      // Coba fallback ke img jika img_alt gagal
+      setImgSrc(member.img);
+    } else {
+      // Semua gagal → avatar placeholder berbasis nama
+      setImgSrc(
+        `https://ui-avatars.com/api/?name=${encodeURIComponent(member.name)}&size=400&background=f3f4f6&color=9ca3af&bold=true&format=png`
+      );
+    }
+  };
 
   return (
     <div
@@ -233,7 +253,7 @@ function MemberCard({ member, isMobile }: { member: Member; isMobile: boolean })
           src={imgSrc}
           alt={member.name}
           style={{ width: "100%", height: "100%", objectFit: "cover", display: "block" }}
-          onError={() => setImgSrc(member.img)}
+          onError={handleImgError}
           loading="lazy"
         />
 
@@ -354,7 +374,7 @@ function MemberCard({ member, isMobile }: { member: Member; isMobile: boolean })
           )}
         </div>
 
-        {/* Social icons — sembunyikan di mobile untuk hemat ruang */}
+        {/* Social icons — desktop */}
         {!isMobile && member.socials.length > 0 && (
           <div style={{ display: "flex", gap: 4, flexWrap: "wrap" }}>
             {member.socials.slice(0, 6).map((s, i) => (
@@ -393,7 +413,7 @@ function MemberCard({ member, isMobile }: { member: Member; isMobile: boolean })
           </div>
         )}
 
-        {/* Mobile: social icons compact */}
+        {/* Social icons — mobile compact */}
         {isMobile && member.socials.length > 0 && (
           <div style={{ display: "flex", gap: 3, flexWrap: "wrap" }}>
             {member.socials.slice(0, 3).map((s, i) => (
@@ -423,7 +443,7 @@ function MemberCard({ member, isMobile }: { member: Member; isMobile: boolean })
           </div>
         )}
 
-        {/* Platform indicators */}
+        {/* Platform indicators — desktop */}
         {!isMobile && (
           <div style={{ display: "flex", gap: 5, flexWrap: "wrap" }}>
             {member.sr_exists && (
@@ -455,28 +475,22 @@ function MemberCard({ member, isMobile }: { member: Member; isMobile: boolean })
           </div>
         )}
 
-        {/* Mobile: platform dot indicators */}
+        {/* Platform dot indicators — mobile */}
         {isMobile && (member.sr_exists || member.idn_username) && (
           <div style={{ display: "flex", gap: 3 }}>
             {member.sr_exists && (
               <span style={{
                 width: 6, height: 6, borderRadius: "50%",
                 background: "#EF4444",
-                display: "inline-block",
-                flexShrink: 0,
-              }}
-                title="SHOWROOM"
-              />
+                display: "inline-block", flexShrink: 0,
+              }} title="SHOWROOM" />
             )}
             {member.idn_username && (
               <span style={{
                 width: 6, height: 6, borderRadius: "50%",
                 background: "#D97706",
-                display: "inline-block",
-                flexShrink: 0,
-              }}
-                title="IDN Live"
-              />
+                display: "inline-block", flexShrink: 0,
+              }} title="IDN Live" />
             )}
           </div>
         )}
@@ -507,19 +521,15 @@ const MembersPage: React.FC = () => {
 
   // ── Fetch dengan cache strategy ───────────────────────────────────────────
   const fetchMembers = async (forceRefresh = false) => {
-    // 1. Cek cache dulu — tampilkan segera jika valid
     const cache = getCache();
     if (!forceRefresh && cache && isCacheValid(cache)) {
       setMembers(cache.members);
       setCacheInfo({ fromCache: true, timestamp: cache.timestamp });
       setLoading(false);
-
-      // Background refresh untuk cek perubahan
       refreshInBackground(cache);
       return;
     }
 
-    // 2. Cache expired atau tidak ada — tampilkan cache lama dulu (jika ada)
     if (cache && cache.members.length > 0) {
       setMembers(cache.members);
       setCacheInfo({ fromCache: true, timestamp: cache.timestamp });
@@ -527,7 +537,6 @@ const MembersPage: React.FC = () => {
       setIsRefreshing(true);
     }
 
-    // 3. Fetch data baru
     await fetchFromAPI(forceRefresh);
   };
 
@@ -551,7 +560,6 @@ const MembersPage: React.FC = () => {
       [...activeData, ...gradData].forEach((m) => map.set(m._id, proxyMember(m)));
       const freshMembers = Array.from(map.values());
 
-      // Cek apakah data berubah dibanding cache
       const cache = getCache();
       const cacheStr = cache ? JSON.stringify(cache.members.map(m => m._id).sort()) : "";
       const freshStr = JSON.stringify(freshMembers.map(m => m._id).sort());
@@ -562,13 +570,11 @@ const MembersPage: React.FC = () => {
         setCache(freshMembers);
         setCacheInfo({ fromCache: false, timestamp: Date.now() });
       } else {
-        // Data sama, update timestamp cache saja
         setCache(cache.members);
         setCacheInfo({ fromCache: true, timestamp: Date.now() });
       }
     } catch (e) {
       console.error("Error fetching members:", e);
-      // Jika gagal fetch tapi ada cache, tetap pakai cache
       const cache = getCache();
       if (cache && members.length === 0) {
         setMembers(cache.members);
@@ -581,7 +587,6 @@ const MembersPage: React.FC = () => {
   };
 
   const refreshInBackground = async (cache: CacheData) => {
-    // Silent background check
     try {
       const [activeRes, gradRes] = await Promise.all([
         fetch(`${MEMBERS_API}?apikey=${API_KEY}`),
@@ -598,21 +603,22 @@ const MembersPage: React.FC = () => {
       [...activeData, ...gradData].forEach((m) => map.set(m._id, proxyMember(m)));
       const freshMembers = Array.from(map.values());
 
-      // Bandingkan lebih detail (termasuk perubahan data member)
       const cacheStr = JSON.stringify(
-        cache.members.map(m => ({ id: m._id, team: m.team, gen: m.generation })).sort((a, b) => a.id.localeCompare(b.id))
+        cache.members
+          .map(m => ({ id: m._id, team: m.team, gen: m.generation }))
+          .sort((a, b) => a.id.localeCompare(b.id))
       );
       const freshStr = JSON.stringify(
-        freshMembers.map(m => ({ id: m._id, team: m.team, gen: m.generation })).sort((a, b) => a.id.localeCompare(b.id))
+        freshMembers
+          .map(m => ({ id: m._id, team: m.team, gen: m.generation }))
+          .sort((a, b) => a.id.localeCompare(b.id))
       );
 
       if (cacheStr !== freshStr) {
-        // Ada perubahan — update state & cache
         setMembers(freshMembers);
         setCache(freshMembers);
         setCacheInfo({ fromCache: false, timestamp: Date.now() });
       } else {
-        // Tidak ada perubahan — refresh timestamp cache saja
         setCache(cache.members);
       }
     } catch {
@@ -713,7 +719,6 @@ const MembersPage: React.FC = () => {
                     style={{ margin: 0 }}>
                     Members JKT48
                   </h1>
-                  {/* Refreshing indicator */}
                   {isRefreshing && (
                     <div style={{
                       display: "inline-flex", alignItems: "center", gap: 4,
@@ -738,16 +743,13 @@ const MembersPage: React.FC = () => {
                   <p style={{ margin: 0, fontSize: 12, color: "#9ca3af" }}>
                     {activeCount} aktif · {graduatedCount} alumni
                   </p>
-                  {/* Cache info */}
                   {cacheInfo && (
                     <span style={{
                       fontSize: 10, color: "#9ca3af",
                       display: "flex", alignItems: "center", gap: 3,
                     }}>
                       ·
-                      <span style={{
-                        color: cacheInfo.fromCache ? "#D97706" : "#10B981",
-                      }}>
+                      <span style={{ color: cacheInfo.fromCache ? "#D97706" : "#10B981" }}>
                         {cacheInfo.fromCache
                           ? `Cache ${formatCacheTime(cacheInfo.timestamp!)}`
                           : "Data terbaru"}
@@ -788,7 +790,6 @@ const MembersPage: React.FC = () => {
                 />
               </div>
 
-              {/* Manual refresh button */}
               <button
                 onClick={() => fetchMembers(true)}
                 disabled={isRefreshing || loading}
@@ -994,13 +995,8 @@ const MembersPage: React.FC = () => {
                 <path d="M16 3.13a4 4 0 0 1 0 7.75" />
               </svg>
               <div>
-                <h3 style={{
-                  margin: "0 0 6px",
-                  fontSize: 16, fontWeight: 700,
-                  color: "#374151",
-                }}
-                  className="dark:text-gray-300"
-                >
+                <h3 style={{ margin: "0 0 6px", fontSize: 16, fontWeight: 700, color: "#374151" }}
+                  className="dark:text-gray-300">
                   Member Tidak Ditemukan
                 </h3>
                 <p style={{ margin: 0, fontSize: 13, color: "#9ca3af" }}>
@@ -1054,11 +1050,11 @@ const MembersPage: React.FC = () => {
                 gap: isMobile ? 8 : 16,
               }}>
                 {filtered.map((member) => (
-                  <MemberCard key={member._id} member={member} isMobile={isMobile} />
+                  <MemberCard key={member._id || member.jkt48_id} member={member} isMobile={isMobile} />
                 ))}
               </div>
 
-              {/* ── Refreshing overlay bar ── */}
+              {/* ── Refreshing bar ── */}
               {isRefreshing && (
                 <div style={{
                   marginTop: 16,
@@ -1112,22 +1108,18 @@ const MembersPage: React.FC = () => {
               member
             </p>
 
-            {/* Team legend — sembunyikan di mobile */}
+            {/* Team legend — desktop */}
             {!isMobile && (
               <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
                 {Object.entries(teamColor).map(([team, tc]) => (
-                  <span
-                    key={team}
-                    style={{
-                      display: "flex", alignItems: "center",
-                      gap: 5, fontSize: 11, color: "#9ca3af",
-                      textTransform: "capitalize",
-                    }}
-                  >
+                  <span key={team} style={{
+                    display: "flex", alignItems: "center",
+                    gap: 5, fontSize: 11, color: "#9ca3af",
+                    textTransform: "capitalize",
+                  }}>
                     <span style={{
                       width: 8, height: 8, borderRadius: "50%",
-                      background: tc.color, display: "inline-block",
-                      flexShrink: 0,
+                      background: tc.color, display: "inline-block", flexShrink: 0,
                     }} />
                     {team}
                   </span>
@@ -1135,22 +1127,18 @@ const MembersPage: React.FC = () => {
               </div>
             )}
 
-            {/* Mobile: team legend compact */}
+            {/* Team legend — mobile compact */}
             {isMobile && (
               <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
                 {Object.entries(teamColor).map(([team, tc]) => (
-                  <span
-                    key={team}
-                    style={{
-                      display: "flex", alignItems: "center",
-                      gap: 3, fontSize: 10, color: "#9ca3af",
-                      textTransform: "capitalize",
-                    }}
-                  >
+                  <span key={team} style={{
+                    display: "flex", alignItems: "center",
+                    gap: 3, fontSize: 10, color: "#9ca3af",
+                    textTransform: "capitalize",
+                  }}>
                     <span style={{
                       width: 6, height: 6, borderRadius: "50%",
-                      background: tc.color, display: "inline-block",
-                      flexShrink: 0,
+                      background: tc.color, display: "inline-block", flexShrink: 0,
                     }} />
                     {team}
                   </span>
