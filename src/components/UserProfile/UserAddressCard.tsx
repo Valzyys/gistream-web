@@ -3,7 +3,7 @@ import { useModal } from "../../hooks/useModal";
 import { Modal } from "../ui/modal";
 import Button from "../ui/button/Button";
 
-const API_BASE = "https://v2.jkt48connect.com/api/jkt48connect";
+const API_BASE = "https://v5.jkt48connect.com/api/jkt48connect";
 const API_KEY = "JKTCONNECT";
 
 interface Order {
