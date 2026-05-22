@@ -6,7 +6,7 @@ import { DropdownItem } from "../ui/dropdown/DropdownItem";
 import { MoreDotIcon } from "../../icons";
 
 const STATS_API =
-  "https://v2.jkt48connect.com/api/admin/stats?apikey=JKTCONNECT&username=vzy&password=vzy";
+  "https://v5.jkt48connect.com/api/admin/stats?apikey=JKTCONNECT&username=vzy&password=vzy";
 
 interface Summary {
   totalKeys: number;
