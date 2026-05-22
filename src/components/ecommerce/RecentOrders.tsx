@@ -8,9 +8,9 @@ import {
 } from "../ui/table";
 import Badge from "../ui/badge/Badge";
 
-const API_BASE   = "https://v2.jkt48connect.com/api/jkt48connect";
+const API_BASE   = "https://v5.jkt48connect.com/api/jkt48connect";
 const API_KEY    = "JKTCONNECT";
-const TICKET_API = "https://v2.jkt48connect.com/api/tickets";
+const TICKET_API = "https://v5.jkt48connect.com/api/tickets";
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
