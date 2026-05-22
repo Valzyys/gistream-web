@@ -40,12 +40,29 @@ interface CacheData {
 type FilterMode = "active" | "graduated" | "all";
 type SortMode = "name" | "generation" | "team";
 
+// ── Image URL Proxy Helper ────────────────────────────────────────────────────
+const proxyImageUrl = (url: string): string => {
+  if (!url) return url;
+  return url.replace(
+    "https://jkt48.com",
+    "https://img.jkt48connect.com/jkt48/theater/members"
+  );
+};
+
+const proxyMember = (m: Member): Member => ({
+  ...m,
+  img: proxyImageUrl(m.img),
+  img_alt: proxyImageUrl(m.img_alt),
+});
+
 // ── Cache Helpers ─────────────────────────────────────────────────────────────
 const getCache = (): CacheData | null => {
   try {
     const raw = localStorage.getItem(CACHE_KEY);
     if (!raw) return null;
     const data: CacheData = JSON.parse(raw);
+    // Migrasi cache lama: pastikan URL selalu pakai domain proxy
+    data.members = data.members.map(proxyMember);
     return data;
   } catch {
     return null;
@@ -259,7 +276,7 @@ function MemberCard({ member, isMobile }: { member: Member; isMobile: boolean })
           </div>
         )}
 
-              {/* Name overlay */}
+        {/* Name overlay */}
         <div style={{
           position: "absolute", bottom: 0, left: 0, right: 0,
           padding: isMobile ? "8px 6px" : "10px 12px",
@@ -531,7 +548,7 @@ const MembersPage: React.FC = () => {
       const gradData: Member[] = Array.isArray(gradJson) ? gradJson : [];
 
       const map = new Map<string, Member>();
-      [...activeData, ...gradData].forEach((m) => map.set(m._id, m));
+      [...activeData, ...gradData].forEach((m) => map.set(m._id, proxyMember(m)));
       const freshMembers = Array.from(map.values());
 
       // Cek apakah data berubah dibanding cache
@@ -578,7 +595,7 @@ const MembersPage: React.FC = () => {
       const gradData: Member[] = Array.isArray(gradJson) ? gradJson : [];
 
       const map = new Map<string, Member>();
-      [...activeData, ...gradData].forEach((m) => map.set(m._id, m));
+      [...activeData, ...gradData].forEach((m) => map.set(m._id, proxyMember(m)));
       const freshMembers = Array.from(map.values());
 
       // Bandingkan lebih detail (termasuk perubahan data member)
@@ -607,7 +624,7 @@ const MembersPage: React.FC = () => {
     fetchMembers();
   }, []);
 
-    // ── Derived ───────────────────────────────────────────────────────────────
+  // ── Derived ───────────────────────────────────────────────────────────────
   const teams = useMemo(() => {
     const t = new Set<string>();
     members
@@ -944,7 +961,7 @@ const MembersPage: React.FC = () => {
           </div>
         </div>
 
-               {/* ── Content ── */}
+        {/* ── Content ── */}
         <div style={{ padding: isMobile ? 12 : 24 }}>
           {loading ? (
             <div style={{
@@ -1032,8 +1049,8 @@ const MembersPage: React.FC = () => {
               <div style={{
                 display: "grid",
                 gridTemplateColumns: isMobile
-                  ? "repeat(3, 1fr)"           // mobile: 3 kolom
-                  : "repeat(auto-fill, minmax(180px, 1fr))", // desktop: auto
+                  ? "repeat(3, 1fr)"
+                  : "repeat(auto-fill, minmax(180px, 1fr))",
                 gap: isMobile ? 8 : 16,
               }}>
                 {filtered.map((member) => (
