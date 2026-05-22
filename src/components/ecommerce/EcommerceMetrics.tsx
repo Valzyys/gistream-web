@@ -3,7 +3,7 @@ import { ArrowUpIcon, BoxIconLine, GroupIcon } from "../../icons";
 import Badge from "../ui/badge/Badge";
 
 const STATS_API =
-  "https://v2.jkt48connect.com/api/admin/stats?apikey=JKTCONNECT&username=vzy&password=vzy";
+  "https://v5.jkt48connect.com/api/admin/stats?apikey=JKTCONNECT&username=vzy&password=vzy";
 
 interface Summary {
   totalKeys: number;
