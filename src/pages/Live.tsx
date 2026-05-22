@@ -3,9 +3,9 @@ import { useNavigate } from "react-router";
 import PageMeta from "../components/common/PageMeta";
 
 // ── API ───────────────────────────────────────────────────────────────────────
-const IDN_PLUS_API = "https://v2.jkt48connect.com/api/jkt48/idnplus?apikey=JKTCONNECT";
-const LIVE_API     = "https://v2.jkt48connect.com/api/jkt48/live?apikey=JKTCONNECT";
-const RECENT_API   = "https://v2.jkt48connect.com/api/jkt48/recent?apikey=JKTCONNECT";
+const IDN_PLUS_API = "https://v5.jkt48connect.com/api/jkt48/idnplus?apikey=JKTCONNECT";
+const LIVE_API     = "https://v5.jkt48connect.com/api/jkt48/live?apikey=JKTCONNECT";
+const RECENT_API   = "https://v5.jkt48connect.com/api/jkt48/recent?apikey=JKTCONNECT";
 
 const DEFAULT_IMG =
   "https://res.cloudinary.com/haymzm4wp/image/upload/v1760105848/bi5ej2hgh0cc2uowu5xr.jpg";
