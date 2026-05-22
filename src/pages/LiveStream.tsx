@@ -10,8 +10,8 @@ const supabase = createClient(supabaseUrl, supabaseKey);
 
 const API_BASE  = "https://v2.jkt48connect.com/api/jkt48connect";
 const API_KEY   = "JKTCONNECT";
-const IDN_API   = "https://v2.jkt48connect.com/api/jkt48/idnplus?apikey=JKTCONNECT";
-const LIVE_API  = "https://v2.jkt48connect.com/api/jkt48/live?apikey=JKTCONNECT";
+const IDN_API   = "https://v5.jkt48connect.com/api/jkt48/idnplus?apikey=JKTCONNECT";
+const LIVE_API  = "https://v5.jkt48connect.com/api/jkt48/live?apikey=JKTCONNECT";
 const TICKETS_API = "https://v2.jkt48connect.com/api/tickets";
 
 // ── GiStream token constants ──────────────────────────────────────────────────
