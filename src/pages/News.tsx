@@ -3,7 +3,7 @@ import { useNavigate } from "react-router";
 import PageMeta from "../components/common/PageMeta";
 
 // ── API ──────────────────────────────────────────────────────────────────────
-const NEWS_API = "https://v2.jkt48connect.com/api/jkt48/NEWS";
+const NEWS_API = "https://v5.jkt48connect.com/api/jkt48/NEWS";
 const API_KEY = "JKTCONNECT";
 
 const DEFAULT_IMG =
