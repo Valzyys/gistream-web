@@ -2,7 +2,7 @@ import { useEffect, useState, useMemo } from "react";
 import PageMeta from "../components/common/PageMeta";
 
 // ── API ──────────────────────────────────────────────────────────────────────
-const MEMBERS_API = "https://v2.jkt48connect.com/api/jkt48/members";
+const MEMBERS_API = "https://v5.jkt48connect.com/api/jkt48/members";
 const API_KEY = "JKTCONNECT";
 const CACHE_KEY = "jkt48_members_cache";
 const CACHE_TTL = 1000 * 60 * 30; // 30 menit
