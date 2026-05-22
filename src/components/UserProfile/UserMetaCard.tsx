@@ -5,7 +5,7 @@ import Button from "../ui/button/Button";
 import Input from "../form/input/InputField";
 import Label from "../form/Label";
 
-const API_BASE = "https://v2.jkt48connect.com/api/jkt48connect";
+const API_BASE = "https://v5.jkt48connect.com/api/jkt48connect";
 const API_KEY = "JKTCONNECT";
 
 interface UserProfile {
