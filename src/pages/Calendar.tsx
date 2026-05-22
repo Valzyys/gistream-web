@@ -3,8 +3,8 @@ import PageMeta from "../components/common/PageMeta";
 import { RainbowButton } from "../components/common/rainbow-button";
 
 // ── Constants ────────────────────────────────────────────────────────────────
-const IDN_PLUS_API = "https://v2.jkt48connect.com/api/jkt48/idnplus?apikey=JKTCONNECT";
-const THEATER_API = "https://v2.jkt48connect.com/api/jkt48/theater?apikey=JKTCONNECT";
+const IDN_PLUS_API = "https://v5.jkt48connect.com/api/jkt48/idnplus?apikey=JKTCONNECT";
+const THEATER_API = "https://v5.jkt48connect.com/api/jkt48/theater?apikey=JKTCONNECT";
 const TICKETS_API = "https://v2.jkt48connect.com/api/tickets";
 const DEFAULT_IMG = "https://res.cloudinary.com/haymzm4wp/image/upload/v1760105848/bi5ej2hgh0cc2uowu5xr.jpg";
 const ALLOWED_THEATER_TYPES = ["SHOW", "EVENT"];
