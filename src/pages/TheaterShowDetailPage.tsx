@@ -3,7 +3,7 @@ import { useParams, useNavigate } from "react-router";
 import PageMeta from "../components/common/PageMeta";
 
 // ── Config ────────────────────────────────────────────────────────────────────
-const THEATER_DETAIL_API = "https://v2.jkt48connect.com/api/jkt48/theater";
+const THEATER_DETAIL_API = "https://v5.jkt48connect.com/api/jkt48/theater";
 const API_KEY = "JKTCONNECT";
 
 const DEFAULT_IMG =
