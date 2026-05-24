@@ -432,7 +432,7 @@ function PaymentModal({ show, onClose, onSuccess, onCancelled, loginData, pendin
     pulsa: "Pulsa",
   };
 
-  const orderedCats = ["virtual_account", "emoney", "qris", "retail", "pulsa"];
+  const orderedCats = ["emoney", "qris", "pulsa"];
   const fmtTimer = (s: number) => `${String(Math.floor(s / 60)).padStart(2, "0")}:${String(s % 60).padStart(2, "0")}`;
   const timerDanger = paymentTimer < 300;
 
