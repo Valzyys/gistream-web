@@ -1,6 +1,6 @@
-
 import { useEffect, useState, useMemo } from "react";
 import PageMeta from "../components/common/PageMeta";
+import GradualBlur from "../components/common/GradualBlur";
 
 // ── API ──────────────────────────────────────────────────────────────────────
 const MEMBERS_API = "https://v5.jkt48connect.com/api/jkt48/members";
@@ -42,17 +42,9 @@ type FilterMode = "active" | "graduated" | "all";
 type SortMode = "name" | "generation" | "team";
 
 // ── Image URL Helper ──────────────────────────────────────────────────────────
-// Normalize: pastikan URL selalu pakai img.jkt48connect.com
-// Pola yang di-handle:
-//   https://jkt48.com/api/v1/storages/...
-//   → https://img.jkt48connect.com/jkt48/theater/members/api/v1/storages/...
-//
-// Jika sudah pakai img.jkt48connect.com → biarkan apa adanya
 const normalizeImgUrl = (url: string): string => {
   if (!url) return url;
-  // Sudah pakai proxy → tidak diubah
   if (url.startsWith("https://img.jkt48connect.com")) return url;
-  // Dari jkt48.com → ganti ke proxy
   if (url.startsWith("https://jkt48.com")) {
     return url.replace(
       "https://jkt48.com",
@@ -74,7 +66,6 @@ const getCache = (): CacheData | null => {
     const raw = localStorage.getItem(CACHE_KEY);
     if (!raw) return null;
     const data: CacheData = JSON.parse(raw);
-    // Re-normalize saat baca cache (migrasi otomatis URL lama)
     data.members = data.members.map(normalizeMember);
     return data;
   } catch {
@@ -212,22 +203,15 @@ const getSocialIcon = (title: string) => {
 function MemberCard({ member, isMobile }: { member: Member; isMobile: boolean }) {
   const tc = member.team ? teamColor[member.team.toLowerCase()] : null;
 
-  // Fallback chain:
-  // 1. img_alt (proxy)
-  // 2. img (proxy, biasanya sama)
-  // 3. jkt48.com langsung (bypass proxy)
-  // 4. ui-avatars placeholder
   const buildFallbacks = (m: Member): string[] => {
     const list: string[] = [];
     if (m.img_alt) list.push(m.img_alt);
     if (m.img && m.img !== m.img_alt) list.push(m.img);
-    // Fallback ke jkt48.com langsung jika proxy gagal
     const directUrl = (m.img_alt || m.img || "").replace(
       /^https:\/\/img\.jkt48connect\.com\/jkt48\/(theater\/members|members)\//,
       "https://jkt48.com/"
     );
     if (directUrl && !list.includes(directUrl)) list.push(directUrl);
-    // Avatar placeholder sebagai last resort
     list.push(
       `https://ui-avatars.com/api/?name=${encodeURIComponent(m.name)}&size=400&background=f3f4f6&color=9ca3af&bold=true&format=png`
     );
@@ -999,127 +983,169 @@ const MembersPage: React.FC = () => {
         </div>
 
         {/* ── Content ── */}
-        <div style={{ padding: isMobile ? 12 : 24 }}>
-          {loading ? (
-            <div style={{
-              display: "flex", flexDirection: "column",
-              alignItems: "center", justifyContent: "center",
-              gap: 12, padding: "64px 0",
-            }}>
+        <div style={{ position: "relative" }}>
+
+          {/* Blur top — fade in saat scroll ke bawah */}
+          {!loading && filtered.length > 0 && (
+            <GradualBlur
+              target="parent"
+              position="top"
+              height={isMobile ? "3rem" : "4rem"}
+              strength={2.5}
+              divCount={6}
+              curve="bezier"
+              animated="scroll"
+              duration="0.4s"
+              easing="ease-out"
+              zIndex={10}
+            />
+          )}
+
+          {/* Scrollable grid area */}
+          <div
+            style={{
+              padding: isMobile ? 12 : 24,
+              maxHeight: isMobile ? "calc(100vh - 220px)" : "calc(100vh - 260px)",
+              overflowY: "auto",
+              scrollBehavior: "smooth",
+            }}
+          >
+            {loading ? (
               <div style={{
-                width: 36, height: 36,
-                border: "3px solid rgba(236,72,153,0.15)",
-                borderTop: "3px solid #EC4899",
-                borderRadius: "50%",
-                animation: "spin 0.8s linear infinite",
-              }} />
-              <p style={{ margin: 0, fontSize: 14, color: "#9ca3af" }}>
-                Memuat data member...
-              </p>
-            </div>
-          ) : filtered.length === 0 ? (
-            <div style={{
-              display: "flex", flexDirection: "column",
-              alignItems: "center", justifyContent: "center",
-              gap: 12, padding: "64px 0", textAlign: "center",
-            }}>
-              <svg width="52" height="52" viewBox="0 0 24 24" fill="none"
-                stroke="#d1d5db" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
-                <path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2" />
-                <circle cx="9" cy="7" r="4" />
-                <path d="M23 21v-2a4 4 0 0 0-3-3.87" />
-                <path d="M16 3.13a4 4 0 0 1 0 7.75" />
-              </svg>
-              <div>
-                <h3 style={{ margin: "0 0 6px", fontSize: 16, fontWeight: 700, color: "#374151" }}
-                  className="dark:text-gray-300">
-                  Member Tidak Ditemukan
-                </h3>
-                <p style={{ margin: 0, fontSize: 13, color: "#9ca3af" }}>
-                  {search
-                    ? `Tidak ada member dengan nama "${search}"`
-                    : "Tidak ada member yang sesuai filter."}
+                display: "flex", flexDirection: "column",
+                alignItems: "center", justifyContent: "center",
+                gap: 12, padding: "64px 0",
+              }}>
+                <div style={{
+                  width: 36, height: 36,
+                  border: "3px solid rgba(236,72,153,0.15)",
+                  borderTop: "3px solid #EC4899",
+                  borderRadius: "50%",
+                  animation: "spin 0.8s linear infinite",
+                }} />
+                <p style={{ margin: 0, fontSize: 14, color: "#9ca3af" }}>
+                  Memuat data member...
                 </p>
               </div>
-              <div style={{ display: "flex", gap: 8 }}>
-                {search && (
-                  <button
-                    onClick={() => setSearch("")}
-                    style={{
-                      padding: "7px 18px", borderRadius: 10,
-                      border: "1px solid #e5e7eb",
-                      background: "transparent",
-                      fontSize: 13, fontWeight: 600,
-                      color: "#6b7280", cursor: "pointer",
-                    }}
-                    className="dark:border-gray-700 dark:text-gray-400"
-                  >
-                    Hapus Pencarian
-                  </button>
-                )}
-                <button
-                  onClick={() => {
-                    setFilterMode("active");
-                    setTeamFilter("all");
-                    setSearch("");
-                  }}
-                  style={{
-                    padding: "7px 18px", borderRadius: 10,
-                    border: "none",
-                    background: "#EC4899",
-                    fontSize: 13, fontWeight: 600,
-                    color: "#fff", cursor: "pointer",
-                  }}
-                >
-                  Reset Filter
-                </button>
-              </div>
-            </div>
-          ) : (
-            <>
-              {/* ── Grid ── */}
+            ) : filtered.length === 0 ? (
               <div style={{
-                display: "grid",
-                gridTemplateColumns: isMobile
-                  ? "repeat(3, 1fr)"
-                  : "repeat(auto-fill, minmax(180px, 1fr))",
-                gap: isMobile ? 8 : 16,
+                display: "flex", flexDirection: "column",
+                alignItems: "center", justifyContent: "center",
+                gap: 12, padding: "64px 0", textAlign: "center",
               }}>
-                {filtered.map((member) => (
-                  <MemberCard
-                    key={member._id || member.jkt48_id || member.url}
-                    member={member}
-                    isMobile={isMobile}
-                  />
-                ))}
-              </div>
-
-              {/* ── Refreshing bar ── */}
-              {isRefreshing && (
-                <div style={{
-                  marginTop: 16,
-                  padding: "10px 16px",
-                  borderRadius: 10,
-                  background: "rgba(70,95,255,0.06)",
-                  border: "1px solid rgba(70,95,255,0.15)",
-                  display: "flex",
-                  alignItems: "center",
-                  gap: 10,
-                }}>
-                  <div style={{
-                    width: 14, height: 14,
-                    border: "2px solid rgba(70,95,255,0.2)",
-                    borderTop: "2px solid #465FFF",
-                    borderRadius: "50%",
-                    animation: "spin 0.8s linear infinite",
-                    flexShrink: 0,
-                  }} />
-                  <p style={{ margin: 0, fontSize: 12, color: "#465FFF", fontWeight: 500 }}>
-                    Memeriksa pembaruan data di latar belakang...
+                <svg width="52" height="52" viewBox="0 0 24 24" fill="none"
+                  stroke="#d1d5db" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+                  <path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2" />
+                  <circle cx="9" cy="7" r="4" />
+                  <path d="M23 21v-2a4 4 0 0 0-3-3.87" />
+                  <path d="M16 3.13a4 4 0 0 1 0 7.75" />
+                </svg>
+                <div>
+                  <h3 style={{ margin: "0 0 6px", fontSize: 16, fontWeight: 700, color: "#374151" }}
+                    className="dark:text-gray-300">
+                    Member Tidak Ditemukan
+                  </h3>
+                  <p style={{ margin: 0, fontSize: 13, color: "#9ca3af" }}>
+                    {search
+                      ? `Tidak ada member dengan nama "${search}"`
+                      : "Tidak ada member yang sesuai filter."}
                   </p>
                 </div>
-              )}
-            </>
+                <div style={{ display: "flex", gap: 8 }}>
+                  {search && (
+                    <button
+                      onClick={() => setSearch("")}
+                      style={{
+                        padding: "7px 18px", borderRadius: 10,
+                        border: "1px solid #e5e7eb",
+                        background: "transparent",
+                        fontSize: 13, fontWeight: 600,
+                        color: "#6b7280", cursor: "pointer",
+                      }}
+                      className="dark:border-gray-700 dark:text-gray-400"
+                    >
+                      Hapus Pencarian
+                    </button>
+                  )}
+                  <button
+                    onClick={() => {
+                      setFilterMode("active");
+                      setTeamFilter("all");
+                      setSearch("");
+                    }}
+                    style={{
+                      padding: "7px 18px", borderRadius: 10,
+                      border: "none",
+                      background: "#EC4899",
+                      fontSize: 13, fontWeight: 600,
+                      color: "#fff", cursor: "pointer",
+                    }}
+                  >
+                    Reset Filter
+                  </button>
+                </div>
+              </div>
+            ) : (
+              <>
+                {/* ── Grid ── */}
+                <div style={{
+                  display: "grid",
+                  gridTemplateColumns: isMobile
+                    ? "repeat(3, 1fr)"
+                    : "repeat(auto-fill, minmax(180px, 1fr))",
+                  gap: isMobile ? 8 : 16,
+                }}>
+                  {filtered.map((member) => (
+                    <MemberCard
+                      key={member._id || member.jkt48_id || member.url}
+                      member={member}
+                      isMobile={isMobile}
+                    />
+                  ))}
+                </div>
+
+                {/* ── Refreshing bar ── */}
+                {isRefreshing && (
+                  <div style={{
+                    marginTop: 16,
+                    padding: "10px 16px",
+                    borderRadius: 10,
+                    background: "rgba(70,95,255,0.06)",
+                    border: "1px solid rgba(70,95,255,0.15)",
+                    display: "flex",
+                    alignItems: "center",
+                    gap: 10,
+                  }}>
+                    <div style={{
+                      width: 14, height: 14,
+                      border: "2px solid rgba(70,95,255,0.2)",
+                      borderTop: "2px solid #465FFF",
+                      borderRadius: "50%",
+                      animation: "spin 0.8s linear infinite",
+                      flexShrink: 0,
+                    }} />
+                    <p style={{ margin: 0, fontSize: 12, color: "#465FFF", fontWeight: 500 }}>
+                      Memeriksa pembaruan data di latar belakang...
+                    </p>
+                  </div>
+                )}
+              </>
+            )}
+          </div>
+
+          {/* Blur bottom — hint ada konten di bawah */}
+          {!loading && filtered.length > 0 && (
+            <GradualBlur
+              target="parent"
+              position="bottom"
+              height={isMobile ? "4rem" : "5rem"}
+              strength={3}
+              divCount={7}
+              curve="bezier"
+              exponential={false}
+              opacity={1}
+              zIndex={10}
+            />
           )}
         </div>
 
