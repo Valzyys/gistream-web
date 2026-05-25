@@ -1,7 +1,5 @@
 import { useEffect, useState, useMemo } from "react";
 import PageMeta from "../components/common/PageMeta";
-import GradualBlur from "../components/common/GradualBlur";
-
 // ── API ──────────────────────────────────────────────────────────────────────
 const MEMBERS_API = "https://v5.jkt48connect.com/api/jkt48/members";
 const API_KEY = "JKTCONNECT";
@@ -985,19 +983,18 @@ const MembersPage: React.FC = () => {
         {/* ── Content ── */}
         <div style={{ position: "relative" }}>
 
-          {/* Blur top — fade in saat scroll ke bawah */}
+          {/* Gradient top — scroll hint */}
           {!loading && filtered.length > 0 && (
-            <GradualBlur
-              target="parent"
-              position="top"
-              height={isMobile ? "3rem" : "4rem"}
-              strength={2.5}
-              divCount={6}
-              curve="bezier"
-              animated="scroll"
-              duration="0.4s"
-              easing="ease-out"
-              zIndex={10}
+            <div style={{
+              position: "absolute",
+              top: 0, left: 0, right: 0,
+              height: isMobile ? "3rem" : "4rem",
+              background: "linear-gradient(to bottom, var(--scroll-fade-color, #fff) 0%, transparent 100%)",
+              pointerEvents: "none",
+              zIndex: 10,
+              transition: "opacity 0.3s ease",
+            }}
+              className="dark:[--scroll-fade-color:rgb(17,24,39)]"
             />
           )}
 
@@ -1133,18 +1130,17 @@ const MembersPage: React.FC = () => {
             )}
           </div>
 
-          {/* Blur bottom — hint ada konten di bawah */}
+          {/* Gradient bottom — scroll hint */}
           {!loading && filtered.length > 0 && (
-            <GradualBlur
-              target="parent"
-              position="bottom"
-              height={isMobile ? "4rem" : "5rem"}
-              strength={3}
-              divCount={7}
-              curve="bezier"
-              exponential={false}
-              opacity={1}
-              zIndex={10}
+            <div style={{
+              position: "absolute",
+              bottom: 0, left: 0, right: 0,
+              height: isMobile ? "4rem" : "5rem",
+              background: "linear-gradient(to top, var(--scroll-fade-color, #fff) 0%, transparent 100%)",
+              pointerEvents: "none",
+              zIndex: 10,
+            }}
+              className="dark:[--scroll-fade-color:rgb(17,24,39)]"
             />
           )}
         </div>
