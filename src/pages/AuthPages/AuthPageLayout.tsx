@@ -1,8 +1,7 @@
 import React from "react";
-import { cn } from "../../lib/utils";
-import { AnimatedGridPattern } from "../../components/common/AnimatedPatern";
 import { Link } from "react-router";
 import ThemeTogglerTwo from "../../components/common/ThemeTogglerTwo";
+import FaultyTerminal from "../../components/common/FaultyTerminal";
 
 export default function AuthLayout({
   children,
@@ -15,17 +14,30 @@ export default function AuthLayout({
         {children}
         <div className="items-center hidden w-full h-full lg:w-1/2 bg-brand-950 dark:bg-white/5 lg:grid overflow-hidden">
           <div className="relative flex items-center justify-center w-full h-full">
-            {/* ===== Animated Grid Pattern ===== */}
-            <AnimatedGridPattern
-              numSquares={30}
-              maxOpacity={0.15}
-              duration={3}
-              repeatDelay={1}
-              className={cn(
-                "[mask-image:radial-gradient(600px_circle_at_center,white,transparent)]",
-                "absolute inset-0 w-full h-full"
-              )}
-            />
+
+            {/* ===== Faulty Terminal Background ===== */}
+            <div className="absolute inset-0 w-full h-full opacity-40">
+              <FaultyTerminal
+                scale={1.5}
+                gridMul={[2, 1]}
+                digitSize={1.2}
+                timeScale={0.4}
+                pause={false}
+                scanlineIntensity={0.4}
+                glitchAmount={0.6}
+                flickerAmount={0.5}
+                noiseAmp={1}
+                chromaticAberration={0}
+                dither={0}
+                curvature={0.1}
+                tint="#4f8ef7"
+                mouseReact={true}
+                mouseStrength={0.3}
+                pageLoadAnimation={true}
+                brightness={1}
+              />
+            </div>
+
             <div className="relative flex flex-col items-center max-w-xs z-10">
               <Link to="/" className="block mb-4">
                 <img
