@@ -35,7 +35,7 @@ const MONITOR_CATEGORIES: CategoryConfig[] = [
     name: "Infrastructure",
     description: "Database, CDN, dan infrastruktur pendukung",
     monitors: [
-      { id: "4453201", name: "Proxy" },,
+      { id: "4453201", name: "Proxy" },
     ],
   },
 ];
