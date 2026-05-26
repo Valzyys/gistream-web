@@ -699,7 +699,7 @@ interface ProductCardProps {
   onBuy: (p: MembershipProduct) => void;
 }
 
-const BADGE_CONFIG: Record<string, { label: string; color: string; bg: string; border: string; icon: JSX.Element }> = {
+const BADGE_CONFIG: Record<string, { label: string; color: string; bg: string; border: string; icon: React.ReactNode }> = {
   weekly: {
     label: "Mingguan",
     color: "#059669", bg: "rgba(5,150,105,0.08)", border: "rgba(5,150,105,0.2)",
@@ -835,10 +835,10 @@ function ProductCard({ product, isLoggedIn, currentMembership, onBuy }: ProductC
               Login untuk Berlangganan
             </a>
           ) : isActive ? (
-            <div className="flex items-center justify-center gap-2 py-2.5 rounded-xl text-sm font-bold border"
-              style={{ background: "rgba(70,95,255,0.06)", borderColor: "rgba(70,95,255,0.2)", color: "#465FFF" }}
-              className="dark:text-brand-400"
-            >
+           <div
+  className="flex items-center justify-center gap-2 py-2.5 rounded-xl text-sm font-bold border dark:text-brand-400"
+  style={{ background: "rgba(70,95,255,0.06)", borderColor: "rgba(70,95,255,0.2)", color: "#465FFF" }}
+>
               <Ic.Check s={14} c="#465FFF" /> Membership Aktif
             </div>
           ) : stockOut ? (
