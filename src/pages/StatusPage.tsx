@@ -1,5 +1,4 @@
 import React, { useEffect, useState, useCallback, useRef } from "react";
-import PageMeta from "../components/common/PageMeta";
 
 // ╔══════════════════════════════════════════════════════════════════════════════╗
 // ║         ⚙  KONFIGURASI — Edit bagian ini untuk menambah monitor            ║
@@ -12,13 +11,6 @@ interface CategoryConfig {
   monitors: { id: string; name: string }[];
 }
 
-/**
- * Tambah kategori dan monitor ID di sini.
- * Monitor ID bisa ditemukan di: BetterStack Dashboard → Monitors → klik monitor → lihat URL
- * Contoh URL: betterstack.com/monitors/3523155 → ID-nya = "3523155"
- *
- * Kategori dengan 0 monitor otomatis disembunyikan.
- */
 const MONITOR_CATEGORIES: CategoryConfig[] = [
   {
     id: "website",
@@ -26,7 +18,6 @@ const MONITOR_CATEGORIES: CategoryConfig[] = [
     description: "Ketersediaan halaman web utama",
     monitors: [
       { id: "3523155", name: "Main Website" },
-      // { id: "1234567", name: "Landing Page" },
     ],
   },
   {
@@ -35,7 +26,6 @@ const MONITOR_CATEGORIES: CategoryConfig[] = [
     description: "Endpoint API dan layanan backend",
     monitors: [
       // { id: "2345678", name: "REST API v1" },
-      // { id: "3456789", name: "Authentication Service" },
     ],
   },
   {
@@ -44,35 +34,12 @@ const MONITOR_CATEGORIES: CategoryConfig[] = [
     description: "Database, CDN, dan infrastruktur pendukung",
     monitors: [
       // { id: "4567890", name: "PostgreSQL" },
-      // { id: "5678901", name: "CDN / Cloudflare" },
     ],
   },
 ];
 
-// ╚══════════════════════════════════════════════════════════════════════════════╝
-
-/**
- * WAJIB: Buat Cloudflare Pages Function sebagai proxy agar token aman.
- * Buat file: functions/api/betterstack/[[path]].js
- * Isi file:
- *
- * export async function onRequest({ request, params, env }) {
- *   const path = params.path?.join('/') ?? '';
- *   const qs   = new URL(request.url).search;
- *   const res  = await fetch(`https://uptime.betterstack.com/api/v2/${path}${qs}`, {
- *     headers: { Authorization: `Bearer ${env.BETTERSTACK_TOKEN}` },
- *   });
- *   return new Response(await res.text(), {
- *     status: res.status,
- *     headers: { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' },
- *   });
- * }
- *
- * Lalu di Cloudflare Dashboard → Settings → Environment Variables → tambah BETTERSTACK_TOKEN
- */
 const API_BASE = "/api/betterstack";
 
-// Semua monitor dari semua kategori (module-level constant)
 const ALL_MONITORS = MONITOR_CATEGORIES.flatMap((c) => c.monitors);
 
 // ── Types ─────────────────────────────────────────────────────────────────────
@@ -104,16 +71,14 @@ interface SLAData {
     total_downtime: number;
     longest_incident: number;
     average_incident: number;
-    incidents_count: number;
+    // BetterStack uses "number_of_incidents" not "incidents_count"
+    number_of_incidents: number;
   };
 }
 
 interface ResponseTimeRegion {
-  id: string;
-  attributes: {
-    regions: string[];
-    response_times: { at: string; response_time: number }[];
-  };
+  region: string;
+  response_times: { at: string; response_time: number }[];
 }
 
 interface Incident {
@@ -147,6 +112,7 @@ function daysAgoDate(n: number) {
   return d;
 }
 
+// BetterStack response_time is in SECONDS — multiply by 1000 for ms
 function fmtMs(ms: number) {
   if (ms <= 0) return "—";
   return ms < 1000 ? `${Math.round(ms)} ms` : `${(ms / 1000).toFixed(1)} s`;
@@ -177,10 +143,11 @@ function fmtDateTime(iso: string) {
   });
 }
 
-function getAvgResponseTime(regions: ResponseTimeRegion[]): number | null {
+// response_time dari BetterStack dalam detik → kali 1000 → ms
+function getAvgResponseTimeMs(regions: ResponseTimeRegion[]): number | null {
   const all: number[] = [];
   regions.forEach((r) =>
-    r.attributes.response_times.forEach((e) => all.push(e.response_time))
+    r.response_times.forEach((e) => all.push(e.response_time * 1000))
   );
   if (!all.length) return null;
   return all.reduce((a, b) => a + b, 0) / all.length;
@@ -238,14 +205,20 @@ async function fetchMonitor(
     tryJson(incR),
   ]);
 
+  // response-times: data.attributes.regions (array of { region, response_times[] })
+  const rawRegions: ResponseTimeRegion[] =
+    rtD?.data?.attributes?.regions ?? [];
+
   return {
     config,
     info: infoD?.data ?? null,
     sla30: slaD?.data ?? null,
-    responseTimes: rtD?.data ?? [],
+    responseTimes: rawRegions,
     incidents90: incD?.data ?? [],
     loading: false,
-    error: !infoD ? "Gagal memuat data monitor. Pastikan proxy sudah dikonfigurasi." : null,
+    error: !infoD
+      ? "Gagal memuat data monitor. Pastikan proxy sudah dikonfigurasi."
+      : null,
   };
 }
 
@@ -483,7 +456,6 @@ function UptimeBars({
         <span>Hari ini</span>
       </div>
 
-      {/* Legend */}
       <div className="flex items-center gap-3 flex-wrap text-[10px] text-gray-400">
         {(
           [
@@ -513,10 +485,11 @@ function ResponseSparkline({
 }: {
   regions: ResponseTimeRegion[];
 }) {
+  // Flatten all response times, convert seconds → ms
   const all: { at: number; val: number }[] = [];
   regions.forEach((r) =>
-    r.attributes.response_times.forEach((e) =>
-      all.push({ at: new Date(e.at).getTime(), val: e.response_time })
+    r.response_times.forEach((e) =>
+      all.push({ at: new Date(e.at).getTime(), val: e.response_time * 1000 })
     )
   );
   all.sort((a, b) => a.at - b.at);
@@ -593,7 +566,6 @@ function ResponseSparkline({
 function MonitorCard({ data }: { data: MonitorData }) {
   const [expanded, setExpanded] = useState(false);
 
-  // Loading skeleton
   if (data.loading) {
     return (
       <div className="flex items-center gap-4 px-5 py-4 border-b border-gray-100 dark:border-gray-800 last:border-0 animate-pulse">
@@ -611,7 +583,6 @@ function MonitorCard({ data }: { data: MonitorData }) {
     );
   }
 
-  // Error state
   if (data.error) {
     return (
       <div className="flex items-center gap-3 px-5 py-4 border-b border-gray-100 dark:border-gray-800 last:border-0">
@@ -629,16 +600,15 @@ function MonitorCard({ data }: { data: MonitorData }) {
   const status = data.info?.attributes.status ?? "pending";
   const cfg = STATUS_CONFIG[status];
   const sla = data.sla30?.attributes;
-  const avgRt = getAvgResponseTime(data.responseTimes);
+  const avgRt = getAvgResponseTimeMs(data.responseTimes);
 
   return (
     <div className="border-b border-gray-100 dark:border-gray-800 last:border-0">
-      {/* ── Collapsed row ── */}
+      {/* Collapsed row */}
       <div
         className="flex items-center gap-4 px-5 py-4 hover:bg-gray-50 dark:hover:bg-white/[0.02] transition-colors cursor-pointer select-none"
         onClick={() => setExpanded((e) => !e)}
       >
-        {/* Status dot */}
         <span
           className="w-2.5 h-2.5 rounded-full flex-shrink-0"
           style={{
@@ -649,7 +619,6 @@ function MonitorCard({ data }: { data: MonitorData }) {
           }}
         />
 
-        {/* Name & URL */}
         <div className="flex-1 min-w-0">
           <p className="text-sm font-semibold text-gray-800 dark:text-white truncate">
             {data.config.name}
@@ -670,7 +639,6 @@ function MonitorCard({ data }: { data: MonitorData }) {
           )}
         </div>
 
-        {/* Stats — desktop only */}
         <div className="hidden sm:flex items-center gap-5">
           {sla && (
             <div className="text-right">
@@ -700,10 +668,8 @@ function MonitorCard({ data }: { data: MonitorData }) {
           )}
         </div>
 
-        {/* Status badge */}
         <StatusBadge status={status} />
 
-        {/* Chevron */}
         <span
           className="text-gray-300 dark:text-gray-600 flex-shrink-0 transition-transform duration-200"
           style={{ transform: expanded ? "rotate(180deg)" : "rotate(0deg)" }}
@@ -712,7 +678,7 @@ function MonitorCard({ data }: { data: MonitorData }) {
         </span>
       </div>
 
-      {/* ── Expanded section ── */}
+      {/* Expanded section */}
       {expanded && (
         <div className="px-5 pb-5 pt-1 space-y-5 bg-gray-50/50 dark:bg-white/[0.01] border-t border-gray-100 dark:border-gray-800/60">
           {/* Mobile stats */}
@@ -747,7 +713,7 @@ function MonitorCard({ data }: { data: MonitorData }) {
             </div>
           )}
 
-          {/* SLA stats grid */}
+          {/* SLA stats grid — gunakan number_of_incidents */}
           {sla && (
             <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5">
               {[
@@ -763,8 +729,8 @@ function MonitorCard({ data }: { data: MonitorData }) {
                 },
                 {
                   label: "Incidents (30d)",
-                  value: String(sla.incidents_count),
-                  color: sla.incidents_count === 0 ? "#16a34a" : "#f59e0b",
+                  value: String(sla.number_of_incidents),
+                  color: sla.number_of_incidents === 0 ? "#16a34a" : "#f59e0b",
                 },
                 {
                   label: "Total downtime",
@@ -904,10 +870,7 @@ function OverallBanner({
     return (
       <div
         className="flex items-center gap-4 p-5 rounded-2xl border"
-        style={{
-          background: "rgba(22,163,74,0.06)",
-          borderColor: "rgba(22,163,74,0.2)",
-        }}
+        style={{ background: "rgba(22,163,74,0.06)", borderColor: "rgba(22,163,74,0.2)" }}
       >
         <div
           className="w-12 h-12 rounded-xl flex items-center justify-center flex-shrink-0"
@@ -931,10 +894,7 @@ function OverallBanner({
     return (
       <div
         className="flex items-center gap-4 p-5 rounded-2xl border"
-        style={{
-          background: "rgba(239,68,68,0.06)",
-          borderColor: "rgba(239,68,68,0.2)",
-        }}
+        style={{ background: "rgba(239,68,68,0.06)", borderColor: "rgba(239,68,68,0.2)" }}
       >
         <div
           className="w-12 h-12 rounded-xl flex items-center justify-center flex-shrink-0"
@@ -957,10 +917,7 @@ function OverallBanner({
   return (
     <div
       className="flex items-center gap-4 p-5 rounded-2xl border"
-      style={{
-        background: "rgba(245,158,11,0.06)",
-        borderColor: "rgba(245,158,11,0.2)",
-      }}
+      style={{ background: "rgba(245,158,11,0.06)", borderColor: "rgba(245,158,11,0.2)" }}
     >
       <div
         className="w-12 h-12 rounded-xl flex items-center justify-center flex-shrink-0"
@@ -983,9 +940,7 @@ function OverallBanner({
 // ── StatusPage ────────────────────────────────────────────────────────────────
 
 const StatusPage: React.FC = () => {
-  const [monitorData, setMonitorData] = useState<Record<string, MonitorData>>(
-    {}
-  );
+  const [monitorData, setMonitorData] = useState<Record<string, MonitorData>>({});
   const [globalLoading, setGlobalLoading] = useState(true);
   const [lastUpdated, setLastUpdated] = useState<Date | null>(null);
   const [refreshing, setRefreshing] = useState(false);
@@ -1049,13 +1004,8 @@ const StatusPage: React.FC = () => {
 
   return (
     <>
-      <PageMeta
-        title="System Status"
-        description="Monitor ketersediaan layanan secara real-time"
-      />
-
       <div className="space-y-6">
-        {/* ── Header ── */}
+        {/* Header */}
         <div className="rounded-2xl border border-gray-200 dark:border-gray-800 bg-white dark:bg-white/[0.03] overflow-hidden">
           <div
             className="px-6 py-8"
@@ -1068,9 +1018,7 @@ const StatusPage: React.FC = () => {
               <div className="flex items-center gap-4">
                 <div
                   className="w-14 h-14 rounded-2xl flex items-center justify-center flex-shrink-0"
-                  style={{
-                    background: "linear-gradient(135deg, #465FFF, #7c3aed)",
-                  }}
+                  style={{ background: "linear-gradient(135deg, #465FFF, #7c3aed)" }}
                 >
                   <Ic.Activity s={26} c="white" />
                 </div>
@@ -1102,9 +1050,7 @@ const StatusPage: React.FC = () => {
                 >
                   <span
                     style={{
-                      animation: refreshing
-                        ? "spin 1s linear infinite"
-                        : "none",
+                      animation: refreshing ? "spin 1s linear infinite" : "none",
                       display: "inline-flex",
                     }}
                   >
@@ -1116,7 +1062,6 @@ const StatusPage: React.FC = () => {
             </div>
           </div>
 
-          {/* Overall banner */}
           <div className="px-6 py-5 border-t border-gray-100 dark:border-gray-800">
             <OverallBanner
               monitorDataList={allMonitorDataList}
@@ -1125,13 +1070,12 @@ const StatusPage: React.FC = () => {
           </div>
         </div>
 
-        {/* ── Categories ── */}
+        {/* Categories */}
         {activeCategories.map((cat) => (
           <div
             key={cat.id}
             className="rounded-2xl border border-gray-200 dark:border-gray-800 bg-white dark:bg-white/[0.03] overflow-hidden"
           >
-            {/* Category header */}
             <div className="flex items-center justify-between px-5 py-4 border-b border-gray-100 dark:border-gray-800">
               <div>
                 <h2 className="text-sm font-bold text-gray-800 dark:text-white">
@@ -1142,7 +1086,6 @@ const StatusPage: React.FC = () => {
                 )}
               </div>
               <div className="flex items-center gap-2">
-                {/* Category status summary pill */}
                 {(() => {
                   const catMonitors = cat.monitors.map(
                     (m) =>
@@ -1175,22 +1118,10 @@ const StatusPage: React.FC = () => {
                       className="text-[10px] font-bold px-2.5 py-1 rounded-full border"
                       style={
                         allUp
-                          ? {
-                              color: "#16a34a",
-                              background: "rgba(22,163,74,0.08)",
-                              borderColor: "rgba(22,163,74,0.2)",
-                            }
+                          ? { color: "#16a34a", background: "rgba(22,163,74,0.08)", borderColor: "rgba(22,163,74,0.2)" }
                           : anyDown
-                          ? {
-                              color: "#ef4444",
-                              background: "rgba(239,68,68,0.08)",
-                              borderColor: "rgba(239,68,68,0.2)",
-                            }
-                          : {
-                              color: "#f59e0b",
-                              background: "rgba(245,158,11,0.08)",
-                              borderColor: "rgba(245,158,11,0.2)",
-                            }
+                          ? { color: "#ef4444", background: "rgba(239,68,68,0.08)", borderColor: "rgba(239,68,68,0.2)" }
+                          : { color: "#f59e0b", background: "rgba(245,158,11,0.08)", borderColor: "rgba(245,158,11,0.2)" }
                       }
                     >
                       {allUp
@@ -1204,7 +1135,6 @@ const StatusPage: React.FC = () => {
               </div>
             </div>
 
-            {/* Monitor list */}
             <div>
               {cat.monitors.map((m) => (
                 <MonitorCard
@@ -1226,7 +1156,7 @@ const StatusPage: React.FC = () => {
           </div>
         ))}
 
-        {/* ── Empty state ── */}
+        {/* Empty state */}
         {activeCategories.length === 0 && (
           <div className="rounded-2xl border border-dashed border-gray-200 dark:border-gray-700 p-12 text-center">
             <div className="w-14 h-14 rounded-2xl bg-gray-100 dark:bg-white/5 flex items-center justify-center mx-auto mb-4">
@@ -1245,7 +1175,7 @@ const StatusPage: React.FC = () => {
           </div>
         )}
 
-        {/* ── Footer ── */}
+        {/* Footer */}
         <p className="text-center text-xs text-gray-400 dark:text-gray-600 pb-2">
           Data diperbarui otomatis setiap 60 detik · Powered by{" "}
           <a
