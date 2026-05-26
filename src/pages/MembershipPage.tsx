@@ -1621,16 +1621,28 @@ const MembershipPage: React.FC = () => {
   const userId     = loginData?.user?.user_id;
   const isAdmin    = userId === ADMIN_USER_ID;
 
-  useEffect(() => {
-    setLoading(true);
-    fetch(`${MEMBERSHIP_API}/products${q}`)
-      .then((r) => r.json())
-      .then((d) => {
-        if (d.status) { setProducts(d.data || []); setPeriod(d.period || null); }
-      })
-      .catch(() => {})
-      .finally(() => setLoading(false));
-  }, [refreshKey]);
+useEffect(() => {
+  setLoading(true);
+  fetch(`${MEMBERSHIP_API}/products${q}`)
+    .then((r) => r.json())
+    .then((d) => {
+      if (d.status) {
+        // Normalisasi features — pastikan selalu array
+        const normalized = (d.data || []).map((p: MembershipProduct) => ({
+          ...p,
+          features: Array.isArray(p.features)
+            ? p.features
+            : typeof p.features === "string"
+            ? (() => { try { return JSON.parse(p.features); } catch { return []; } })()
+            : [],
+        }));
+        setProducts(normalized);
+        setPeriod(d.period || null);
+      }
+    })
+    .catch(() => {})
+    .finally(() => setLoading(false));
+}, [refreshKey]);
 
   useEffect(() => {
     if (!isLoggedIn || !userId) return;
