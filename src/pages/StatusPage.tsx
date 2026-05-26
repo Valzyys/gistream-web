@@ -17,7 +17,6 @@ const MONITOR_CATEGORIES: CategoryConfig[] = [
     name: "Website & Frontend",
     description: "Ketersediaan halaman web utama",
     monitors: [
-      { id: "3523155", name: "Main Website" },
       { id: "3523181", name: "Documentation Website" },
     ],
   },
