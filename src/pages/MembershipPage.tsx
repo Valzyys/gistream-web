@@ -1,6 +1,6 @@
 import React, { useEffect, useState, useCallback, useRef } from "react";
 import PageMeta from "../components/common/PageMeta";
-
+import PixelBlast from "../components/common/PixelBlast"
 // ── Constants ────────────────────────────────────────────────────────────────
 // SESUDAH — proxy lewat Pages Functions, no CORS issue:
 const MEMBERSHIP_API = "/api/membership";
@@ -1668,45 +1668,76 @@ useEffect(() => {
       <div className="space-y-6">
         {/* Page Header */}
         <div className="rounded-2xl border border-gray-200 bg-white dark:border-gray-800 dark:bg-white/[0.03] overflow-hidden">
-          <div
-            className="px-6 py-8 relative overflow-hidden"
-            style={{ background: "linear-gradient(135deg, rgba(70,95,255,0.06) 0%, rgba(124,58,237,0.06) 100%)" }}
-          >
-            <div className="absolute -top-8 -right-8 w-40 h-40 rounded-full opacity-5"
-              style={{ background: "linear-gradient(135deg, #465FFF, #7c3aed)" }} />
-            <div className="absolute -bottom-4 -left-4 w-24 h-24 rounded-full opacity-5"
-              style={{ background: "linear-gradient(135deg, #7c3aed, #465FFF)" }} />
-            <div className="relative z-10 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
-              <div className="flex items-center gap-4">
-                <div className="w-14 h-14 rounded-2xl flex items-center justify-center flex-shrink-0"
-                  style={{ background: "linear-gradient(135deg, #465FFF, #7c3aed)" }}>
-                  <Ic.Crown s={26} c="white" />
-                </div>
-                <div>
-                  <h1 className="text-xl font-bold text-gray-800 dark:text-white">Membership Premium</h1>
-                  <p className="text-sm text-gray-500 dark:text-gray-400 mt-0.5">
-                    Akses penuh semua livestream JKT48 tanpa batas
-                  </p>
-                </div>
-              </div>
-              <div className="flex items-center gap-2 self-start sm:self-auto flex-wrap">
-                {isAdmin && (
-                  <div className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-bold"
-                    style={{ background: "rgba(245,158,11,0.12)", border: "1px solid rgba(245,158,11,0.3)", color: "#d97706" }}>
-                    <Ic.Shield s={12} c="#d97706" />Admin
-                  </div>
-                )}
-                {period && (
-                  <div className="inline-flex items-center gap-2 px-3 py-1.5 rounded-xl text-xs font-semibold"
-                    style={{ background: "rgba(70,95,255,0.08)", border: "1px solid rgba(70,95,255,0.2)", color: "#465FFF" }}>
-                    <Ic.Package s={13} c="#465FFF" />
-                    Stok {monthNames[period.month - 1]} {period.year}
-                  </div>
-                )}
-              </div>
-            </div>
-          </div>
+  <div
+    className="px-6 py-8 relative overflow-hidden"
+    style={{ minHeight: 140 }}
+  >
+    {/* PixelBlast background */}
+    <div className="absolute inset-0 z-0">
+      <PixelBlast
+        variant="circle"
+        pixelSize={5}
+        color="#465FFF"
+        patternScale={3}
+        patternDensity={1.1}
+        pixelSizeJitter={0.4}
+        enableRipples
+        rippleSpeed={0.35}
+        rippleThickness={0.1}
+        rippleIntensityScale={1.2}
+        liquid
+        liquidStrength={0.08}
+        liquidRadius={1.1}
+        liquidWobbleSpeed={4.5}
+        speed={0.4}
+        edgeFade={0.3}
+        transparent
+      />
+    </div>
+
+    {/* Overlay gelap supaya teks tetap terbaca */}
+    <div
+      className="absolute inset-0 z-10"
+      style={{ background: "linear-gradient(135deg, rgba(70,95,255,0.12) 0%, rgba(124,58,237,0.18) 100%)" }}
+    />
+
+    <div className="relative z-20 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
+      <div className="flex items-center gap-4">
+        <div
+          className="w-14 h-14 rounded-2xl flex items-center justify-center flex-shrink-0"
+          style={{ background: "linear-gradient(135deg, #465FFF, #7c3aed)" }}
+        >
+          <Ic.Crown s={26} c="white" />
         </div>
+        <div>
+          <h1 className="text-xl font-bold text-gray-800 dark:text-white">Membership Premium</h1>
+          <p className="text-sm text-gray-500 dark:text-gray-400 mt-0.5">
+            Akses penuh semua livestream JKT48 tanpa batas
+          </p>
+        </div>
+      </div>
+      <div className="flex items-center gap-2 self-start sm:self-auto flex-wrap">
+        {isAdmin && (
+          <div
+            className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-bold"
+            style={{ background: "rgba(245,158,11,0.12)", border: "1px solid rgba(245,158,11,0.3)", color: "#d97706" }}
+          >
+            <Ic.Shield s={12} c="#d97706" />Admin
+          </div>
+        )}
+        {period && (
+          <div
+            className="inline-flex items-center gap-2 px-3 py-1.5 rounded-xl text-xs font-semibold"
+            style={{ background: "rgba(255,255,255,0.15)", border: "1px solid rgba(70,95,255,0.3)", color: "#465FFF" }}
+          >
+            <Ic.Package s={13} c="#465FFF" />
+            Stok {monthNames[period.month - 1]} {period.year}
+          </div>
+        )}
+      </div>
+    </div>
+  </div>
+</div>
 
         {/* Admin Panel — hanya muncul untuk admin */}
         {isAdmin && (
