@@ -2,7 +2,8 @@ import React, { useEffect, useState, useCallback, useRef } from "react";
 import PageMeta from "../components/common/PageMeta";
 
 // ── Constants ────────────────────────────────────────────────────────────────
-const MEMBERSHIP_API = "https://v5.jkt48connect.com/api/membership";
+// SESUDAH — proxy lewat Pages Functions, no CORS issue:
+const MEMBERSHIP_API = "/api/membership";
 const API_KEY        = "JKTCONNECT";
 const q              = `?apikey=${API_KEY}`;
 const ADMIN_USER_ID  = "USR-BCCEADBE3FE94ABD08A5691F074027D3";
