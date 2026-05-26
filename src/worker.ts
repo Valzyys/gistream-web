@@ -61,7 +61,7 @@ export default {
 
       try {
         const response = await fetch(targetUrl, {
-          headers: { Authorization: `Bearer ${env.BETTERSTACK_TOKEN}` },
+          headers: { Authorization: `Bearer PD9NoNnChnSrnNyjhew1DuJh` },
         });
 
         const text = await response.text();
@@ -96,7 +96,7 @@ export default {
 
       try {
         const response = await fetch(targetUrl, {
-          headers: { Authorization: `Bearer ${env.BETTERSTACK_TOKEN}` },
+          headers: { Authorization: `Bearer PD9NoNnChnSrnNyjhew1DuJh` },
         });
 
         const text = await response.text();
