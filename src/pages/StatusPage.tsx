@@ -178,10 +178,10 @@ async function fetchAllIncidents(monitorId: string, from90: string): Promise<Inc
   let pageUrl: string | null =
     `${API_BASE_V3}/incidents?monitor_id=${monitorId}&from=${from90}&per_page=50`;
 
-  while (pageUrl) {
-    const res = await fetch(pageUrl);
+ while (pageUrl) {
+    const res: Response = await fetch(pageUrl);
     if (!res.ok) break;
-    const json = await res.json();
+    const json: any = await res.json();
     const items: Incident[] = json?.data ?? [];
     all.push(...items);
     // Ikuti pagination jika ada next page
