@@ -1759,7 +1759,7 @@ useEffect(() => {
             )}
             {!loading && products.length > 0 && (
               <p className="text-center text-xs text-gray-400 dark:text-gray-600 mt-6">
-                Stok membership diperbarui setiap bulan. Pembayaran diproses via YoBasePay yang aman &amp; terenkripsi.
+                Stok membership diperbarui setiap bulan. Pembayaran diproses via yang aman &amp; terenkripsi.
               </p>
             )}
           </div>
