@@ -183,9 +183,7 @@ async function fetchMonitor(
     fetch(`${API_BASE}/monitors/${config.id}`),
     fetch(`${API_BASE}/monitors/${config.id}/sla?from=${from30}&to=${to30}`),
     fetch(`${API_BASE}/monitors/${config.id}/response-times`),
-    fetch(
-      `${API_BASE}/monitors/${config.id}/incidents?from=${from90}&per_page=100`
-    ),
+    fetch(`${API_BASE}/monitors/${config.id}/incidents?from=${from90}&per_page=100`),
   ]);
 
   const tryJson = async (
