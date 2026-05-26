@@ -18,6 +18,7 @@ const MONITOR_CATEGORIES: CategoryConfig[] = [
     description: "Ketersediaan halaman web utama",
     monitors: [
       { id: "3523155", name: "Main Website" },
+      { id: "3523181", name: "Documentation Website" },
     ],
   },
   {
@@ -25,7 +26,8 @@ const MONITOR_CATEGORIES: CategoryConfig[] = [
     name: "API Services",
     description: "Endpoint API dan layanan backend",
     monitors: [
-      // { id: "2345678", name: "REST API v1" },
+      { id: "3523155", name: "RestApi Utama" },
+      { id: "4453200", name: "RestApi Stream" },
     ],
   },
   {
@@ -33,7 +35,7 @@ const MONITOR_CATEGORIES: CategoryConfig[] = [
     name: "Infrastructure",
     description: "Database, CDN, dan infrastruktur pendukung",
     monitors: [
-      // { id: "4567890", name: "PostgreSQL" },
+      { id: "4453201", name: "Proxy" },,
     ],
   },
 ];
