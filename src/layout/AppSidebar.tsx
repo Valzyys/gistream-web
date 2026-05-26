@@ -14,6 +14,21 @@ import { useSidebar } from "../context/SidebarContext";
 import SidebarWidget from "./SidebarWidget";
 
 // ─── Custom SVG Icons ─────────────────────────────────────────────────────────
+const StatusIcon = () => (
+  <svg
+    width="22"
+    height="22"
+    viewBox="0 0 24 24"
+    fill="none"
+    stroke="currentColor"
+    strokeWidth="2"
+    strokeLinecap="round"
+    strokeLinejoin="round"
+  >
+    <circle cx="12" cy="12" r="10" />
+    <polyline points="12 6 12 12 16 14" />
+  </svg>
+);
 
 const LiveIcon = () => (
   <svg
@@ -136,6 +151,11 @@ const othersItems: NavItem[] = [
     icon: <AboutIcon />,
     name: "About",
     path: "/about",
+  },
+  {
+    icon: <StatusIcon />,   // ← tambahan
+    name: "Status",
+    path: "/status",
   },
 ];
 
