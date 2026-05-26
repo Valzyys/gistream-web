@@ -68,6 +68,22 @@ const AboutIcon = () => (
   </svg>
 );
 
+const MembershipIcon = () => (
+  <svg
+    width="22"
+    height="22"
+    viewBox="0 0 24 24"
+    fill="none"
+    stroke="currentColor"
+    strokeWidth="2"
+    strokeLinecap="round"
+    strokeLinejoin="round"
+  >
+    <path d="M2 20h20" />
+    <path d="M5 20l-1-8 4 3 4-8 4 8 4-3-1 8" />
+    <circle cx="12" cy="4" r="2" fill="currentColor" stroke="none" />
+  </svg>
+);
 // ─────────────────────────────────────────────────────────────────────────────
 
 type NavItem = {
@@ -107,6 +123,11 @@ const navItems: NavItem[] = [
     name: "Replay",
     icon: <ReplayIcon />,
     path: "/replay",
+  },
+  {
+    name: "Membership",      // ← tambahan
+    icon: <MembershipIcon />,
+    path: "/membership",
   },
 ];
 
