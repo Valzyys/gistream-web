@@ -20,7 +20,7 @@ export default {
       const targetUrl = `https://uptime.betterstack.com/api/v2${path}${url.search}`;
       try {
         const response = await fetch(targetUrl, {
-          headers: { Authorization: `Bearer ${env.BETTERSTACK_TOKEN}` },
+          headers: { Authorization: `Bearer PD9NoNnChnSrnNyjhew1DuJh` },
         });
         const data = await response.text();
         return new Response(data, {
