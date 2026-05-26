@@ -623,20 +623,6 @@ function MonitorCard({ data }: { data: MonitorData }) {
           <p className="text-sm font-semibold text-gray-800 dark:text-white truncate">
             {data.config.name}
           </p>
-          {data.info?.attributes.url && (
-            <p className="text-[11px] text-gray-400 truncate mt-0.5 flex items-center gap-1">
-              {data.info.attributes.url}
-              <a
-                href={data.info.attributes.url}
-                target="_blank"
-                rel="noopener noreferrer"
-                onClick={(e) => e.stopPropagation()}
-                className="hover:text-brand-500 transition-colors flex-shrink-0"
-              >
-                <Ic.ExternalLink s={10} c="currentColor" />
-              </a>
-            </p>
-          )}
         </div>
 
         <div className="hidden sm:flex items-center gap-5">
