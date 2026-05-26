@@ -516,11 +516,6 @@ function MonitorCard({ data }: { data: MonitorData }) {
           <p className="text-sm font-semibold text-gray-800 dark:text-white truncate">
             {data.config.name}
           </p>
-          {data.info?.attributes.pronounceable_name && (
-            <p className="text-[11px] text-gray-400 truncate mt-0.5">
-              {data.info.attributes.pronounceable_name}
-            </p>
-          )}
         </div>
 
         <div className="hidden sm:flex items-center gap-5">
