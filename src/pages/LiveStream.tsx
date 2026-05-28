@@ -215,6 +215,83 @@ function useShowroomComments(roomId: number | null) {
   return { comments, loading, error, lastPoll, retry: fetchComments };
 }
 
+// ── HLS config factory (shared antara init dan retry) ─────────────────────────
+// Semua anti-buffering tuning dipusatkan di sini supaya
+// retry instance identik dengan instance pertama.
+function buildHlsConfig(token?: string): Hls.Config {
+  return {
+    enableWorker: true,
+    lowLatencyMode: false,         // matikan LLM mode — stabilitas > latency
+
+    // ── Buffer ────────────────────────────────────────────────────────────────
+    // Naikkan buffer agar jitter jaringan tidak langsung stall.
+    maxBufferLength:    60,        // naik dari 30 → 60 detik
+    maxMaxBufferLength: 120,       // naik dari 60 → 120 detik
+    maxBufferSize:      100 * 1000 * 1000, // 100 MB
+    backBufferLength:   60,        // naik dari 30 → 60 detik
+
+    // ── Live sync ─────────────────────────────────────────────────────────────
+    // liveSyncDurationCount 3 → 6: player jauh dari edge sehingga
+    // fragment sudah tersedia sebelum diputar → buffer tidak kosong.
+    liveSyncDurationCount:       6,
+    liveMaxLatencyDurationCount: 18,  // jarak max sebelum catch-up
+    liveDurationInfinity:        true,
+
+    // ── ABR (Adaptive Bitrate) ────────────────────────────────────────────────
+    // Akar masalah utama buffering: naik kualitas terlalu cepat
+    // sehingga bandwidth tidak cukup dan buffer terkuras.
+    startLevel:             -1,          // selalu mulai dari auto
+    abrEwmaDefaultEstimate: 300_000,     // estimasi awal konservatif (300 Kbps)
+    abrBandWidthFactor:     0.65,        // turun dari 0.8 → 0.65 (lebih konservatif)
+    abrBandWidthUpFactor:   0.40,        // turun dari 0.7 → 0.40 (sangat lambat naik kualitas)
+    abrEwmaFastLive:        5.0,         // naik dari 3.0 → 5.0 (estimasi lebih stabil)
+    abrEwmaSlowLive:        15.0,        // naik dari 9.0 → 15.0 (rata-rata lebih halus)
+
+    // ── Fragment loading ──────────────────────────────────────────────────────
+    fragLoadingTimeOut:          20000,  // naik dari 10s → 20s
+    fragLoadingMaxRetry:         10,     // naik dari 6 → 10
+    fragLoadingRetryDelay:       1500,
+    fragLoadingMaxRetryTimeout:  16000,
+
+    // ── Manifest & level loading ──────────────────────────────────────────────
+    manifestLoadingTimeOut:   15000,
+    manifestLoadingMaxRetry:  6,
+    manifestLoadingRetryDelay: 2000,
+    levelLoadingTimeOut:      15000,
+    levelLoadingMaxRetry:     6,
+    levelLoadingRetryDelay:   1000,
+
+    // ── Stall recovery ────────────────────────────────────────────────────────
+    nudgeOffset:   0.5,   // naik dari 0.3 → 0.5
+    nudgeMaxRetry: 10,    // naik dari 5 → 10
+
+    // ── Prefetch ──────────────────────────────────────────────────────────────
+    startFragPrefetch: true,  // mulai prefetch sebelum level load selesai
+
+    // ── Cap kualitas ke ukuran video (khusus mobile) ───────────────────────
+    // Hindari load 1080p di layar kecil yang membuang bandwidth.
+    capLevelToPlayerSize: true,
+
+    // ── Token auth header untuk setiap request HLS ────────────────────────────
+    ...(token
+      ? {
+          xhrSetup: (xhr: XMLHttpRequest) => {
+            xhr.setRequestHeader("x-api-token", token);
+          },
+          fetchSetup: (context: any, initParams: any) => {
+            return new Request(context.url, {
+              ...initParams,
+              headers: {
+                ...(initParams.headers || {}),
+                "x-api-token": token,
+              },
+            });
+          },
+        }
+      : {}),
+  } as Hls.Config;
+}
+
 // ── HLS Player ────────────────────────────────────────────────────────────────
 function HlsPlayer({
   src, title, qualities, onQualityChange, currentQuality, qualityMode, onModeChange, isIdn, token,
@@ -238,7 +315,31 @@ function HlsPlayer({
 
   const destroyHls = useCallback(() => {
     if (retryRef.current) { clearTimeout(retryRef.current); retryRef.current = null; }
-    if (hlsRef.current) { hlsRef.current.destroy(); hlsRef.current = null; }
+    if (hlsRef.current)   { hlsRef.current.destroy(); hlsRef.current = null; }
+  }, []);
+
+  // ── Fungsi untuk menerapkan level kualitas ke instance HLS yang aktif
+  // Ini menghindari reinit player hanya karena ganti kualitas.
+  const applyQualityToHls = useCallback((q: QualityOption | null, mode: "auto" | "manual") => {
+    const hls = hlsRef.current;
+    if (!hls) return;
+    if (mode === "auto" || q === null) {
+      hls.currentLevel  = -1;  // ABR auto
+      hls.loadLevel     = -1;
+    } else {
+      // Cari level index yang cocok berdasarkan bandwidth atau nama
+      const levelIdx = hls.levels.findIndex(
+        (l) => l.name === q.quality || Math.abs((l.bitrate || 0) - q.bandwidth) < 100_000
+      );
+      if (levelIdx >= 0) {
+        hls.currentLevel = levelIdx;
+        hls.loadLevel    = levelIdx;
+      } else {
+        // Fallback: pakai index langsung jika tidak ketemu
+        hls.currentLevel = q.index;
+        hls.loadLevel    = q.index;
+      }
+    }
   }, []);
 
   useEffect(() => {
@@ -256,53 +357,18 @@ function HlsPlayer({
       return;
     }
 
-    const hls = new Hls({
-      enableWorker: true,
-      lowLatencyMode: false,
-      maxBufferLength:    30,
-      maxMaxBufferLength: 60,
-      maxBufferSize:      60 * 1000 * 1000,
-      backBufferLength: 30,
-      liveSyncDurationCount:       3,
-      liveMaxLatencyDurationCount: 10,
-      liveDurationInfinity:        true,
-      fragLoadingTimeOut:          10000,
-      fragLoadingMaxRetry:         6,
-      fragLoadingRetryDelay:       1000,
-      fragLoadingMaxRetryTimeout:  8000,
-      manifestLoadingTimeOut:      10000,
-      manifestLoadingMaxRetry:     4,
-      manifestLoadingRetryDelay:   1000,
-      levelLoadingTimeOut:         10000,
-      levelLoadingMaxRetry:        4,
-      levelLoadingRetryDelay:      1000,
-      startLevel:             qualityMode === "auto" ? -1 : undefined,
-      abrEwmaDefaultEstimate: 500_000,
-      abrBandWidthFactor:     0.8,
-      abrBandWidthUpFactor:   0.7,
-      abrEwmaFastLive:        3.0,
-      abrEwmaSlowLive:        9.0,
-      nudgeOffset:   0.3,
-      nudgeMaxRetry: 5,
-      ...(token && {
-        xhrSetup: (xhr: XMLHttpRequest) => {
-          xhr.setRequestHeader("x-api-token", token);
-        },
-        fetchSetup: (context: any, initParams: any) => {
-          initParams.headers = {
-            ...initParams.headers,
-            "x-api-token": token,
-          };
-          return new Request(context.url, initParams);
-        },
-      }),
-    });
-
+    const config = buildHlsConfig(token);
+    const hls = new Hls(config);
     hlsRef.current = hls;
+
     hls.loadSource(src);
     hls.attachMedia(video);
 
     hls.on(Hls.Events.MANIFEST_PARSED, () => {
+      // Terapkan kualitas yang dipilih segera setelah manifest siap
+      if (qualityMode === "manual" && currentQuality) {
+        applyQualityToHls(currentQuality, "manual");
+      }
       video.play().catch(() => {});
     });
 
@@ -321,31 +387,35 @@ function HlsPlayer({
 
     hls.on(Hls.Events.ERROR, (_, data) => {
       if (!data.fatal) return;
+
       if (data.type === Hls.ErrorTypes.NETWORK_ERROR) {
+        // Network error: coba resume dulu sebelum destroy
         hls.startLoad();
       } else if (data.type === Hls.ErrorTypes.MEDIA_ERROR) {
         hls.recoverMediaError();
       } else {
+        // Fatal error lainnya: destroy lalu retry dengan config lengkap
         destroyHls();
         retryRef.current = setTimeout(() => {
           const v = videoRef.current;
           if (!v) return;
-          const newHls = new Hls({
-            lowLatencyMode: false,
-            maxBufferLength: 30,
-            ...(token && {
-              xhrSetup: (xhr: XMLHttpRequest) => {
-                xhr.setRequestHeader("x-api-token", token);
-              },
-              fetchSetup: (context: any, initParams: any) => {
-                initParams.headers = { ...initParams.headers, "x-api-token": token };
-                return new Request(context.url, initParams);
-              },
-            }),
-          });
+
+          // Gunakan buildHlsConfig yang sama — tidak ada config yang hilang
+          const retryConfig = buildHlsConfig(token);
+          const newHls = new Hls(retryConfig);
+
           newHls.loadSource(src);
           newHls.attachMedia(v);
-          newHls.on(Hls.Events.MANIFEST_PARSED, () => v.play().catch(() => {}));
+          newHls.on(Hls.Events.MANIFEST_PARSED, () => {
+            if (qualityMode === "manual" && currentQuality) {
+              applyQualityToHls(currentQuality, "manual");
+            }
+            v.play().catch(() => {});
+          });
+          newHls.on(Hls.Events.LEVEL_SWITCHED, (_, d) => {
+            const lvl = newHls.levels[d.level];
+            if (lvl) setCurrentLevel(lvl.name || `${lvl.height}p`);
+          });
           hlsRef.current = newHls;
         }, 2000);
       }
@@ -353,6 +423,12 @@ function HlsPlayer({
 
     return destroyHls;
   }, [src, token, destroyHls]); // eslint-disable-line
+
+  // ── Sync kualitas ke HLS instance saat mode/quality berubah dari luar ─────
+  // Ini yang memungkinkan ganti kualitas tanpa reinit player.
+  useEffect(() => {
+    applyQualityToHls(currentQuality, qualityMode);
+  }, [qualityMode, currentQuality, applyQualityToHls]);
 
   return (
     <div className="relative w-full rounded-2xl overflow-hidden bg-black shadow-2xl">
@@ -393,7 +469,11 @@ function HlsPlayer({
             <div className="absolute bottom-[calc(100%+8px)] right-0 bg-gray-900/95 backdrop-blur-xl border border-white/10 rounded-2xl p-2 min-w-[190px] shadow-2xl">
               <p className="text-[9px] font-bold text-white/30 px-2 pb-1.5 uppercase tracking-widest">Kualitas</p>
               <button
-                onClick={() => { onModeChange("auto"); onQualityChange(null); setShowQualityPanel(false); }}
+                onClick={() => {
+                  onModeChange("auto");
+                  onQualityChange(null);
+                  setShowQualityPanel(false);
+                }}
                 className={`w-full px-3 py-2 rounded-xl border-0 text-[12px] cursor-pointer text-left flex items-center justify-between mb-0.5 transition-colors ${qualityMode === "auto" ? "bg-red-500/20 text-red-400 font-bold" : "bg-transparent text-white/70 hover:bg-white/5"}`}
               >
                 <span>⚡ Auto</span>
@@ -404,7 +484,11 @@ function HlsPlayer({
                 return (
                   <button
                     key={q.quality}
-                    onClick={() => { onModeChange("manual"); onQualityChange(q); setShowQualityPanel(false); }}
+                    onClick={() => {
+                      onModeChange("manual");
+                      onQualityChange(q);
+                      setShowQualityPanel(false);
+                    }}
                     className={`w-full px-3 py-2 rounded-xl border-0 text-[12px] cursor-pointer text-left flex items-center justify-between mb-0.5 transition-colors ${isActive ? "bg-red-500/20 text-red-400 font-bold" : "bg-transparent text-white/70 hover:bg-white/5"}`}
                   >
                     <span>{q.name}</span>
@@ -687,10 +771,6 @@ function LiveStream() {
     } catch { return "unknown"; }
   };
 
-  // ── Cek tiket via Tickets API ─────────────────────────────────────────────
-  // Menggunakan slug (playbackId) langsung sesuai URL pattern:
-  // /live/dream-bakudan-2026-05-21-260510221648  →  slug = dream-bakudan-2026-05-21-260510221648
-  // endpoint: GET /tickets/user/{userId}/show/{slug}
   const checkTicket = useCallback(async (): Promise<boolean> => {
     const session = getSession();
     if (!session) return false;
@@ -702,7 +782,6 @@ function LiveStream() {
       );
       if (!res.ok) return false;
       const data = await res.json();
-      // has_ticket = true berarti tiket sudah dibayar lunas
       if (data.has_ticket === true) {
         setAccessSource("ticket");
         return true;
@@ -793,7 +872,6 @@ function LiveStream() {
     } catch { setVerifyError("Terjadi kesalahan saat verifikasi. Silakan coba lagi."); setVerifying(false); }
   };
 
-  // ── loadIdnStream ─────────────────────────────────────────────────────────
   const loadIdnStream = useCallback(async () => {
     setLoading(true); setError("");
     try {
@@ -836,7 +914,6 @@ function LiveStream() {
     }
   }, [playbackId]);
 
-  // ── loadMemberStream ──────────────────────────────────────────────────────
   const loadMemberStream = useCallback(async () => {
     setLoading(true); setError("");
     try {
@@ -896,39 +973,20 @@ function LiveStream() {
     }
   }, [playbackId]);
 
+  // ── Quality change: pakai hls.currentLevel, BUKAN ganti URL ──────────────
+  // URL stream tidak berubah — hanya level di dalam HLS instance yang diganti.
+  // Ini mencegah reinit player setiap kali ganti kualitas.
   const handleQualityChange = (q: QualityOption | null) => {
     setCurrentQuality(q);
-    if (!q) return;
-    if (isIdn) setHlsUrl(q.manual_url);
-    else setMemberHlsUrl(q.manual_url);
+    // Perubahan level akan diterapkan oleh useEffect di HlsPlayer
+    // yang watch qualityMode & currentQuality → applyQualityToHls()
   };
 
   const handleModeChange = async (mode: "auto" | "manual") => {
     setQualityMode(mode);
     if (mode === "auto") {
-      try {
-        if (isIdn && idnShow?.slug) {
-          const token = await generateStreamToken(idnShow.slug, true);
-          setStreamToken(token);
-          const { url: streamUrl } = await getStreamURL(token, idnShow.slug, true);
-          setHlsUrl(streamUrl);
-        } else if (isMember && memberShow) {
-          const identifier = memberShow.identifier || memberShow.slug || memberShow.url_key;
-          const showId = memberShow.showid || memberShow.show_id || null;
-          if (memberShow.is_group || memberShow.url_key === "jkt48-official") {
-            const token = await generateStreamToken(identifier, true);
-            setStreamToken(token);
-            const { url: streamUrl } = await getStreamURL(token, identifier, true);
-            setMemberHlsUrl(streamUrl);
-          } else if (showId) {
-            const token = await generateStreamToken(String(showId), false);
-            setStreamToken(token);
-            const { url: streamUrl } = await getStreamURL(token, String(showId), false);
-            setMemberHlsUrl(streamUrl);
-          }
-        }
-      } catch {}
       setCurrentQuality(null);
+      // Perubahan ke auto juga ditangani oleh applyQualityToHls di HlsPlayer
     }
   };
 
@@ -1005,18 +1063,12 @@ function LiveStream() {
 
   useEffect(() => { chatEndRef.current?.scrollIntoView({ behavior: "smooth" }); }, [chatMessages]);
 
-  // ── Main init effect ──────────────────────────────────────────────────────
   useEffect(() => {
     if (isMember) {
-      // Member stream tidak perlu gate akses
       loadMemberStream();
       return;
     }
 
-    // IDN show: cek akses dengan urutan prioritas:
-    // 1. Tiket (via Tickets API, butuh login + user_id)
-    // 2. Membership aktif (non-free)
-    // 3. Kode verifikasi (localStorage / input manual)
     const init = async () => {
       setMembershipLoading(true);
       await fetchClientIP();
@@ -1024,7 +1076,6 @@ function LiveStream() {
       const session = getSession();
 
       if (session) {
-        // Gate 1: cek tiket terlebih dahulu
         const ticketOk = await checkTicket();
         if (ticketOk) {
           setIsVerified(true);
@@ -1034,7 +1085,6 @@ function LiveStream() {
           return;
         }
 
-        // Gate 2: cek membership
         const membershipOk = await checkMembership();
         if (membershipOk) {
           setIsVerified(true);
@@ -1045,7 +1095,6 @@ function LiveStream() {
         }
       }
 
-      // Gate 3: cek kode verifikasi yang tersimpan (berlaku meski tidak login)
       const verified = await checkExistingVerification();
       setMembershipLoading(false);
       if (verified) {
@@ -1097,11 +1146,8 @@ function LiveStream() {
 
       const uid = data.data.user?.user_id;
       const token = data.data.session?.access_token;
-
-      // Setelah login, cek tiket dulu baru membership
       const slug = playbackId || "";
 
-      // Gate 1: cek tiket
       try {
         const ticketRes = await fetch(
           `${TICKETS_API}/user/${uid}/show/${encodeURIComponent(slug)}?apikey=${API_KEY}`
@@ -1119,7 +1165,6 @@ function LiveStream() {
         }
       } catch {}
 
-      // Gate 2: cek membership
       const profileRes = await fetch(`${API_BASE}/profile/${uid}?apikey=${API_KEY}`, {
         headers: { Authorization: `Bearer ${token}` },
       });
@@ -1183,7 +1228,6 @@ function LiveStream() {
 
           {accessTab === "login" && (
             <div className="bg-gray-50 dark:bg-gray-800/50 rounded-2xl border border-gray-200 dark:border-gray-700 p-6 mb-4">
-              {/* Info badge: login akan cek tiket dulu */}
               <div className="flex items-start gap-2 px-3 py-2.5 rounded-xl bg-blue-50 dark:bg-blue-500/10 border border-blue-200 dark:border-blue-500/20 mb-4">
                 <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="#3b82f6" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="flex-shrink-0 mt-0.5">
                   <circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/>
@@ -1301,7 +1345,6 @@ function LiveStream() {
           </div>
           {isIdn && <span className="px-3 py-1.5 rounded-full bg-blue-50 dark:bg-blue-500/10 border border-blue-200 dark:border-blue-500/20 text-blue-600 dark:text-blue-400 text-[11px] font-bold">IDN Live+</span>}
           {isMember && <span className="px-3 py-1.5 rounded-full bg-emerald-50 dark:bg-emerald-500/10 border border-emerald-200 dark:border-emerald-500/20 text-emerald-600 dark:text-emerald-400 text-[11px] font-bold">Member Live</span>}
-          {/* Access source badge */}
           {isIdn && accessSource === "ticket" && (
             <span className="px-3 py-1.5 rounded-full bg-green-50 dark:bg-green-500/10 border border-green-200 dark:border-green-500/20 text-green-600 dark:text-green-400 text-[11px] font-bold flex items-center gap-1">
               <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><polyline points="20 6 9 17 4 12" /></svg>
