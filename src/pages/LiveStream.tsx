@@ -219,59 +219,49 @@ function useShowroomComments(roomId: number | null) {
   return { comments, loading, error, lastPoll, retry: fetchComments };
 }
 
-function buildHlsConfig(token?: string) {
+function buildHlsConfig(token?: string, qualityMode: "auto" | "manual" = "auto") {
   return {
     // ── Core ──────────────────────────────────────────────────────────────
     enableWorker: true,
     lowLatencyMode: false,
 
-    // ── Buffer tuning (live-optimized) ────────────────────────────────────
-    // Turunkan dari 60 → 20s agar player tidak nunggu buffer besar sebelum mulai
-    maxBufferLength:    20,
-    // Batas atas tetap wajar, bukan 120 (terlalu royal untuk live)
-    maxMaxBufferLength: 40,
-    // 50MB cukup untuk live; 100MB overkill
-    maxBufferSize:      50 * 1000 * 1000,
-    // Live tidak butuh back-buffer besar — set minimum
-    backBufferLength:   10,
+    // ── Buffer ────────────────────────────────────────────────────────────
+    maxBufferLength:    30,
+    maxMaxBufferLength: 60,
+    maxBufferSize:      60 * 1000 * 1000,
+    backBufferLength:   30,
 
     // ── Live sync ─────────────────────────────────────────────────────────
-    // 3 segment cukup → startup lebih cepat, tidak nunggu terlalu jauh
     liveSyncDurationCount:       3,
-    // Max latency = 8 segment (naik dari 3x → 2.5x ratio lebih stabil)
-    liveMaxLatencyDurationCount: 8,
+    liveMaxLatencyDurationCount: 10,
     liveDurationInfinity:        true,
 
-    // ── ABR (Adaptive Bitrate) ────────────────────────────────────────────
-    // Auto-select kualitas terbaik saat start
-    startLevel:             -1,
-    // Estimasi bandwidth awal lebih rendah = mulai dari quality aman dulu
+    // ── Fragment loading ──────────────────────────────────────────────────
+    fragLoadingTimeOut:          10000,
+    fragLoadingMaxRetry:         6,
+    fragLoadingRetryDelay:       1000,
+    fragLoadingMaxRetryTimeout:  8000,
+
+    // ── Manifest loading ──────────────────────────────────────────────────
+    manifestLoadingTimeOut:      10000,
+    manifestLoadingMaxRetry:     4,
+    manifestLoadingRetryDelay:   1000,
+
+    // ── Level loading ─────────────────────────────────────────────────────
+    levelLoadingTimeOut:         10000,
+    levelLoadingMaxRetry:        4,
+    levelLoadingRetryDelay:      1000,
+
+    // ── ABR ───────────────────────────────────────────────────────────────
+    startLevel:             qualityMode === "auto" ? -1 : undefined,
     abrEwmaDefaultEstimate: 500_000,
-    // Naik dari 0.65 → 0.85: lebih agresif pakai bandwidth yang tersedia
-    abrBandWidthFactor:     0.85,
-    // Naik dari 0.40 → 0.70: quality upgrade lebih responsif saat jaringan baik
-    abrBandWidthUpFactor:   0.70,
-    // EWMA fast/slow untuk live — lebih sensitif ke perubahan bandwidth
+    abrBandWidthFactor:     0.8,
+    abrBandWidthUpFactor:   0.7,
     abrEwmaFastLive:        3.0,
     abrEwmaSlowLive:        9.0,
 
-    // ── Fragment loading ──────────────────────────────────────────────────
-    fragLoadingTimeOut:         20000,
-    fragLoadingMaxRetry:        6,      // turun dari 10, hindari retry storm
-    fragLoadingRetryDelay:      500,    // turun dari 1500 → retry lebih cepat
-    fragLoadingMaxRetryTimeout: 8000,  // turun dari 16000
-
-    // ── Manifest & level loading ──────────────────────────────────────────
-    manifestLoadingTimeOut:    10000,
-    manifestLoadingMaxRetry:   4,
-    manifestLoadingRetryDelay: 1000,
-    levelLoadingTimeOut:       10000,
-    levelLoadingMaxRetry:      4,
-    levelLoadingRetryDelay:    500,
-
     // ── Stall recovery ────────────────────────────────────────────────────
-    // Saat stall, nudge lebih kecil = skip minimal, tidak lompat jauh
-    nudgeOffset:   0.2,
+    nudgeOffset:   0.3,
     nudgeMaxRetry: 5,
 
     // ── Misc ──────────────────────────────────────────────────────────────
