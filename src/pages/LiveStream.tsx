@@ -219,47 +219,66 @@ function useShowroomComments(roomId: number | null) {
   return { comments, loading, error, lastPoll, retry: fetchComments };
 }
 
-// ── HLS config factory ────────────────────────────────────────────────────────
-// Semua anti-buffering tuning dari versi baru dipusatkan di sini.
 function buildHlsConfig(token?: string) {
   return {
+    // ── Core ──────────────────────────────────────────────────────────────
     enableWorker: true,
     lowLatencyMode: false,
 
-    maxBufferLength:    60,
-    maxMaxBufferLength: 120,
-    maxBufferSize:      100 * 1000 * 1000,
-    backBufferLength:   60,
+    // ── Buffer tuning (live-optimized) ────────────────────────────────────
+    // Turunkan dari 60 → 20s agar player tidak nunggu buffer besar sebelum mulai
+    maxBufferLength:    20,
+    // Batas atas tetap wajar, bukan 120 (terlalu royal untuk live)
+    maxMaxBufferLength: 40,
+    // 50MB cukup untuk live; 100MB overkill
+    maxBufferSize:      50 * 1000 * 1000,
+    // Live tidak butuh back-buffer besar — set minimum
+    backBufferLength:   10,
 
-    liveSyncDurationCount:       6,
-    liveMaxLatencyDurationCount: 18,
+    // ── Live sync ─────────────────────────────────────────────────────────
+    // 3 segment cukup → startup lebih cepat, tidak nunggu terlalu jauh
+    liveSyncDurationCount:       3,
+    // Max latency = 8 segment (naik dari 3x → 2.5x ratio lebih stabil)
+    liveMaxLatencyDurationCount: 8,
     liveDurationInfinity:        true,
 
+    // ── ABR (Adaptive Bitrate) ────────────────────────────────────────────
+    // Auto-select kualitas terbaik saat start
     startLevel:             -1,
-    abrEwmaDefaultEstimate: 300_000,
-    abrBandWidthFactor:     0.65,
-    abrBandWidthUpFactor:   0.40,
-    abrEwmaFastLive:        5.0,
-    abrEwmaSlowLive:        15.0,
+    // Estimasi bandwidth awal lebih rendah = mulai dari quality aman dulu
+    abrEwmaDefaultEstimate: 500_000,
+    // Naik dari 0.65 → 0.85: lebih agresif pakai bandwidth yang tersedia
+    abrBandWidthFactor:     0.85,
+    // Naik dari 0.40 → 0.70: quality upgrade lebih responsif saat jaringan baik
+    abrBandWidthUpFactor:   0.70,
+    // EWMA fast/slow untuk live — lebih sensitif ke perubahan bandwidth
+    abrEwmaFastLive:        3.0,
+    abrEwmaSlowLive:        9.0,
 
-    fragLoadingTimeOut:          20000,
-    fragLoadingMaxRetry:         10,
-    fragLoadingRetryDelay:       1500,
-    fragLoadingMaxRetryTimeout:  16000,
+    // ── Fragment loading ──────────────────────────────────────────────────
+    fragLoadingTimeOut:         20000,
+    fragLoadingMaxRetry:        6,      // turun dari 10, hindari retry storm
+    fragLoadingRetryDelay:      500,    // turun dari 1500 → retry lebih cepat
+    fragLoadingMaxRetryTimeout: 8000,  // turun dari 16000
 
-    manifestLoadingTimeOut:    15000,
-    manifestLoadingMaxRetry:   6,
-    manifestLoadingRetryDelay: 2000,
-    levelLoadingTimeOut:       15000,
-    levelLoadingMaxRetry:      6,
-    levelLoadingRetryDelay:    1000,
+    // ── Manifest & level loading ──────────────────────────────────────────
+    manifestLoadingTimeOut:    10000,
+    manifestLoadingMaxRetry:   4,
+    manifestLoadingRetryDelay: 1000,
+    levelLoadingTimeOut:       10000,
+    levelLoadingMaxRetry:      4,
+    levelLoadingRetryDelay:    500,
 
-    nudgeOffset:   0.5,
-    nudgeMaxRetry: 10,
+    // ── Stall recovery ────────────────────────────────────────────────────
+    // Saat stall, nudge lebih kecil = skip minimal, tidak lompat jauh
+    nudgeOffset:   0.2,
+    nudgeMaxRetry: 5,
 
+    // ── Misc ──────────────────────────────────────────────────────────────
     startFragPrefetch: true,
     capLevelToPlayerSize: true,
 
+    // ── Auth headers ──────────────────────────────────────────────────────
     ...(token
       ? {
           xhrSetup: (xhr: XMLHttpRequest) => {
@@ -278,7 +297,6 @@ function buildHlsConfig(token?: string) {
       : {}),
   } as Partial<HlsConfig>;
 }
-
 // ── HLS Player ────────────────────────────────────────────────────────────────
 // FIX: Hapus applyQualityToHls dan useEffect quality sync.
 // Ganti kualitas = ganti URL (src prop dari parent) → useEffect([src]) reinit player.
