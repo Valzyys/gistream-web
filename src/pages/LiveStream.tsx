@@ -1,3 +1,7 @@
+// fixed: quality switching dikembalikan ke URL-based approach (seperti versi lama)
+// buildHlsConfig tetap dari versi baru (anti-buffering tuning)
+// applyQualityToHls + useEffect quality sync DIHAPUS (penyebab bug)
+
 import { useEffect, useState, useRef, useCallback } from "react";
 import { useParams, useNavigate } from "react-router";
 import Hls, { type HlsConfig, type Level } from "hls.js";
@@ -215,64 +219,47 @@ function useShowroomComments(roomId: number | null) {
   return { comments, loading, error, lastPoll, retry: fetchComments };
 }
 
-// ── HLS config factory (shared antara init dan retry) ─────────────────────────
-// Semua anti-buffering tuning dipusatkan di sini supaya
-// retry instance identik dengan instance pertama.
+// ── HLS config factory ────────────────────────────────────────────────────────
+// Semua anti-buffering tuning dari versi baru dipusatkan di sini.
 function buildHlsConfig(token?: string) {
   return {
     enableWorker: true,
-    lowLatencyMode: false,         // matikan LLM mode — stabilitas > latency
+    lowLatencyMode: false,
 
-    // ── Buffer ────────────────────────────────────────────────────────────────
-    // Naikkan buffer agar jitter jaringan tidak langsung stall.
-    maxBufferLength:    60,        // naik dari 30 → 60 detik
-    maxMaxBufferLength: 120,       // naik dari 60 → 120 detik
-    maxBufferSize:      100 * 1000 * 1000, // 100 MB
-    backBufferLength:   60,        // naik dari 30 → 60 detik
+    maxBufferLength:    60,
+    maxMaxBufferLength: 120,
+    maxBufferSize:      100 * 1000 * 1000,
+    backBufferLength:   60,
 
-    // ── Live sync ─────────────────────────────────────────────────────────────
-    // liveSyncDurationCount 3 → 6: player jauh dari edge sehingga
-    // fragment sudah tersedia sebelum diputar → buffer tidak kosong.
     liveSyncDurationCount:       6,
-    liveMaxLatencyDurationCount: 18,  // jarak max sebelum catch-up
+    liveMaxLatencyDurationCount: 18,
     liveDurationInfinity:        true,
 
-    // ── ABR (Adaptive Bitrate) ────────────────────────────────────────────────
-    // Akar masalah utama buffering: naik kualitas terlalu cepat
-    // sehingga bandwidth tidak cukup dan buffer terkuras.
-    startLevel:             -1,          // selalu mulai dari auto
-    abrEwmaDefaultEstimate: 300_000,     // estimasi awal konservatif (300 Kbps)
-    abrBandWidthFactor:     0.65,        // turun dari 0.8 → 0.65 (lebih konservatif)
-    abrBandWidthUpFactor:   0.40,        // turun dari 0.7 → 0.40 (sangat lambat naik kualitas)
-    abrEwmaFastLive:        5.0,         // naik dari 3.0 → 5.0 (estimasi lebih stabil)
-    abrEwmaSlowLive:        15.0,        // naik dari 9.0 → 15.0 (rata-rata lebih halus)
+    startLevel:             -1,
+    abrEwmaDefaultEstimate: 300_000,
+    abrBandWidthFactor:     0.65,
+    abrBandWidthUpFactor:   0.40,
+    abrEwmaFastLive:        5.0,
+    abrEwmaSlowLive:        15.0,
 
-    // ── Fragment loading ──────────────────────────────────────────────────────
-    fragLoadingTimeOut:          20000,  // naik dari 10s → 20s
-    fragLoadingMaxRetry:         10,     // naik dari 6 → 10
+    fragLoadingTimeOut:          20000,
+    fragLoadingMaxRetry:         10,
     fragLoadingRetryDelay:       1500,
     fragLoadingMaxRetryTimeout:  16000,
 
-    // ── Manifest & level loading ──────────────────────────────────────────────
-    manifestLoadingTimeOut:   15000,
-    manifestLoadingMaxRetry:  6,
+    manifestLoadingTimeOut:    15000,
+    manifestLoadingMaxRetry:   6,
     manifestLoadingRetryDelay: 2000,
-    levelLoadingTimeOut:      15000,
-    levelLoadingMaxRetry:     6,
-    levelLoadingRetryDelay:   1000,
+    levelLoadingTimeOut:       15000,
+    levelLoadingMaxRetry:      6,
+    levelLoadingRetryDelay:    1000,
 
-    // ── Stall recovery ────────────────────────────────────────────────────────
-    nudgeOffset:   0.5,   // naik dari 0.3 → 0.5
-    nudgeMaxRetry: 10,    // naik dari 5 → 10
+    nudgeOffset:   0.5,
+    nudgeMaxRetry: 10,
 
-    // ── Prefetch ──────────────────────────────────────────────────────────────
-    startFragPrefetch: true,  // mulai prefetch sebelum level load selesai
-
-    // ── Cap kualitas ke ukuran video (khusus mobile) ───────────────────────
-    // Hindari load 1080p di layar kecil yang membuang bandwidth.
+    startFragPrefetch: true,
     capLevelToPlayerSize: true,
 
-    // ── Token auth header untuk setiap request HLS ────────────────────────────
     ...(token
       ? {
           xhrSetup: (xhr: XMLHttpRequest) => {
@@ -293,6 +280,9 @@ function buildHlsConfig(token?: string) {
 }
 
 // ── HLS Player ────────────────────────────────────────────────────────────────
+// FIX: Hapus applyQualityToHls dan useEffect quality sync.
+// Ganti kualitas = ganti URL (src prop dari parent) → useEffect([src]) reinit player.
+// Ini identik dengan versi lama yang berfungsi, tapi pakai buildHlsConfig() dari versi baru.
 function HlsPlayer({
   src, title, qualities, onQualityChange, currentQuality, qualityMode, onModeChange, isIdn, token,
 }: {
@@ -318,30 +308,6 @@ function HlsPlayer({
     if (hlsRef.current)   { hlsRef.current.destroy(); hlsRef.current = null; }
   }, []);
 
-  // ── Fungsi untuk menerapkan level kualitas ke instance HLS yang aktif
-  // Ini menghindari reinit player hanya karena ganti kualitas.
-  const applyQualityToHls = useCallback((q: QualityOption | null, mode: "auto" | "manual") => {
-    const hls = hlsRef.current;
-    if (!hls) return;
-    if (mode === "auto" || q === null) {
-      hls.currentLevel  = -1;  // ABR auto
-      hls.loadLevel     = -1;
-    } else {
-      // Cari level index yang cocok berdasarkan bandwidth atau nama
-      const levelIdx = hls.levels.findIndex(
- (l: Level) => l.name === q.quality || Math.abs((l.bitrate || 0) - q.bandwidth) < 100_000
-      );
-      if (levelIdx >= 0) {
-        hls.currentLevel = levelIdx;
-        hls.loadLevel    = levelIdx;
-      } else {
-        // Fallback: pakai index langsung jika tidak ketemu
-        hls.currentLevel = q.index;
-        hls.loadLevel    = q.index;
-      }
-    }
-  }, []);
-
   useEffect(() => {
     const video = videoRef.current;
     if (!video || !src) return;
@@ -365,10 +331,6 @@ function HlsPlayer({
     hls.attachMedia(video);
 
     hls.on(Hls.Events.MANIFEST_PARSED, () => {
-      // Terapkan kualitas yang dipilih segera setelah manifest siap
-      if (qualityMode === "manual" && currentQuality) {
-        applyQualityToHls(currentQuality, "manual");
-      }
       video.play().catch(() => {});
     });
 
@@ -389,27 +351,21 @@ function HlsPlayer({
       if (!data.fatal) return;
 
       if (data.type === Hls.ErrorTypes.NETWORK_ERROR) {
-        // Network error: coba resume dulu sebelum destroy
         hls.startLoad();
       } else if (data.type === Hls.ErrorTypes.MEDIA_ERROR) {
         hls.recoverMediaError();
       } else {
-        // Fatal error lainnya: destroy lalu retry dengan config lengkap
         destroyHls();
         retryRef.current = setTimeout(() => {
           const v = videoRef.current;
           if (!v) return;
 
-          // Gunakan buildHlsConfig yang sama — tidak ada config yang hilang
           const retryConfig = buildHlsConfig(token);
           const newHls = new Hls(retryConfig);
 
           newHls.loadSource(src);
           newHls.attachMedia(v);
           newHls.on(Hls.Events.MANIFEST_PARSED, () => {
-            if (qualityMode === "manual" && currentQuality) {
-              applyQualityToHls(currentQuality, "manual");
-            }
             v.play().catch(() => {});
           });
           newHls.on(Hls.Events.LEVEL_SWITCHED, (_, d) => {
@@ -422,13 +378,9 @@ function HlsPlayer({
     });
 
     return destroyHls;
-  }, [src, token, destroyHls]); // eslint-disable-line
-
-  // ── Sync kualitas ke HLS instance saat mode/quality berubah dari luar ─────
-  // Ini yang memungkinkan ganti kualitas tanpa reinit player.
-  useEffect(() => {
-    applyQualityToHls(currentQuality, qualityMode);
-  }, [qualityMode, currentQuality, applyQualityToHls]);
+  }, [src, token, destroyHls]);
+  // src berubah saat quality berganti (via handleQualityChange di parent)
+  // → destroyHls() lama, init baru dengan src baru. Ini yang berfungsi di versi lama.
 
   return (
     <div className="relative w-full rounded-2xl overflow-hidden bg-black shadow-2xl">
@@ -973,20 +925,43 @@ function LiveStream() {
     }
   }, [playbackId]);
 
-  // ── Quality change: pakai hls.currentLevel, BUKAN ganti URL ──────────────
-  // URL stream tidak berubah — hanya level di dalam HLS instance yang diganti.
-  // Ini mencegah reinit player setiap kali ganti kualitas.
+  // ── Quality change: ganti URL langsung → HlsPlayer reinit via useEffect([src]) ──
+  // FIX: Ini approach yang berfungsi di versi lama.
+  // Versi baru mencoba ganti level internal hls.js tapi gagal karena nama/bandwidth
+  // dari qualities[] tidak match persis dengan level internal → video stuck/error.
   const handleQualityChange = (q: QualityOption | null) => {
     setCurrentQuality(q);
-    // Perubahan level akan diterapkan oleh useEffect di HlsPlayer
-    // yang watch qualityMode & currentQuality → applyQualityToHls()
+    if (!q) return;
+    if (isIdn) setHlsUrl(q.manual_url);
+    else setMemberHlsUrl(q.manual_url);
   };
 
   const handleModeChange = async (mode: "auto" | "manual") => {
     setQualityMode(mode);
     if (mode === "auto") {
+      try {
+        if (isIdn && idnShow?.slug) {
+          const token = await generateStreamToken(idnShow.slug, true);
+          setStreamToken(token);
+          const { url: streamUrl } = await getStreamURL(token, idnShow.slug, true);
+          setHlsUrl(streamUrl);
+        } else if (isMember && memberShow) {
+          const identifier = memberShow.identifier || memberShow.slug || memberShow.url_key;
+          const showId = memberShow.showid || memberShow.show_id || null;
+          if (memberShow.is_group || memberShow.url_key === "jkt48-official") {
+            const token = await generateStreamToken(identifier, true);
+            setStreamToken(token);
+            const { url: streamUrl } = await getStreamURL(token, identifier, true);
+            setMemberHlsUrl(streamUrl);
+          } else if (showId) {
+            const token = await generateStreamToken(String(showId), false);
+            setStreamToken(token);
+            const { url: streamUrl } = await getStreamURL(token, String(showId), false);
+            setMemberHlsUrl(streamUrl);
+          }
+        }
+      } catch {}
       setCurrentQuality(null);
-      // Perubahan ke auto juga ditangani oleh applyQualityToHls di HlsPlayer
     }
   };
 
