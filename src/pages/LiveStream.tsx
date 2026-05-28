@@ -1,6 +1,6 @@
 import { useEffect, useState, useRef, useCallback } from "react";
 import { useParams, useNavigate } from "react-router";
-import Hls from "hls.js";
+import Hls, { type HlsConfig, Events as HlsEvents, ErrorTypes as HlsErrorTypes } from "hls.js";
 import { createClient } from "@supabase/supabase-js";
 import { Backlight } from "@/components/ui/videos/Backlight";
 
@@ -218,7 +218,7 @@ function useShowroomComments(roomId: number | null) {
 // ── HLS config factory (shared antara init dan retry) ─────────────────────────
 // Semua anti-buffering tuning dipusatkan di sini supaya
 // retry instance identik dengan instance pertama.
-function buildHlsConfig(token?: string): Hls.Config {
+function buildHlsConfig(token?: string): HlsConfig {
   return {
     enableWorker: true,
     lowLatencyMode: false,         // matikan LLM mode — stabilitas > latency
