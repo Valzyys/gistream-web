@@ -4,7 +4,7 @@
 
 import { useEffect, useState, useRef, useCallback } from "react";
 import { useParams, useNavigate } from "react-router";
-import Hls, { type HlsConfig, type Level } from "hls.js";
+import Hls, { type HlsConfig } from "hls.js";
 import { createClient } from "@supabase/supabase-js";
 import { Backlight } from "@/components/ui/videos/Backlight";
 
