@@ -1,7 +1,6 @@
 import { useEffect, useState, useRef, useCallback } from "react";
 import { useParams, useNavigate } from "react-router";
-import * as HlsModule from "hls.js";
-const Hls = (HlsModule.default ?? HlsModule) as typeof import("hls.js").default;
+import Hls, { type HlsConfig, type Level } from "hls.js";
 import { createClient } from "@supabase/supabase-js";
 import { Backlight } from "@/components/ui/videos/Backlight";
 
@@ -290,7 +289,7 @@ function buildHlsConfig(token?: string) {
           },
         }
       : {}),
-  } as Hls.Config;
+  } as Partial<HlsConfig>;
 }
 
 // ── HLS Player ────────────────────────────────────────────────────────────────
@@ -330,7 +329,7 @@ function HlsPlayer({
     } else {
       // Cari level index yang cocok berdasarkan bandwidth atau nama
       const levelIdx = hls.levels.findIndex(
-        (l) => l.name === q.quality || Math.abs((l.bitrate || 0) - q.bandwidth) < 100_000
+ (l: Level) => l.name === q.quality || Math.abs((l.bitrate || 0) - q.bandwidth) < 100_000
       );
       if (levelIdx >= 0) {
         hls.currentLevel = levelIdx;
