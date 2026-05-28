@@ -1,6 +1,9 @@
 // fixed: quality switching dikembalikan ke URL-based approach (seperti versi lama)
 // buildHlsConfig tetap dari versi baru (anti-buffering tuning)
 // applyQualityToHls + useEffect quality sync DIHAPUS (penyebab bug)
+// FIX 1: error recovery reinit sekarang pasang error handler di retry juga
+// FIX 2: handleModeChange set token dulu sebelum URL (hindari race condition)
+// FIX 3: auto-refresh token saat 401/403 (token expired)
 
 import { useEffect, useState, useRef, useCallback } from "react";
 import { useParams, useNavigate } from "react-router";
@@ -287,12 +290,12 @@ function buildHlsConfig(token?: string, qualityMode: "auto" | "manual" = "auto")
       : {}),
   } as Partial<HlsConfig>;
 }
+
 // ── HLS Player ────────────────────────────────────────────────────────────────
-// FIX: Hapus applyQualityToHls dan useEffect quality sync.
-// Ganti kualitas = ganti URL (src prop dari parent) → useEffect([src]) reinit player.
-// Ini identik dengan versi lama yang berfungsi, tapi pakai buildHlsConfig() dari versi baru.
+// FIX 1: Retry setelah fatal error sekarang pasang error handler di instance baru
+// FIX 3: onTokenExpired dipanggil saat response 401/403 → parent refresh token + URL
 function HlsPlayer({
-  src, title, qualities, onQualityChange, currentQuality, qualityMode, onModeChange, isIdn, token,
+  src, title, qualities, onQualityChange, currentQuality, qualityMode, onModeChange, isIdn, token, onTokenExpired,
 }: {
   src: string;
   title: string;
@@ -303,6 +306,7 @@ function HlsPlayer({
   onModeChange: (mode: "auto" | "manual") => void;
   isIdn: boolean;
   token?: string;
+  onTokenExpired?: () => void;
 }) {
   const videoRef = useRef<HTMLVideoElement>(null);
   const hlsRef   = useRef<Hls | null>(null);
@@ -358,6 +362,16 @@ function HlsPlayer({
     hls.on(Hls.Events.ERROR, (_, data) => {
       if (!data.fatal) return;
 
+      // FIX 3: Token expired → minta parent refresh token + URL baru
+      if (
+        data.type === Hls.ErrorTypes.NETWORK_ERROR &&
+        (data.response?.code === 401 || data.response?.code === 403)
+      ) {
+        destroyHls();
+        onTokenExpired?.();
+        return;
+      }
+
       if (data.type === Hls.ErrorTypes.NETWORK_ERROR) {
         hls.startLoad();
       } else if (data.type === Hls.ErrorTypes.MEDIA_ERROR) {
@@ -373,20 +387,42 @@ function HlsPlayer({
 
           newHls.loadSource(src);
           newHls.attachMedia(v);
+
           newHls.on(Hls.Events.MANIFEST_PARSED, () => {
             v.play().catch(() => {});
           });
+
           newHls.on(Hls.Events.LEVEL_SWITCHED, (_, d) => {
             const lvl = newHls.levels[d.level];
             if (lvl) setCurrentLevel(lvl.name || `${lvl.height}p`);
           });
+
+          // FIX 1: Pasang error handler di retry instance juga
+          newHls.on(Hls.Events.ERROR, (_, retryData) => {
+            if (!retryData.fatal) return;
+            if (
+              retryData.type === Hls.ErrorTypes.NETWORK_ERROR &&
+              (retryData.response?.code === 401 || retryData.response?.code === 403)
+            ) {
+              newHls.destroy();
+              hlsRef.current = null;
+              onTokenExpired?.();
+              return;
+            }
+            if (retryData.type === Hls.ErrorTypes.NETWORK_ERROR) {
+              newHls.startLoad();
+            } else if (retryData.type === Hls.ErrorTypes.MEDIA_ERROR) {
+              newHls.recoverMediaError();
+            }
+          });
+
           hlsRef.current = newHls;
         }, 2000);
       }
     });
 
     return destroyHls;
-  }, [src, token, destroyHls]);
+  }, [src, token, destroyHls, onTokenExpired]);
   // src berubah saat quality berganti (via handleQualityChange di parent)
   // → destroyHls() lama, init baru dengan src baru. Ini yang berfungsi di versi lama.
 
@@ -934,9 +970,6 @@ function LiveStream() {
   }, [playbackId]);
 
   // ── Quality change: ganti URL langsung → HlsPlayer reinit via useEffect([src]) ──
-  // FIX: Ini approach yang berfungsi di versi lama.
-  // Versi baru mencoba ganti level internal hls.js tapi gagal karena nama/bandwidth
-  // dari qualities[] tidak match persis dengan level internal → video stuck/error.
   const handleQualityChange = (q: QualityOption | null) => {
     setCurrentQuality(q);
     if (!q) return;
@@ -944,34 +977,63 @@ function LiveStream() {
     else setMemberHlsUrl(q.manual_url);
   };
 
+  // FIX 2: Set token DULU sebelum URL → hindari race condition HlsPlayer reinit
+  // dengan token lama saat mode auto dipilih kembali
   const handleModeChange = async (mode: "auto" | "manual") => {
     setQualityMode(mode);
-    if (mode === "auto") {
-      try {
-        if (isIdn && idnShow?.slug) {
-          const token = await generateStreamToken(idnShow.slug, true);
+    if (mode !== "auto") return;
+    try {
+      if (isIdn && idnShow?.slug) {
+        const token = await generateStreamToken(idnShow.slug, true);
+        const { url: streamUrl } = await getStreamURL(token, idnShow.slug, true);
+        setStreamToken(token);
+        setCurrentQuality(null);
+        setHlsUrl(streamUrl);
+      } else if (isMember && memberShow) {
+        const identifier = memberShow.identifier || memberShow.slug || memberShow.url_key;
+        const showId = memberShow.showid || memberShow.show_id || null;
+        if (memberShow.is_group || memberShow.url_key === "jkt48-official") {
+          const token = await generateStreamToken(identifier, true);
+          const { url: streamUrl } = await getStreamURL(token, identifier, true);
           setStreamToken(token);
-          const { url: streamUrl } = await getStreamURL(token, idnShow.slug, true);
-          setHlsUrl(streamUrl);
-        } else if (isMember && memberShow) {
-          const identifier = memberShow.identifier || memberShow.slug || memberShow.url_key;
-          const showId = memberShow.showid || memberShow.show_id || null;
-          if (memberShow.is_group || memberShow.url_key === "jkt48-official") {
-            const token = await generateStreamToken(identifier, true);
-            setStreamToken(token);
-            const { url: streamUrl } = await getStreamURL(token, identifier, true);
-            setMemberHlsUrl(streamUrl);
-          } else if (showId) {
-            const token = await generateStreamToken(String(showId), false);
-            setStreamToken(token);
-            const { url: streamUrl } = await getStreamURL(token, String(showId), false);
-            setMemberHlsUrl(streamUrl);
-          }
+          setCurrentQuality(null);
+          setMemberHlsUrl(streamUrl);
+        } else if (showId) {
+          const token = await generateStreamToken(String(showId), false);
+          const { url: streamUrl } = await getStreamURL(token, String(showId), false);
+          setStreamToken(token);
+          setCurrentQuality(null);
+          setMemberHlsUrl(streamUrl);
         }
-      } catch {}
-      setCurrentQuality(null);
-    }
+      }
+    } catch {}
   };
+
+  // FIX 3: Token expired handler — generate token baru + URL baru → HlsPlayer reinit otomatis
+  const handleTokenExpired = useCallback(async () => {
+    try {
+      if (isIdn && idnShow?.slug) {
+        const token = await generateStreamToken(idnShow.slug, true);
+        const { url: streamUrl } = await getStreamURL(token, idnShow.slug, true);
+        setStreamToken(token);
+        setHlsUrl(streamUrl);
+      } else if (isMember && memberShow) {
+        const identifier = memberShow.identifier || memberShow.slug || memberShow.url_key;
+        const showId = memberShow.showid || memberShow.show_id || null;
+        if (memberShow.is_group || memberShow.url_key === "jkt48-official") {
+          const token = await generateStreamToken(identifier, true);
+          const { url: streamUrl } = await getStreamURL(token, identifier, true);
+          setStreamToken(token);
+          setMemberHlsUrl(streamUrl);
+        } else if (showId) {
+          const token = await generateStreamToken(String(showId), false);
+          const { url: streamUrl } = await getStreamURL(token, String(showId), false);
+          setStreamToken(token);
+          setMemberHlsUrl(streamUrl);
+        }
+      }
+    } catch {}
+  }, [isIdn, isMember, idnShow, memberShow]);
 
   const initChat = useCallback(async () => {
     setIsChatLoggingIn(true);
@@ -1360,6 +1422,7 @@ function LiveStream() {
                 onModeChange={handleModeChange}
                 isIdn={true}
                 token={streamToken}
+                onTokenExpired={handleTokenExpired}
               />
             ) : isMember && memberHlsUrl ? (
               <HlsPlayer
@@ -1372,6 +1435,7 @@ function LiveStream() {
                 onModeChange={handleModeChange}
                 isIdn={!!(memberShow?.is_group || memberShow?.url_key === "jkt48-official")}
                 token={streamToken}
+                onTokenExpired={handleTokenExpired}
               />
             ) : (
               <div className="aspect-video bg-gray-100 dark:bg-gray-800/50 rounded-2xl flex items-center justify-center border border-gray-200 dark:border-gray-700">
