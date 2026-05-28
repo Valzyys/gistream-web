@@ -759,21 +759,34 @@ function AdminEditProductModal({ product, onClose, onSaved }: AdminEditProductMo
   const isNew = !product;
   const [saving, setSaving] = useState(false);
   const [error, setError]   = useState("");
-  const [form, setForm]     = useState({
-    product_code:    product?.product_code    ?? "",
-    product_name:    product?.product_name    ?? "",
-    membership_type: product?.membership_type ?? "monthly",
-    duration_days:   product?.duration_days   ?? 30,
-    price:           product?.price           ?? 0,
-    price_sale:      product?.price_sale      ?? "",
-    description:     product?.description     ?? "",
-    features:        product?.features?.join("\n") ?? "",
-    stock_per_month: product?.stock_per_month ?? 100,
-    is_active:       product?.is_active       ?? true,
-    is_purchase_open: product?.is_purchase_open ?? true,
-    sort_order:      product?.sort_order      ?? 0,
-  });
+  // Helper: parse features ke string textarea (defensive)
+const parseFeaturesToStr = (raw: any): string => {
+  if (Array.isArray(raw)) return raw.join("\n");
+  if (typeof raw === "string") {
+    try { return JSON.parse(raw).join("\n"); } catch { return raw; }
+  }
+  return "";
+};
 
+// Helper: normalize membership_type — jaga-jaga kalau DB masih punya nilai lama
+const VALID_TYPES = ["weekly", "monthly", "ramadhan"];
+const normType = (t?: string) =>
+  VALID_TYPES.includes(t ?? "") ? t! : "monthly";
+
+const [form, setForm] = useState({
+  product_code:     product?.product_code          ?? "",
+  product_name:     product?.product_name          ?? "",
+  membership_type:  normType(product?.membership_type),
+  duration_days:    product?.duration_days         ?? 30,
+  price:            product?.price                 ?? 0,
+  price_sale:       product?.price_sale            ?? "",
+  description:      product?.description           ?? "",
+  features:         parseFeaturesToStr(product?.features),
+  stock_per_month:  product?.stock_per_month       ?? 100,
+  is_active:        product?.is_active             ?? true,
+  is_purchase_open: product?.is_purchase_open      ?? true,
+  sort_order:       product?.sort_order            ?? 0,
+});
   const set = (k: string, v: any) => setForm((f) => ({ ...f, [k]: v }));
 
   const handleSave = async () => {
@@ -1126,14 +1139,23 @@ function AdminPanel({ onRefreshProducts }: AdminPanelProps) {
   }, [filterStatus]);
 
   const fetchProducts = useCallback(async () => {
-    setLoading(true);
-    try {
-      const res  = await fetch(`${MEMBERSHIP_API}/admin/products${q}`);
-      const data = await res.json();
-      setProducts(data.data || []);
-    } catch {}
-    setLoading(false);
-  }, []);
+  setLoading(true);
+  try {
+    const res  = await fetch(`${MEMBERSHIP_API}/admin/products${q}`);
+    const data = await res.json();
+    // Normalize features — sama seperti di main page fetch
+    const normalized = (data.data || []).map((p: MembershipProduct) => ({
+      ...p,
+      features: Array.isArray(p.features)
+        ? p.features
+        : typeof p.features === "string"
+        ? (() => { try { return JSON.parse(p.features); } catch { return []; } })()
+        : [],
+    }));
+    setProducts(normalized);
+  } catch {}
+  setLoading(false);
+}, []);
 
   const fetchStock = useCallback(async () => {
     setLoading(true);
