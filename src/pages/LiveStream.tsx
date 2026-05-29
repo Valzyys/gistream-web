@@ -232,64 +232,13 @@ function HlsPlayer({
   const videoRef = useRef<HTMLVideoElement>(null);
   const hlsRef   = useRef<Hls | null>(null);
   const retryRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const stallRef = useRef<ReturnType<typeof setInterval> | null>(null);  // ← baru
-  const lastTimeRef = useRef<number>(0);                                  // ← baru
-  const stallCountRef = useRef<number>(0);                               // ← baru
   const [showQualityPanel, setShowQualityPanel] = useState(false);
   const [currentLevel, setCurrentLevel]         = useState<string>("Auto");
   const [bandwidth, setBandwidth]               = useState<string>("");
 
   const destroyHls = useCallback(() => {
     if (retryRef.current) { clearTimeout(retryRef.current); retryRef.current = null; }
-    if (stallRef.current) { clearInterval(stallRef.current); stallRef.current = null; } // ← baru
     if (hlsRef.current) { hlsRef.current.destroy(); hlsRef.current = null; }
-  }, []);
-
-  // ── Stall recovery tanpa destroy player ────────────────────────────────────
-  const startStallWatcher = useCallback((hls: Hls, video: HTMLVideoElement) => {
-    if (stallRef.current) clearInterval(stallRef.current);
-    lastTimeRef.current = 0;
-    stallCountRef.current = 0;
-
-    stallRef.current = setInterval(() => {
-      // Tidak perlu cek jika video pause/ended/tidak ada src
-      if (video.paused || video.ended || !video.src) return;
-
-      const currentTime = video.currentTime;
-
-      if (currentTime === lastTimeRef.current) {
-        // Video tidak maju → stall terdeteksi
-        stallCountRef.current += 1;
-
-        if (stallCountRef.current === 2) {
-          // Stall 2 detik: coba nudge dulu (paling soft)
-          const buffered = video.buffered;
-          if (buffered.length > 0) {
-            const bufEnd = buffered.end(buffered.length - 1);
-            if (bufEnd > currentTime + 0.5) {
-              // Ada buffer tapi tidak jalan → seek sedikit ke depan
-              video.currentTime = currentTime + 0.1;
-            }
-          }
-        } else if (stallCountRef.current === 4) {
-          // Stall 4 detik: paksa startLoad ulang tanpa destroy
-          try {
-            hls.stopLoad();
-            hls.startLoad(-1); // -1 = live edge
-          } catch {}
-        } else if (stallCountRef.current === 8) {
-          // Stall 8 detik: recoverMediaError jika ada masalah media
-          try {
-            hls.recoverMediaError();
-          } catch {}
-          stallCountRef.current = 0; // reset supaya tidak loop destroy
-        }
-      } else {
-        // Video maju normal → reset counter
-        stallCountRef.current = 0;
-        lastTimeRef.current = currentTime;
-      }
-    }, 1000); // cek tiap 1 detik
   }, []);
 
   useEffect(() => {
@@ -355,7 +304,6 @@ function HlsPlayer({
 
     hls.on(Hls.Events.MANIFEST_PARSED, () => {
       video.play().catch(() => {});
-      startStallWatcher(hls, video); // ← mulai watcher setelah manifest ready
     });
 
     hls.on(Hls.Events.LEVEL_SWITCHED, (_, data) => {
@@ -370,17 +318,6 @@ function HlsPlayer({
         );
       }
     });
-
-    // ── Handle event stalling dari browser langsung ─────────────────────────
-    const onWaiting = () => {
-      // Browser bilang buffering → paksa startLoad supaya HLS.js tidak idle
-      if (hlsRef.current) {
-        try {
-          hlsRef.current.startLoad(-1);
-        } catch {}
-      }
-    };
-    video.addEventListener("waiting", onWaiting);
 
     hls.on(Hls.Events.ERROR, (_, data) => {
       if (!data.fatal) return;
@@ -408,22 +345,14 @@ function HlsPlayer({
           });
           newHls.loadSource(src);
           newHls.attachMedia(v);
-          newHls.on(Hls.Events.MANIFEST_PARSED, () => {
-            v.play().catch(() => {});
-            startStallWatcher(newHls, v); // ← watcher untuk instance baru juga
-          });
+          newHls.on(Hls.Events.MANIFEST_PARSED, () => v.play().catch(() => {}));
           hlsRef.current = newHls;
         }, 2000);
       }
     });
 
-    return () => {
-      video.removeEventListener("waiting", onWaiting);
-      destroyHls();
-    };
-  }, [src, token, destroyHls, startStallWatcher]); // eslint-disable-line
-
-  // ... sisa JSX tidak berubah sama sekali
+    return destroyHls;
+  }, [src, token, destroyHls]); // eslint-disable-line
 
   return (
     <div className="relative w-full rounded-2xl overflow-hidden bg-black shadow-2xl">
