@@ -17,7 +17,7 @@ const TICKETS_API = "https://v5.jkt48connect.com/api/tickets";
 // ── GiStream token constants ──────────────────────────────────────────────────
 const PARTNER_KID    = "jkt48connect-v1";
 const PARTNER_SECRET = "gstream@jkt48connect@2108";
-const TOKEN_API_BASE = "https://v5.jkt48connect.com";
+const TOKEN_API_BASE = "https://v2.jkt48connect.com";
 const CTV_BASE       = "https://ctv.jkt48connect.com";
 const SIGNING_PATH   = "/api/token/generate?apikey=JKTCONNECT";
 
@@ -755,7 +755,7 @@ function LiveStream() {
     setVerifying(true); setVerifyError("");
     try {
       const ip = clientIP || (await fetchClientIP());
-      const verifyRes = await fetch("https://v6.jkt48connect.com/api/codes/verify", {
+      const verifyRes = await fetch("https://v5.jkt48connect.com/api/codes/verify", {
         method: "POST", headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ email: verifData.email, code: verifData.code, apikey: "JKTCONNECT" }),
       });
@@ -767,7 +767,7 @@ function LiveStream() {
       const usageLimit = parseInt(codeData.usage_limit) || 1;
       const hasUsageLeft = usageCount < usageLimit;
       if (codeData.is_used && !hasUsageLeft) {
-        const listRes = await fetch(`https://v6.jkt48connect.com/api/codes/list?email=${verifData.email}&apikey=JKTCONNECT`);
+        const listRes = await fetch(`https://v5.jkt48connect.com/api/codes/list?email=${verifData.email}&apikey=JKTCONNECT`);
         const listData = await listRes.json();
         if (listData.status && listData.data?.wotatokens) {
           const userCode = listData.data.wotatokens.find((c: any) => c.code === verifData.code);
@@ -781,7 +781,7 @@ function LiveStream() {
         }
         setVerifyError("Code sudah tidak dapat digunakan"); setVerifying(false); return;
       }
-      const useRes = await fetch("https://v6.jkt48connect.com/api/codes/use", {
+      const useRes = await fetch("https://v5.jkt48connect.com/api/codes/use", {
         method: "POST", headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ email: verifData.email, code: verifData.code, apikey: "JKTCONNECT" }),
       });
