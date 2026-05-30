@@ -781,7 +781,7 @@ function LiveStream() {
         }
         setVerifyError("Code sudah tidak dapat digunakan"); setVerifying(false); return;
       }
-      const useRes = await fetch("https://v5.jkt48connect.com/api/codes/use", {
+      const useRes = await fetch("https://v6.jkt48connect.com/api/codes/use", {
         method: "POST", headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ email: verifData.email, code: verifData.code, apikey: "JKTCONNECT" }),
       });
