@@ -17,7 +17,7 @@ const TICKETS_API = "https://v5.jkt48connect.com/api/tickets";
 // ── GiStream token constants ──────────────────────────────────────────────────
 const PARTNER_KID    = "jkt48connect-v1";
 const PARTNER_SECRET = "gstream@jkt48connect@2108";
-const TOKEN_API_BASE = "https://v2.jkt48connect.com";
+const TOKEN_API_BASE = "https://v5.jkt48connect.com";
 const CTV_BASE       = "https://ctv.jkt48connect.com";
 const SIGNING_PATH   = "/api/token/generate?apikey=JKTCONNECT";
 
