@@ -755,7 +755,7 @@ function LiveStream() {
     setVerifying(true); setVerifyError("");
     try {
       const ip = clientIP || (await fetchClientIP());
-      const verifyRes = await fetch("https://v5.jkt48connect.com/api/codes/verify", {
+      const verifyRes = await fetch("https://v6.jkt48connect.com/api/codes/verify", {
         method: "POST", headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ email: verifData.email, code: verifData.code, apikey: "JKTCONNECT" }),
       });
@@ -767,7 +767,7 @@ function LiveStream() {
       const usageLimit = parseInt(codeData.usage_limit) || 1;
       const hasUsageLeft = usageCount < usageLimit;
       if (codeData.is_used && !hasUsageLeft) {
-        const listRes = await fetch(`https://v5.jkt48connect.com/api/codes/list?email=${verifData.email}&apikey=JKTCONNECT`);
+        const listRes = await fetch(`https://v6.jkt48connect.com/api/codes/list?email=${verifData.email}&apikey=JKTCONNECT`);
         const listData = await listRes.json();
         if (listData.status && listData.data?.wotatokens) {
           const userCode = listData.data.wotatokens.find((c: any) => c.code === verifData.code);
@@ -813,7 +813,7 @@ function LiveStream() {
       setHlsUrl(streamUrl);
 
       try {
-        const theaterRes = await fetch(`https://v5.jkt48connect.com/api/jkt48/theater?apikey=${API_KEY}`);
+        const theaterRes = await fetch(`https://v6.jkt48connect.com/api/jkt48/theater?apikey=${API_KEY}`);
         const theaterData = await theaterRes.json();
         if (theaterData.theater?.length > 0) {
           const now = Date.now();
