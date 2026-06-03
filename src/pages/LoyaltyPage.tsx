@@ -1,4 +1,4 @@
-import React, { useEffect, useState, useCallback, useRef } from "react";
+import React, { useEffect, useState, useCallback } from "react";
 import PageMeta from "../components/common/PageMeta";
 
 // ── Constants ─────────────────────────────────────────────────────────────────
@@ -44,6 +44,7 @@ interface LoyaltyReward {
   stock_used: number;
   stock_remaining: number;
   is_featured: boolean;
+  is_active: boolean;
   description?: string;
   image_url?: string;
   sort_order: number;
@@ -379,7 +380,7 @@ function RedeemModal({ reward, balance, onClose, onConfirm, loading }: {
 }
 
 // ── Dashboard Tab ────────────────────────────────────────────────────────────
-function DashboardTab({ userId, balance, onRefresh }: { userId: string; balance: LoyaltyBalance | null; onRefresh: () => void }) {
+function DashboardTab({ balance }: { userId: string; balance: LoyaltyBalance | null; onRefresh: () => void }) {
   if (!balance) return (
     <div className="flex flex-col items-center justify-center py-20 gap-3">
       <Spinner /><p className="text-sm text-gray-400">Memuat data...</p>
@@ -1414,12 +1415,12 @@ const LoyaltyPage: React.FC = () => {
   const doRefresh = useCallback(() => setRefreshKey(k => k + 1), []);
 
   const tabs: { key: MainTab; label: string; icon: React.ReactNode; adminOnly?: boolean }[] = [
-    { key: "dashboard",   label: "Dashboard",  icon: <Ic.Star s={14} /> },
-    { key: "rewards",     label: "Rewards",    icon: <Ic.Gift s={14} /> },
-    { key: "mystery",     label: "Mystery Box",icon: <Ic.Box s={14} /> },
-    { key: "history",     label: "Riwayat",    icon: <Ic.History s={14} /> },
-    { key: "redemptions", label: "Voucherku",  icon: <Ic.Ticket s={14} /> },
-    { key: "admin",       label: "Admin",      icon: <Ic.Shield s={14} />, adminOnly: true },
+    { key: "dashboard"   as MainTab, label: "Dashboard",  icon: <Ic.Star s={14} /> },
+    { key: "rewards"     as MainTab, label: "Rewards",    icon: <Ic.Gift s={14} /> },
+    { key: "mystery"     as MainTab, label: "Mystery Box",icon: <Ic.Box s={14} /> },
+    { key: "history"     as MainTab, label: "Riwayat",    icon: <Ic.History s={14} /> },
+    { key: "redemptions" as MainTab, label: "Voucherku",  icon: <Ic.Ticket s={14} /> },
+    { key: "admin"       as MainTab, label: "Admin",      icon: <Ic.Shield s={14} />, adminOnly: true },
   ].filter(t => !t.adminOnly || isAdmin);
 
   return (
