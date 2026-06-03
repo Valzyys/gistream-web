@@ -53,21 +53,73 @@ const formatTime = (ts: number) => {
   return `${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
 };
 
-// ─── IRC Chat Hook (browser WebSocket) ───────────────────────────────────────
+// ─── IRC Chat Hook (browser WebSocket) — port dari mobile ────────────────────
 function useIdnIrcChat(chatRoomId: string | null) {
-  const [messages, setMessages] = useState<IrcChatMessage[]>([]);
-  const [status, setStatus] = useState<"idle" | "connecting" | "connected" | "reconnecting">("idle");
+  const [messages,      setMessages]      = useState<IrcChatMessage[]>([]);
+  const [status,        setStatus]        = useState<"idle" | "connecting" | "connected" | "reconnecting">("idle");
+  const [joinConfirmed, setJoinConfirmed] = useState(false);
+  const [latencyMs,     setLatencyMs]     = useState<number | null>(null);
 
   const wsRef        = useRef<WebSocket | null>(null);
   const mountedRef   = useRef(true);
   const retryTimer   = useRef<ReturnType<typeof setTimeout> | null>(null);
   const roomIdRef    = useRef(chatRoomId);
+  const nickRef      = useRef("");
+  const lastPingAt   = useRef(0);
 
   const pushMsg = useCallback((msg: IrcChatMessage) => {
     setMessages(prev => {
       const next = [...prev, msg];
       return next.length > 150 ? next.slice(-150) : next;
     });
+  }, []);
+
+  // Try to parse a chat JSON payload from an IRC line, returns msg or null
+  const tryParseChat = useCallback((raw: string, roomId: string): IrcChatMessage | null => {
+    // Primary pattern: `:CHAT #roomId {json}`
+    const marker   = `:CHAT #${roomId} `;
+    const markerIdx = raw.indexOf(marker);
+    if (markerIdx !== -1) {
+      try {
+        const event = JSON.parse(raw.slice(markerIdx + marker.length));
+        if (event?.chat?.message) {
+          return {
+            id:         makeId(),
+            userName:   event.user?.name ?? event.user?.username ?? "Unknown",
+            userAvatar: event.user?.avatar_url ?? undefined,
+            colorCode:  event.user?.color_code
+              ? "#" + String(event.user.color_code).replace(/^#/, "")
+              : undefined,
+            levelTier:  event.user?.level_tier ?? undefined,
+            message:    String(event.chat.message),
+            timestamp:  Date.now(),
+          };
+        }
+      } catch {}
+    }
+    // Fallback: split on `roomId :` to grab trailing JSON
+    if (raw.includes(roomId)) {
+      try {
+        const parts = raw.split(`${roomId} :`);
+        if (parts.length > 1) {
+          const event = JSON.parse(parts[parts.length - 1]);
+          if (event?.chat?.message) {
+            return {
+              id:         makeId(),
+              userName:   event.user?.name ?? "Unknown",
+              userAvatar: event.user?.avatar_url ?? undefined,
+              colorCode:  event.user?.color_code
+                ? "#" + String(event.user.color_code).replace(/^#/, "")
+                : undefined,
+              levelTier:  event.user?.level_tier ?? undefined,
+              message:    String(event.chat.message),
+              timestamp:  Date.now(),
+            };
+          }
+        }
+      } catch {}
+    }
+    return null;
   }, []);
 
   const connect = useCallback((roomId: string) => {
@@ -77,19 +129,29 @@ function useIdnIrcChat(chatRoomId: string | null) {
     }
 
     setStatus("connecting");
+    setJoinConfirmed(false);
+    setLatencyMs(null);
 
-    const nick = `web-${makeId().slice(0, 8)}`;
+    // Mirror mobile: short_id-based nick
+    const shortId = Array.from({ length: 5 }, () =>
+      "abcdefghijklmnopqrstuvwxyz0123456789"[Math.floor(Math.random() * 36)]
+    ).join("");
+    const nick = `idn-${shortId}-web`;
+    nickRef.current = nick;
     const uuid = makeId() + makeId();
-    const ws   = new WebSocket("wss://chat.idn.app/");
+
+    const ws = new WebSocket("wss://chat.idn.app/");
     wsRef.current = ws;
 
     ws.onopen = () => {
+      if (!mountedRef.current) return;
       ws.send("CAP LS 302");
       ws.send(`NICK ${nick}`);
       ws.send(`USER ${uuid} 0 * null`);
       ws.send(
         "CAP REQ :account-notify account-tag away-notify batch cap-notify " +
-        "echo-message extended-join message-tags multi-prefix server-time setname userhost-in-names"
+        "chghost echo-message extended-join invite-notify labeled-response " +
+        "message-tags multi-prefix server-time setname userhost-in-names"
       );
       ws.send("CAP END");
     };
@@ -97,49 +159,43 @@ function useIdnIrcChat(chatRoomId: string | null) {
     ws.onmessage = ({ data: raw }: { data: string }) => {
       if (!mountedRef.current) return;
 
-      // PING → PONG
-      if (raw.startsWith("PING") || raw.includes(" PING ")) {
+      // PING → PONG (measure latency like mobile)
+      if (raw.startsWith("PING ") || raw.includes(" PING ")) {
+        lastPingAt.current = Date.now();
         const m = raw.match(/PING\s+:?(\S+)/);
         ws.send(`PONG :${m ? m[1] : "irc-1.idn.app"}`);
+        setLatencyMs(Date.now() - lastPingAt.current);
         return;
       }
 
-      // Welcome → JOIN
+      // 001 Welcome → send @label=1 JOIN (same as mobile)
       if (raw.includes(" 001 ") || raw.includes(":Welcome")) {
-        ws.send(`JOIN #${roomId}`);
+        ws.send(`@label=1 JOIN #${roomId}`);
         setStatus("connected");
         return;
       }
 
-      // Parse chat messages — IDN sends:
-      // :nick!user@host PRIVMSG IDNLoki :CHAT #roomId {"user":{...},"chat":{...}}
-      // or direct channel message
-      const chatMarker = `:CHAT #${roomId} `;
-      const chatIdx    = raw.indexOf(chatMarker);
-      if (chatIdx !== -1) {
-        try {
-          const json  = raw.slice(chatIdx + chatMarker.length);
-          const event = JSON.parse(json);
-          if (event?.chat?.message) {
-            pushMsg({
-              id:         makeId(),
-              userName:   event.user?.name ?? event.user?.username ?? "Unknown",
-              userAvatar: event.user?.avatar_url ?? undefined,
-              colorCode:  event.user?.color_code
-                ? "#" + String(event.user.color_code).replace(/^#/, "")
-                : undefined,
-              levelTier:  event.user?.level_tier ?? undefined,
-              message:    String(event.chat.message),
-              timestamp:  Date.now(),
-            });
-          }
-        } catch {}
+      // Join ack — mirror mobile's three conditions
+      const isJoinAck =
+        (raw.includes(`JOIN #${roomId}`) && raw.includes(nickRef.current)) ||
+        raw.includes("JOINED") ||
+        (raw.includes("366") && raw.includes(roomId));
+      if (isJoinAck) {
+        setJoinConfirmed(true);
+        return;
+      }
+
+      // Chat message
+      if (raw.includes(`CHAT #${roomId}`) || raw.includes(roomId)) {
+        const msg = tryParseChat(raw, roomId);
+        if (msg) pushMsg(msg);
       }
     };
 
     ws.onclose = (e) => {
       if (!mountedRef.current) return;
       wsRef.current = null;
+      setJoinConfirmed(false);
       if (e.code !== 1000) {
         setStatus("reconnecting");
         retryTimer.current = setTimeout(() => {
@@ -153,16 +209,17 @@ function useIdnIrcChat(chatRoomId: string | null) {
     ws.onerror = () => {
       if (!mountedRef.current) return;
       wsRef.current = null;
+      setJoinConfirmed(false);
       setStatus("reconnecting");
       retryTimer.current = setTimeout(() => {
         if (mountedRef.current && roomIdRef.current) connect(roomIdRef.current);
       }, 4000);
     };
-  }, [pushMsg]);
+  }, [pushMsg, tryParseChat]);
 
   useEffect(() => {
-    mountedRef.current  = true;
-    roomIdRef.current   = chatRoomId;
+    mountedRef.current = true;
+    roomIdRef.current  = chatRoomId;
     if (!chatRoomId) { setStatus("idle"); return; }
     connect(chatRoomId);
     return () => {
@@ -173,7 +230,7 @@ function useIdnIrcChat(chatRoomId: string | null) {
     };
   }, [chatRoomId, connect]);
 
-  return { messages, status };
+  return { messages, status, joinConfirmed, latencyMs };
 }
 
 // ─── Showroom Comment Hook ────────────────────────────────────────────────────
@@ -320,22 +377,30 @@ function HlsPlayer({ src, title }: { src: string; title: string }) {
 function IrcChatPanel({
   messages,
   status,
+  joinConfirmed,
+  latencyMs,
 }: {
-  messages: IrcChatMessage[];
-  status: string;
+  messages:      IrcChatMessage[];
+  status:        string;
+  joinConfirmed: boolean;
+  latencyMs:     number | null;
 }) {
   const endRef = useRef<HTMLDivElement>(null);
   useEffect(() => { endRef.current?.scrollIntoView({ behavior: "smooth" }); }, [messages.length]);
 
+  const connected = status === "connected";
+
   const statusColor =
-    status === "connected"   ? "bg-emerald-500" :
-    status === "reconnecting"? "bg-amber-500"   :
-    status === "connecting"  ? "bg-blue-500"    : "bg-gray-500";
+    connected && joinConfirmed  ? "bg-emerald-500" :
+    connected && !joinConfirmed ? "bg-amber-500"   :
+    status === "reconnecting"   ? "bg-amber-500"   :
+    status === "connecting"     ? "bg-blue-500"    : "bg-gray-500";
 
   const statusLabel =
-    status === "connected"   ? "Terhubung" :
-    status === "reconnecting"? "Reconnecting..." :
-    status === "connecting"  ? "Menghubungkan..." : "Offline";
+    connected && joinConfirmed  ? `Terhubung${latencyMs !== null ? ` · ${latencyMs}ms` : ""}` :
+    connected && !joinConfirmed ? "Join room..." :
+    status === "reconnecting"   ? "Reconnecting..." :
+    status === "connecting"     ? "Menghubungkan..." : "Offline";
 
   return (
     <div className="flex flex-col h-full">
@@ -358,7 +423,7 @@ function IrcChatPanel({
         {messages.length === 0 && (
           <div className="flex-1 flex flex-col items-center justify-center gap-3 py-12 text-center">
             <div className="w-12 h-12 rounded-2xl bg-gray-100 dark:bg-gray-800 flex items-center justify-center">
-              {status === "connecting" || status === "reconnecting" ? (
+              {!connected || !joinConfirmed ? (
                 <div className="w-5 h-5 border-2 border-gray-300 border-t-blue-500 rounded-full animate-spin" />
               ) : (
                 <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" className="text-gray-400">
@@ -368,11 +433,11 @@ function IrcChatPanel({
             </div>
             <div>
               <p className="text-sm font-semibold text-gray-500 dark:text-gray-400">
-                {status === "connecting" ? "Menghubungkan ke IRC..." :
-                 status === "reconnecting" ? "Mencoba ulang..." :
+                {!connected         ? (status === "connecting" ? "Menghubungkan ke IRC..." : status === "reconnecting" ? "Mencoba ulang..." : "Offline") :
+                 !joinConfirmed     ? "Bergabung ke room chat..." :
                  "Belum ada pesan"}
               </p>
-              {status === "connected" && (
+              {connected && joinConfirmed && (
                 <p className="text-xs text-gray-400 dark:text-gray-500 mt-0.5">Tunggu komentar masuk</p>
               )}
             </div>
@@ -550,7 +615,7 @@ export default function MemberStream() {
   const isIdn      = show?.type === "idn";
   const isShowroom = show?.type === "showroom";
 
-  const { messages: ircMessages, status: ircStatus } =
+  const { messages: ircMessages, status: ircStatus, joinConfirmed: ircJoinConfirmed, latencyMs: ircLatency } =
     useIdnIrcChat(isIdn && show?.chat_room_id ? show.chat_room_id : null);
 
   const { comments: srComments, loading: srLoading, error: srError, lastPoll: srLastPoll, retry: srRetry } =
@@ -724,7 +789,12 @@ export default function MemberStream() {
               style={{ height: "540px" }}
             >
               {isIdn ? (
-                <IrcChatPanel messages={ircMessages} status={ircStatus} />
+                <IrcChatPanel
+                  messages={ircMessages}
+                  status={ircStatus}
+                  joinConfirmed={ircJoinConfirmed}
+                  latencyMs={ircLatency}
+                />
               ) : (
                 <ShowroomChatPanel
                   comments={srComments}
