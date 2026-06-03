@@ -14,6 +14,22 @@ import { useSidebar } from "../context/SidebarContext";
 import SidebarWidget from "./SidebarWidget";
 
 // ─── Custom SVG Icons ─────────────────────────────────────────────────────────
+const LoyaltyIcon = () => (
+  <svg
+    width="22"
+    height="22"
+    viewBox="0 0 24 24"
+    fill="none"
+    stroke="currentColor"
+    strokeWidth="2"
+    strokeLinecap="round"
+    strokeLinejoin="round"
+  >
+    <path d="M12 21.593c-5.63-5.539-11-10.297-11-14.402C1 3.604 3.322 2 5.5 2c1.874 0 3.75 1.068 4.5 2.839C10.75 3.068 12.626 2 14.5 2 16.678 2 19 3.604 19 7.191c0 4.105-5.37 8.863-11 14.402z" />
+    <path d="M12 8l1.5 3H17l-2.5 2 1 3L12 14.5 8.5 16l1-3L7 11h3.5L12 8z" />
+  </svg>
+);
+
 const StatusIcon = () => (
   <svg
     width="22"
@@ -143,6 +159,11 @@ const navItems: NavItem[] = [
     name: "Membership",      // ← tambahan
     icon: <MembershipIcon />,
     path: "/membership",
+  },
+  {
+    name: "Loyalty",
+    icon: <LoyaltyIcon />,
+    path: "/loyalty",
   },
 ];
 
