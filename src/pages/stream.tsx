@@ -140,7 +140,7 @@ function useIdnIrcChat(chatRoomId: string | null) {
     nickRef.current = nick;
     const uuid = makeId() + makeId();
 
-    const ws = new WebSocket("wss://chat.idn.app/");
+    const ws = new WebSocket("wss://komenproxy.aslannarnia806.workers.dev/");
     wsRef.current = ws;
 
     ws.onopen = () => {
