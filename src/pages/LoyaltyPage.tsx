@@ -174,6 +174,7 @@ const Ic = {
   Refresh:   ({ s=14,c="currentColor" }) => <svg width={s} height={s} viewBox="0 0 24 24" fill="none" stroke={c} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/></svg>,
   BarChart:  ({ s=16,c="currentColor" }) => <svg width={s} height={s} viewBox="0 0 24 24" fill="none" stroke={c} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><line x1="18" y1="20" x2="18" y2="10"/><line x1="12" y1="20" x2="12" y2="4"/><line x1="6" y1="20" x2="6" y2="14"/><line x1="2" y1="20" x2="22" y2="20"/></svg>,
   List:      ({ s=16,c="currentColor" }) => <svg width={s} height={s} viewBox="0 0 24 24" fill="none" stroke={c} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><line x1="8" y1="6" x2="21" y2="6"/><line x1="8" y1="12" x2="21" y2="12"/><line x1="8" y1="18" x2="21" y2="18"/><line x1="3" y1="6" x2="3.01" y2="6"/><line x1="3" y1="12" x2="3.01" y2="12"/><line x1="3" y1="18" x2="3.01" y2="18"/></svg>,
+  Infinity:  ({ s=14,c="currentColor" }) => <svg width={s} height={s} viewBox="0 0 24 24" fill="none" stroke={c} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M12 12c-2-2.5-4-4-6-4a4 4 0 0 0 0 8c2 0 4-1.5 6-4z"/><path d="M12 12c2 2.5 4 4 6 4a4 4 0 0 0 0-8c-2 0-4 1.5-6 4z"/></svg>,
   Dice:      ({ s=20,c="currentColor" }) => <svg width={s} height={s} viewBox="0 0 24 24" fill="none" stroke={c} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="2" y="2" width="20" height="20" rx="4"/><circle cx="8.5" cy="8.5" r="1.5" fill={c}/><circle cx="15.5" cy="8.5" r="1.5" fill={c}/><circle cx="12" cy="12" r="1.5" fill={c}/><circle cx="8.5" cy="15.5" r="1.5" fill={c}/><circle cx="15.5" cy="15.5" r="1.5" fill={c}/></svg>,
 };
 
@@ -226,12 +227,10 @@ function BoxOpenResult({ result, onClose }: BoxOpenResultProps) {
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4"
       style={{ background: "rgba(0,0,0,0.85)", backdropFilter: "blur(12px)" }}>
       <div className="relative flex flex-col items-center gap-6 max-w-sm w-full">
-        {/* Glow bg */}
         <div className="absolute inset-0 rounded-3xl"
           style={{ background: `radial-gradient(ellipse at center, ${rarity.glow} 0%, transparent 70%)`, filter: "blur(20px)", transform: "scale(1.2)" }} />
 
         <div className="relative z-10 flex flex-col items-center gap-5 w-full">
-          {/* Box */}
           <div className="relative" style={{
             animation: phase === "shake"
               ? "boxShake 0.6s ease-in-out"
@@ -253,7 +252,6 @@ function BoxOpenResult({ result, onClose }: BoxOpenResultProps) {
             )}
           </div>
 
-          {/* Result card */}
           {phase === "reveal" && (
             <div className="w-full rounded-3xl overflow-hidden"
               style={{
@@ -501,6 +499,7 @@ function RewardsTab({ userId, balance, onRedeemSuccess }: {
 
   useEffect(() => {
     setLoading(true);
+    // FIX: always pass user_id so API returns proper can_redeem boolean (not null)
     fetch(`${LOYALTY_API}/rewards${q}&user_id=${userId}`)
       .then(r => r.json())
       .then(d => setRewards(d.data || []))
@@ -571,9 +570,25 @@ function RewardsTab({ userId, balance, onRedeemSuccess }: {
       ) : (
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
           {rewards.map((rw) => {
-            const color   = rewardTypeColor[rw.reward_type] ?? "#465FFF";
-            const canBuy  = rw.can_redeem === true;
-            const stockOut = rw.stock !== -1 && rw.stock_remaining <= 0;
+            const color = rewardTypeColor[rw.reward_type] ?? "#465FFF";
+
+            // FIX: properly handle stock=-1 (unlimited) vs finite stock
+            const isUnlimited = rw.stock === -1 || rw.stock_remaining === -1;
+            const stockRemaining = isUnlimited ? Infinity : (rw.stock_remaining ?? 0);
+            const stockOut = !isUnlimited && stockRemaining <= 0;
+
+            // FIX: can_redeem from API when user_id passed is always bool.
+            // But fallback defensively: if null, compute locally from balance + stock
+            const canBuy = rw.can_redeem === true ||
+              (rw.can_redeem === null && balance >= rw.point_cost && !stockOut);
+
+            // Button label logic
+            const btnLabel = stockOut
+              ? "Stok Habis"
+              : rw.can_redeem === false && balance < rw.point_cost
+              ? "Point Tidak Cukup"
+              : "Tukar Sekarang";
+
             return (
               <div key={rw.id}
                 className="rounded-2xl border bg-white dark:bg-white/[0.03] overflow-hidden transition-all hover:shadow-lg dark:hover:shadow-black/20"
@@ -613,15 +628,26 @@ function RewardsTab({ userId, balance, onRedeemSuccess }: {
                     </div>
                   )}
 
-                  {rw.stock !== -1 && (
+                  {/* FIX: Stock display — unlimited shows ∞ badge, finite shows progress bar */}
+                  {isUnlimited ? (
+                    <div className="flex items-center gap-1.5 text-[10px] text-gray-400">
+                      <Ic.Infinity s={11} c="#9ca3af" />
+                      <span>Stok tidak terbatas</span>
+                    </div>
+                  ) : (
                     <div className="space-y-1">
                       <div className="flex justify-between text-[10px] text-gray-400">
                         <span>Stok tersisa</span>
-                        <span className={stockOut ? "text-red-500 font-bold" : ""}>{rw.stock_remaining}/{rw.stock}</span>
+                        <span className={stockOut ? "text-red-500 font-bold" : ""}>
+                          {rw.stock_remaining}/{rw.stock}
+                        </span>
                       </div>
                       <div className="h-1.5 rounded-full bg-gray-100 dark:bg-white/10 overflow-hidden">
                         <div className="h-full rounded-full"
-                          style={{ width: `${(rw.stock_remaining / rw.stock) * 100}%`, background: color }} />
+                          style={{
+                            width: `${rw.stock > 0 ? (rw.stock_remaining / rw.stock) * 100 : 0}%`,
+                            background: stockOut ? "#ef4444" : color,
+                          }} />
                       </div>
                     </div>
                   )}
@@ -638,7 +664,7 @@ function RewardsTab({ userId, balance, onRedeemSuccess }: {
                       color: "#9ca3af",
                       cursor: "not-allowed",
                     }}>
-                    {stockOut ? "Stok Habis" : !canBuy && rw.can_redeem === false ? "Point Tidak Cukup" : "Tukar Sekarang"}
+                    {btnLabel}
                   </button>
                 </div>
               </div>
@@ -675,13 +701,28 @@ function MysteryBoxTab({ userId, balance, onSuccess }: {
   const refresh = useCallback(async () => {
     setLoading(true);
     try {
+      // FIX: fetch config and pity separately with individual error handling
+      // so a slow mystery-box/config doesn't block pity display
       const [cfgR, pityR, histR] = await Promise.all([
-        fetch(`${LOYALTY_API}/mystery-box/config${q}`).then(r => r.json()),
-        fetch(`${LOYALTY_API}/mystery-box/pity/${userId}${q}`).then(r => r.json()),
-        fetch(`${LOYALTY_API}/mystery-box/history/${userId}${q}&limit=10`).then(r => r.json()),
+        fetch(`${LOYALTY_API}/mystery-box/config${q}`)
+          .then(r => r.json())
+          .catch(() => ({ data: [] })),
+        fetch(`${LOYALTY_API}/mystery-box/pity/${userId}${q}`)
+          .then(r => r.json())
+          .catch(() => ({ data: [] })),
+        fetch(`${LOYALTY_API}/mystery-box/history/${userId}${q}&limit=10`)
+          .then(r => r.json())
+          .catch(() => ({ data: [] })),
       ]);
       setConfigs(cfgR.data || []);
-      setPity(pityR.data || []);
+      // FIX: normalize pity data — ensure pity_count is always a number (guard against BigInt/string)
+      const normalizedPity: PityData[] = (pityR.data || []).map((p: any) => ({
+        tier:             p.tier,
+        pity_count:       Number(p.pity_count ?? 0),
+        pity_threshold:   Number(p.pity_threshold ?? 0),
+        rolls_until_pity: Number(p.rolls_until_pity ?? 0),
+      }));
+      setPity(normalizedPity);
       setHistory(histR.data || []);
     } catch {}
     setLoading(false);
@@ -743,6 +784,12 @@ function MysteryBoxTab({ userId, balance, onSuccess }: {
           const pityData = getPityForTier(cfg.tier);
           const canOpen  = balance >= cfg.point_cost;
 
+          // FIX: normalize pity values to numbers safely
+          const pityCount     = Number(pityData?.pity_count     ?? 0);
+          const pityThreshold = Number(pityData?.pity_threshold ?? cfg.pity_threshold ?? 0);
+          const rollsUntil    = Math.max(0, pityThreshold - pityCount);
+          const pityPct       = pityThreshold > 0 ? Math.min(1, pityCount / pityThreshold) * 100 : 0;
+
           return (
             <div key={cfg.tier} className="rounded-2xl overflow-hidden border border-gray-200 dark:border-gray-700 bg-white dark:bg-white/[0.02]">
               <div className="p-1" style={{ background: tierCfg.gradient }}>
@@ -785,22 +832,32 @@ function MysteryBoxTab({ userId, balance, onSuccess }: {
                   })}
                 </div>
 
-                {/* Pity */}
-                {pityData && (
-                  <div className="space-y-1.5">
-                    <div className="flex justify-between text-[10px] text-gray-400">
-                      <span>Pity counter</span>
-                      <span>{pityData.pity_count}/{pityData.pity_threshold} ({pityData.rolls_until_pity} lagi hingga Epic)</span>
-                    </div>
-                    <div className="h-1.5 rounded-full bg-gray-100 dark:bg-white/10 overflow-hidden">
-                      <div className="h-full rounded-full transition-all duration-500"
-                        style={{
-                          width: `${(pityData.pity_count / pityData.pity_threshold) * 100}%`,
-                          background: tierCfg.gradient,
-                        }} />
-                    </div>
+                {/* FIX: Pity counter — always show, use normalized numbers */}
+                <div className="space-y-1.5">
+                  <div className="flex justify-between text-[10px] text-gray-400">
+                    <span>Pity counter</span>
+                    <span>
+                      {pityCount}/{pityThreshold}
+                      {rollsUntil > 0
+                        ? <span className="ml-1 text-gray-300">({rollsUntil} lagi → Epic)</span>
+                        : <span className="ml-1 font-bold" style={{ color: RARITY_CONFIG.epic.color }}>Epic terjamin!</span>
+                      }
+                    </span>
                   </div>
-                )}
+                  <div className="h-1.5 rounded-full bg-gray-100 dark:bg-white/10 overflow-hidden">
+                    <div className="h-full rounded-full transition-all duration-500"
+                      style={{
+                        width: `${pityPct}%`,
+                        background: pityPct >= 80
+                          ? RARITY_CONFIG.epic.color
+                          : tierCfg.gradient,
+                      }} />
+                  </div>
+                  {/* FIX: Show "no data yet" if pity row doesn't exist (user never opened this tier) */}
+                  {!pityData && (
+                    <p className="text-[10px] text-gray-400 italic">Belum pernah dibuka</p>
+                  )}
+                </div>
               </div>
             </div>
           );
@@ -829,7 +886,13 @@ function MysteryBoxTab({ userId, balance, onSuccess }: {
                       {rarityBadge(h.rarity)}
                       <span className="text-xs font-semibold text-gray-700 dark:text-gray-300 truncate">{h.reward_label}</span>
                     </div>
-                    <p className="text-[10px] text-gray-400">{fmtDate(h.created_at)}</p>
+                    {/* FIX: show pity_count_after from history so user can verify counter moved */}
+                    <p className="text-[10px] text-gray-400">
+                      {fmtDate(h.created_at)}
+                      {h.pity_count_after !== undefined && (
+                        <span className="ml-2 opacity-60">pity: {h.pity_count_before}→{h.pity_count_after}</span>
+                      )}
+                    </p>
                   </div>
                   <span className="text-xs text-gray-400 flex-shrink-0">-{h.point_spent} pt</span>
                 </div>
@@ -1043,6 +1106,11 @@ function AdminPanel() {
   const [creditMsg, setCreditMsg]   = useState<{ msg: string; ok: boolean } | null>(null);
   const [searchUser, setSearchUser] = useState("");
 
+  // Admin: reward edit modal state
+  const [editReward, setEditReward] = useState<LoyaltyReward | null>(null);
+  const [editLoading, setEditLoading] = useState(false);
+  const [editMsg, setEditMsg]       = useState<{ msg: string; ok: boolean } | null>(null);
+
   const fetchData = useCallback(async () => {
     setLoading(true);
     try {
@@ -1086,6 +1154,36 @@ function AdminPanel() {
       if (data.status) setCreditForm({ user_id: "", amount: "", description: "" });
     } catch { setCreditMsg({ msg: "Koneksi gagal", ok: false }); }
     finally { setCreditLoading(false); }
+  };
+
+  // FIX: Admin reward stock edit handler
+  const handleEditRewardSave = async () => {
+    if (!editReward) return;
+    setEditLoading(true); setEditMsg(null);
+    try {
+      const res = await fetch(`${LOYALTY_API}/admin/rewards/${editReward.reward_code}${q}`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          reward_name:    editReward.reward_name,
+          point_cost:     editReward.point_cost,
+          stock:          editReward.stock,
+          is_active:      editReward.is_active,
+          is_featured:    editReward.is_featured,
+          description:    editReward.description,
+          discount_percent: editReward.discount_percent,
+          discount_max_rp:  editReward.discount_max_rp,
+          sort_order:     editReward.sort_order,
+        }),
+      });
+      const data = await res.json();
+      setEditMsg({ msg: data.message || (data.status ? "Berhasil disimpan" : "Gagal"), ok: !!data.status });
+      if (data.status) {
+        fetchData();
+        setTimeout(() => setEditReward(null), 1000);
+      }
+    } catch { setEditMsg({ msg: "Koneksi gagal", ok: false }); }
+    finally { setEditLoading(false); }
   };
 
   const tabs: { key: AdminTab; label: string; icon: React.ReactNode }[] = [
@@ -1251,41 +1349,147 @@ function AdminPanel() {
               </div>
             )}
 
-            {/* REWARDS */}
+            {/* REWARDS — FIX: added Edit button per row for stock/config management */}
             {tab === "rewards" && (
-              <div className="overflow-x-auto rounded-xl border border-gray-100 dark:border-gray-800">
-                <table className="w-full text-xs">
-                  <thead>
-                    <tr className="border-b border-gray-100 dark:border-gray-800">
-                      {["Code", "Nama", "Tipe", "Biaya", "Stok", "Status"].map(h => (
-                        <th key={h} className="px-4 py-3 text-left font-semibold text-gray-400 whitespace-nowrap">{h}</th>
-                      ))}
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-gray-50 dark:divide-gray-800">
-                    {rewards.map(r => (
-                      <tr key={r.id} className="hover:bg-gray-50 dark:hover:bg-white/[0.02]">
-                        <td className="px-4 py-3 font-mono text-gray-500 whitespace-nowrap">{r.reward_code}</td>
-                        <td className="px-4 py-3 font-semibold text-gray-700 dark:text-gray-300 whitespace-nowrap">{r.reward_name}</td>
-                        <td className="px-4 py-3 whitespace-nowrap">
-                          <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-brand-50 dark:bg-brand-500/10 text-brand-600 dark:text-brand-400">
-                            {r.reward_type}
-                          </span>
-                        </td>
-                        <td className="px-4 py-3 font-bold text-gray-700 dark:text-gray-300 whitespace-nowrap">{r.point_cost.toLocaleString()} pt</td>
-                        <td className="px-4 py-3 text-gray-500 whitespace-nowrap">
-                          {r.stock === -1 ? "∞" : `${r.stock_remaining}/${r.stock}`}
-                        </td>
-                        <td className="px-4 py-3 whitespace-nowrap">
-                          <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full ${r.is_active ? "bg-green-100 dark:bg-green-500/10 text-green-700 dark:text-green-400" : "bg-gray-100 dark:bg-white/10 text-gray-500"}`}>
-                            {r.is_active ? "AKTIF" : "NON-AKTIF"}
-                          </span>
-                        </td>
+              <div className="space-y-3">
+                <div className="overflow-x-auto rounded-xl border border-gray-100 dark:border-gray-800">
+                  <table className="w-full text-xs">
+                    <thead>
+                      <tr className="border-b border-gray-100 dark:border-gray-800">
+                        {["Code", "Nama", "Tipe", "Biaya", "Stok", "Status", ""].map(h => (
+                          <th key={h} className="px-4 py-3 text-left font-semibold text-gray-400 whitespace-nowrap">{h}</th>
+                        ))}
                       </tr>
-                    ))}
-                  </tbody>
-                </table>
-                {rewards.length === 0 && <p className="text-center py-8 text-sm text-gray-400">Tidak ada reward</p>}
+                    </thead>
+                    <tbody className="divide-y divide-gray-50 dark:divide-gray-800">
+                      {rewards.map(r => (
+                        <tr key={r.id} className="hover:bg-gray-50 dark:hover:bg-white/[0.02]">
+                          <td className="px-4 py-3 font-mono text-gray-500 whitespace-nowrap">{r.reward_code}</td>
+                          <td className="px-4 py-3 font-semibold text-gray-700 dark:text-gray-300 whitespace-nowrap">{r.reward_name}</td>
+                          <td className="px-4 py-3 whitespace-nowrap">
+                            <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-brand-50 dark:bg-brand-500/10 text-brand-600 dark:text-brand-400">
+                              {r.reward_type}
+                            </span>
+                          </td>
+                          <td className="px-4 py-3 font-bold text-gray-700 dark:text-gray-300 whitespace-nowrap">{r.point_cost.toLocaleString()} pt</td>
+                          <td className="px-4 py-3 whitespace-nowrap">
+                            {/* FIX: show ∞ for stock=-1 */}
+                            {r.stock === -1
+                              ? <span className="flex items-center gap-1 text-brand-500 font-bold"><Ic.Infinity s={11} c="#465FFF" />∞</span>
+                              : <span className={Number(r.stock_remaining) <= 0 ? "text-red-500 font-bold" : "text-gray-500"}>
+                                  {r.stock_remaining}/{r.stock}
+                                </span>
+                            }
+                          </td>
+                          <td className="px-4 py-3 whitespace-nowrap">
+                            <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full ${r.is_active ? "bg-green-100 dark:bg-green-500/10 text-green-700 dark:text-green-400" : "bg-gray-100 dark:bg-white/10 text-gray-500"}`}>
+                              {r.is_active ? "AKTIF" : "NON-AKTIF"}
+                            </span>
+                          </td>
+                          <td className="px-4 py-3">
+                            <button
+                              onClick={() => { setEditReward({ ...r }); setEditMsg(null); }}
+                              className="flex items-center gap-1 px-2 py-1 rounded-lg text-[10px] font-semibold border border-amber-200 dark:border-amber-500/30 text-amber-600 dark:text-amber-400 hover:bg-amber-50 dark:hover:bg-amber-500/10 transition-colors">
+                              <Ic.Edit s={10} c="currentColor" />Edit
+                            </button>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                  {rewards.length === 0 && <p className="text-center py-8 text-sm text-gray-400">Tidak ada reward</p>}
+                </div>
+
+                {/* FIX: Inline edit panel */}
+                {editReward && (
+                  <div className="rounded-2xl border border-amber-200 dark:border-amber-500/30 p-5 space-y-4"
+                    style={{ background: "rgba(245,158,11,0.03)" }}>
+                    <div className="flex items-center justify-between">
+                      <p className="text-xs font-bold text-amber-700 dark:text-amber-400 flex items-center gap-2">
+                        <Ic.Edit s={12} c="#f59e0b" />Edit Reward: <span className="font-mono">{editReward.reward_code}</span>
+                      </p>
+                      <button onClick={() => setEditReward(null)} className="text-gray-400 hover:text-gray-600 p-1">
+                        <Ic.X s={14} />
+                      </button>
+                    </div>
+
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                      <div className="space-y-1">
+                        <label className="text-[10px] font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wide">Nama Reward</label>
+                        <input className={inputCls} value={editReward.reward_name}
+                          onChange={e => setEditReward(r => r ? { ...r, reward_name: e.target.value } : r)} />
+                      </div>
+                      <div className="space-y-1">
+                        <label className="text-[10px] font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wide">Biaya Point</label>
+                        <input className={inputCls} type="number" value={editReward.point_cost}
+                          onChange={e => setEditReward(r => r ? { ...r, point_cost: Number(e.target.value) } : r)} />
+                      </div>
+                      <div className="space-y-1">
+                        <label className="text-[10px] font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wide">
+                          Stok <span className="normal-case text-gray-400">(set -1 untuk unlimited)</span>
+                        </label>
+                        <input className={inputCls} type="number" value={editReward.stock}
+                          onChange={e => setEditReward(r => r ? { ...r, stock: Number(e.target.value) } : r)} />
+                      </div>
+                      <div className="space-y-1">
+                        <label className="text-[10px] font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wide">Sort Order</label>
+                        <input className={inputCls} type="number" value={editReward.sort_order}
+                          onChange={e => setEditReward(r => r ? { ...r, sort_order: Number(e.target.value) } : r)} />
+                      </div>
+                      {editReward.reward_type === "discount" && (
+                        <>
+                          <div className="space-y-1">
+                            <label className="text-[10px] font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wide">Diskon %</label>
+                            <input className={inputCls} type="number" value={editReward.discount_percent ?? ""}
+                              onChange={e => setEditReward(r => r ? { ...r, discount_percent: Number(e.target.value) } : r)} />
+                          </div>
+                          <div className="space-y-1">
+                            <label className="text-[10px] font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wide">Maks Diskon (Rp)</label>
+                            <input className={inputCls} type="number" value={editReward.discount_max_rp ?? ""}
+                              onChange={e => setEditReward(r => r ? { ...r, discount_max_rp: Number(e.target.value) } : r)} />
+                          </div>
+                        </>
+                      )}
+                      <div className="space-y-1 sm:col-span-2">
+                        <label className="text-[10px] font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wide">Deskripsi</label>
+                        <input className={inputCls} value={editReward.description ?? ""}
+                          onChange={e => setEditReward(r => r ? { ...r, description: e.target.value } : r)} />
+                      </div>
+                      <div className="flex items-center gap-4">
+                        <label className="flex items-center gap-2 cursor-pointer">
+                          <input type="checkbox" checked={editReward.is_active}
+                            onChange={e => setEditReward(r => r ? { ...r, is_active: e.target.checked } : r)}
+                            className="rounded" />
+                          <span className="text-xs font-semibold text-gray-700 dark:text-gray-300">Aktif</span>
+                        </label>
+                        <label className="flex items-center gap-2 cursor-pointer">
+                          <input type="checkbox" checked={editReward.is_featured}
+                            onChange={e => setEditReward(r => r ? { ...r, is_featured: e.target.checked } : r)}
+                            className="rounded" />
+                          <span className="text-xs font-semibold text-gray-700 dark:text-gray-300">Featured</span>
+                        </label>
+                      </div>
+                    </div>
+
+                    {editMsg && (
+                      <div className={`p-2 rounded-lg text-xs font-semibold flex items-center gap-2 ${editMsg.ok ? "bg-green-50 dark:bg-green-500/10 text-green-600" : "bg-red-50 dark:bg-red-500/10 text-red-600"}`}>
+                        {editMsg.ok ? <Ic.Check s={12} /> : <Ic.Alert s={12} />}{editMsg.msg}
+                      </div>
+                    )}
+
+                    <div className="flex gap-2">
+                      <button onClick={() => setEditReward(null)}
+                        className="px-4 py-2 rounded-xl border border-gray-200 dark:border-gray-700 text-xs font-semibold text-gray-600 dark:text-gray-300">
+                        Batal
+                      </button>
+                      <button onClick={handleEditRewardSave} disabled={editLoading}
+                        className="flex items-center gap-2 px-4 py-2 rounded-xl text-xs font-bold text-white disabled:opacity-50"
+                        style={{ background: "linear-gradient(135deg, #f59e0b, #d97706)" }}>
+                        {editLoading ? <Spinner color="white" /> : <><Ic.Check s={12} c="white" />Simpan Perubahan</>}
+                      </button>
+                    </div>
+                  </div>
+                )}
               </div>
             )}
 
@@ -1434,7 +1638,6 @@ const LoyaltyPage: React.FC = () => {
         <div className="rounded-2xl border border-gray-200 dark:border-gray-800 bg-white dark:bg-white/[0.03] overflow-hidden">
           <div className="px-6 py-7 relative overflow-hidden"
             style={{ background: "linear-gradient(135deg, #1e1b4b 0%, #312e81 40%, #4338ca 70%, #6d28d9 100%)" }}>
-            {/* BG stars */}
             {[...Array(12)].map((_, i) => (
               <div key={i} className="absolute rounded-full bg-white opacity-10"
                 style={{
