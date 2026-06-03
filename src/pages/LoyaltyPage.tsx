@@ -269,7 +269,6 @@ function ShowSelectModal({ reward, balance, onClose, onConfirm, loading }: ShowS
   const [search, setSearch]         = useState("");
   const [step, setStep]             = useState<"select" | "confirm">("select");
 
-  // Fetch shows — sama logika dengan ShowSchedulePage (IDN Plus → theater fallback)
   useEffect(() => {
     const fetchShows = async () => {
       setLoadingShows(true);
@@ -289,7 +288,6 @@ function ShowSelectModal({ reward, balance, onClose, onConfirm, loading }: ShowS
         }
       } catch {}
 
-      // Fallback ke theater
       try {
         const res  = await fetch(THEATER_API);
         const json = await res.json();
@@ -363,7 +361,6 @@ function ShowSelectModal({ reward, balance, onClose, onConfirm, loading }: ShowS
         {/* Step: SELECT SHOW */}
         {step === "select" && (
           <>
-            {/* Search */}
             <div className="px-5 py-3 border-b border-gray-100 dark:border-gray-800 flex-shrink-0">
               <div className="relative">
                 <div className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400">
@@ -378,7 +375,6 @@ function ShowSelectModal({ reward, balance, onClose, onConfirm, loading }: ShowS
               </div>
             </div>
 
-            {/* Show list */}
             <div className="overflow-y-auto flex-1 p-3">
               {loadingShows ? (
                 <div className="flex flex-col items-center justify-center py-12 gap-3">
@@ -406,7 +402,6 @@ function ShowSelectModal({ reward, balance, onClose, onConfirm, loading }: ShowS
                           background: isSelected ? "rgba(70,95,255,0.06)" : undefined,
                         }}
                       >
-                        {/* Poster */}
                         <div className="relative flex-shrink-0 w-16 h-10 rounded-lg overflow-hidden bg-gray-100 dark:bg-gray-800">
                           <img
                             src={show.image}
@@ -414,7 +409,6 @@ function ShowSelectModal({ reward, balance, onClose, onConfirm, loading }: ShowS
                             className="w-full h-full object-cover"
                             onError={(e) => { (e.target as HTMLImageElement).src = DEFAULT_IMG; }}
                           />
-                          {/* Live badge */}
                           {show.status === "live" && (
                             <div className="absolute top-0.5 left-0.5 flex items-center gap-1 px-1.5 py-0.5 rounded-full text-[9px] font-bold"
                               style={{ background: "#DC1F2E", color: "#fff" }}>
@@ -424,7 +418,6 @@ function ShowSelectModal({ reward, balance, onClose, onConfirm, loading }: ShowS
                           )}
                         </div>
 
-                        {/* Info */}
                         <div className="flex-1 min-w-0">
                           <p className="text-sm font-semibold text-gray-800 dark:text-white truncate">{show.title}</p>
                           <div className="flex items-center gap-3 mt-0.5 flex-wrap">
@@ -444,7 +437,6 @@ function ShowSelectModal({ reward, balance, onClose, onConfirm, loading }: ShowS
                           </div>
                         </div>
 
-                        {/* Checkmark */}
                         <div
                           className="w-5 h-5 rounded-full flex-shrink-0 flex items-center justify-center border-2 transition-all"
                           style={{
@@ -461,7 +453,6 @@ function ShowSelectModal({ reward, balance, onClose, onConfirm, loading }: ShowS
               )}
             </div>
 
-            {/* Footer */}
             <div className="px-5 py-4 border-t border-gray-100 dark:border-gray-800 flex-shrink-0">
               {!selected ? (
                 <p className="text-center text-sm text-gray-400">Pilih show di atas untuk melanjutkan</p>
@@ -482,7 +473,6 @@ function ShowSelectModal({ reward, balance, onClose, onConfirm, loading }: ShowS
         {/* Step: CONFIRM */}
         {step === "confirm" && selected && (
           <div className="overflow-y-auto flex-1 p-5 space-y-4">
-            {/* Show info */}
             <div className="flex gap-3 p-3 rounded-xl bg-gray-50 dark:bg-white/[0.04] border border-gray-200 dark:border-gray-700">
               <img
                 src={selected.image}
@@ -511,7 +501,6 @@ function ShowSelectModal({ reward, balance, onClose, onConfirm, loading }: ShowS
               </div>
             </div>
 
-            {/* Summary */}
             <div className="rounded-xl border border-gray-100 dark:border-gray-800 overflow-hidden divide-y divide-gray-100 dark:divide-gray-800">
               {[
                 { label: "Reward",         value: reward.reward_name },
@@ -528,7 +517,6 @@ function ShowSelectModal({ reward, balance, onClose, onConfirm, loading }: ShowS
               ))}
             </div>
 
-            {/* Info box */}
             <div className="p-3 rounded-xl bg-blue-50 dark:bg-blue-500/10 border border-blue-200 dark:border-blue-500/20 flex items-start gap-2">
               <Ic.Alert s={13} c="#3b82f6" />
               <p className="text-xs text-blue-700 dark:text-blue-400 leading-relaxed">
@@ -708,7 +696,9 @@ function BoxOpenResult({ result, onClose }: BoxOpenResultProps) {
 }
 
 // ── Dashboard Tab ─────────────────────────────────────────────────────────────
-function DashboardTab({ userId, balance, onRefresh }: { userId: string; balance: LoyaltyBalance | null; onRefresh: () => void }) {
+// FIX 1 & 2: Only destructure `balance` — userId and onRefresh are kept in the
+// prop type so the call-site stays valid, but not destructured (avoids TS6133).
+function DashboardTab({ balance }: { userId: string; balance: LoyaltyBalance | null; onRefresh: () => void }) {
   if (!balance) return (
     <div className="flex flex-col items-center justify-center py-20 gap-3">
       <Spinner /><p className="text-sm text-gray-400">Memuat data...</p>
@@ -806,9 +796,8 @@ function RewardsTab({ userId, balance, onRedeemSuccess }: {
   const [rewards, setRewards]           = useState<LoyaltyReward[]>([]);
   const [loading, setLoading]           = useState(true);
 
-  // Modal states
-  const [redeemTarget, setRedeemTarget]       = useState<LoyaltyReward | null>(null); // untuk non-free_ticket
-  const [showSelectTarget, setShowSelectTarget] = useState<LoyaltyReward | null>(null); // untuk free_ticket
+  const [redeemTarget, setRedeemTarget]       = useState<LoyaltyReward | null>(null);
+  const [showSelectTarget, setShowSelectTarget] = useState<LoyaltyReward | null>(null);
   const [redeemLoading, setRedeemLoading]     = useState(false);
 
   const [toast, setToast] = useState<{ msg: string; type: "success" | "error" } | null>(null);
@@ -827,7 +816,6 @@ function RewardsTab({ userId, balance, onRedeemSuccess }: {
       .finally(() => setLoading(false));
   }, [userId]);
 
-  // Redeem tanpa show (discount, membership, bonus_point, custom)
   const handleRedeem = async () => {
     if (!redeemTarget) return;
     setRedeemLoading(true);
@@ -846,7 +834,6 @@ function RewardsTab({ userId, balance, onRedeemSuccess }: {
     finally { setRedeemLoading(false); }
   };
 
-  // Redeem free_ticket dengan show yang dipilih dari modal
   const handleRedeemWithShow = async (show: NormalizedShow) => {
     if (!showSelectTarget) return;
     setRedeemLoading(true);
@@ -857,9 +844,9 @@ function RewardsTab({ userId, balance, onRedeemSuccess }: {
         body: JSON.stringify({
           user_id:     userId,
           reward_code: showSelectTarget.reward_code,
-          show_id:     show.id,           // ← show_id asli
-          show_title:  show.title,        // ← untuk label tiket
-          show_source: show.source,       // ← "idn" | "theater"
+          show_id:     show.id,
+          show_title:  show.title,
+          show_source: show.source,
         }),
       });
       const data = await res.json();
@@ -874,12 +861,11 @@ function RewardsTab({ userId, balance, onRedeemSuccess }: {
     finally { setRedeemLoading(false); }
   };
 
-  // Handler klik tombol "Tukar" — beda modal tergantung reward_type
   const handleClickRedeem = (rw: LoyaltyReward) => {
     if (rw.reward_type === "free_ticket") {
-      setShowSelectTarget(rw);  // buka modal pilih show
+      setShowSelectTarget(rw);
     } else {
-      setRedeemTarget(rw);      // buka modal konfirmasi biasa
+      setRedeemTarget(rw);
     }
   };
 
@@ -900,7 +886,6 @@ function RewardsTab({ userId, balance, onRedeemSuccess }: {
 
   return (
     <div className="space-y-4 relative">
-      {/* Toast */}
       {toast && (
         <div className={`fixed top-4 right-4 z-50 px-4 py-3 rounded-2xl text-sm font-semibold flex items-center gap-2 shadow-lg transition-all ${
           toast.type === "success" ? "bg-green-500 text-white" : "bg-red-500 text-white"
@@ -963,7 +948,6 @@ function RewardsTab({ userId, balance, onRedeemSuccess }: {
                             ⭐ FEATURED
                           </span>
                         )}
-                        {/* Badge khusus free_ticket */}
                         {isFreeTicket && (
                           <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-yellow-50 dark:bg-yellow-500/10 text-yellow-700 dark:text-yellow-400 border border-yellow-200 dark:border-yellow-500/20 flex items-center gap-1">
                             <Ic.Ticket s={9} c="currentColor" />Pilih Show
@@ -972,7 +956,6 @@ function RewardsTab({ userId, balance, onRedeemSuccess }: {
                       </div>
                       <p className="text-sm font-bold text-gray-800 dark:text-white">{rw.reward_name}</p>
                       {rw.description && <p className="text-xs text-gray-400 mt-0.5 leading-relaxed">{rw.description}</p>}
-                      {/* Hint untuk free_ticket */}
                       {isFreeTicket && (
                         <p className="text-[10px] text-gray-400 mt-1 italic">
                           Kamu akan memilih show sebelum konfirmasi penukaran
@@ -1032,7 +1015,6 @@ function RewardsTab({ userId, balance, onRedeemSuccess }: {
         </div>
       )}
 
-      {/* Modal konfirmasi biasa (discount, membership, dll) */}
       {redeemTarget && (
         <RedeemModal
           reward={redeemTarget}
@@ -1043,7 +1025,6 @@ function RewardsTab({ userId, balance, onRedeemSuccess }: {
         />
       )}
 
-      {/* Modal pilih show (khusus free_ticket) */}
       {showSelectTarget && (
         <ShowSelectModal
           reward={showSelectTarget}
@@ -1830,7 +1811,6 @@ function AdminPanel() {
                         <td className="px-4 py-3 font-semibold text-gray-700 dark:text-gray-300 whitespace-nowrap">{r.reward_name}</td>
                         <td className="px-4 py-3 text-gray-500 whitespace-nowrap">{r.reward_type}</td>
                         <td className="px-4 py-3 font-bold text-brand-500 whitespace-nowrap">{(r.point_spent || 0).toLocaleString()} pt</td>
-                        {/* FIX: tampilkan show_id untuk free_ticket di tabel admin */}
                         <td className="px-4 py-3 text-gray-400 whitespace-nowrap max-w-[120px] truncate font-mono text-[10px]">
                           {r.show_id || "—"}
                         </td>
@@ -1898,14 +1878,17 @@ const LoyaltyPage: React.FC = () => {
 
   const doRefresh = useCallback(() => setRefreshKey(k => k + 1), []);
 
-  const tabs: { key: MainTab; label: string; icon: React.ReactNode; adminOnly?: boolean }[] = [
+  // FIX 3: Declare as typed array first, then filter — prevents TypeScript from
+  // widening the `key` type from MainTab literals to `string`.
+  const allTabs: { key: MainTab; label: string; icon: React.ReactNode; adminOnly?: boolean }[] = [
     { key: "dashboard",   label: "Dashboard",   icon: <Ic.Star s={14} /> },
     { key: "rewards",     label: "Rewards",     icon: <Ic.Gift s={14} /> },
     { key: "mystery",     label: "Mystery Box", icon: <Ic.Box s={14} /> },
     { key: "history",     label: "Riwayat",     icon: <Ic.History s={14} /> },
     { key: "redemptions", label: "Voucherku",   icon: <Ic.Ticket s={14} /> },
     { key: "admin",       label: "Admin",       icon: <Ic.Shield s={14} />, adminOnly: true },
-  ].filter(t => !t.adminOnly || isAdmin);
+  ];
+  const tabs = allTabs.filter(t => !t.adminOnly || isAdmin);
 
   return (
     <>
