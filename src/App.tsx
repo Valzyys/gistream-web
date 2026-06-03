@@ -31,6 +31,7 @@ import GuidePage from "./pages/Guide";
 import TheaterShowDetailPage from "./pages/TheaterShowDetailPage";
 import MembershipPage from "./pages/MembershipPage";
 import StatusPage from "./pages/StatusPage";
+import LoyaltyPage from "./pages/LoyaltyPage";
 
 export default function App() {
   return (
@@ -61,6 +62,7 @@ export default function App() {
             <Route path="/jadwal/:showId" element={<TheaterShowDetailPage />} />
             <Route path="/membership" element={<MembershipPage />} />
             <Route path="/status" element={<StatusPage />} />
+            <Route path="/loyalty" element={<LoyaltyPage />} />
             
             {/* Forms */}
             <Route path="/form-elements" element={<FormElements />} />
