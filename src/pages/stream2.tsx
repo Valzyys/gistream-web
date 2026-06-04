@@ -164,12 +164,11 @@ async function getStreamURLSrv2(
     playlist_url: s.url || "",
   }));
 
-  // Untuk JSON fallback, tetap pakai masterUrl sebagai ABR entry point
   return { url: masterUrl, qualities };
 }
 
-// ── Fetch ulang master URL srv2 tanpa mengubah state qualities ────────────────
-// Dipakai oleh timer 30 detik: generate token baru → return URL baru saja
+// ── Fetch ulang master URL srv2 dengan token BARU ─────────────────────────────
+// Dipakai oleh timer 30 detik DAN setiap kali HLS perlu reload manifest di srv2
 async function refreshSrv2MasterUrl(
   slugOrId: string,
   isSlug: boolean
@@ -178,7 +177,7 @@ async function refreshSrv2MasterUrl(
   const param = isSlug ? `slug=${slugOrId}` : `showId=${slugOrId}`;
   const masterUrl = `${SRV2_BASE}/playback?${param}`;
 
-  // Hit endpoint supaya token tercatat valid di sisi server, abaikan body-nya
+  // Hit endpoint supaya token tercatat valid di sisi server
   await fetch(masterUrl, {
     headers: {
       "x-api-token": token,
@@ -442,67 +441,95 @@ function HlsPlayer({
       return;
     }
 
-    const hls = new Hls(makeHlsConfig());
-    hlsRef.current = hls;
-    hls.loadSource(src);
-    hls.attachMedia(video);
+    // ── Untuk srv2: selalu generate token baru sebelum loadSource ────────────
+    // Token lama sudah "used" begitu dipakai sekali, jadi setiap kali src
+    // berubah (mount baru / switch server / switch quality) kita perlu token segar.
+    const initHls = async () => {
+      let freshToken = tokenRef.current;
 
-    hls.on(Hls.Events.MANIFEST_PARSED, () => {
-      video.play().catch(() => {});
-    });
-
-    hls.on(Hls.Events.LEVEL_SWITCHED, (_, data) => {
-      const lvl = hls.levels[data.level];
-      if (lvl) {
-        setCurrentLevel(lvl.name || `${lvl.height}p`);
-        const bw = hls.bandwidthEstimate;
-        if (bw > 0) setBandwidth(
-          bw >= 1_000_000
-            ? (bw / 1_000_000).toFixed(1) + " Mbps"
-            : Math.round(bw / 1_000) + " Kbps"
-        );
-      }
-    });
-
-    hls.on(Hls.Events.ERROR, (_, data) => {
-      if (!data.fatal) return;
-      if (data.type === Hls.ErrorTypes.NETWORK_ERROR) {
-        hls.startLoad();
-      } else if (data.type === Hls.ErrorTypes.MEDIA_ERROR) {
-        hls.recoverMediaError();
-      } else {
-        destroyHls();
-        retryRef.current = setTimeout(() => {
-          const v = videoRef.current;
-          if (!v) return;
-          const newHls = new Hls(makeHlsConfig());
-          newHls.loadSource(src);
-          newHls.attachMedia(v);
-          newHls.on(Hls.Events.MANIFEST_PARSED, () => v.play().catch(() => {}));
-          hlsRef.current = newHls;
-        }, 2000);
-      }
-    });
-
-    // ── Server 2: refresh token + reload manifest setiap 30 detik ────────────
-    if (srv2RefreshFn) {
-      refreshRef.current = setInterval(async () => {
+      if (srv2RefreshFn) {
         try {
           const { token: newToken } = await srv2RefreshFn();
-          // Update tokenRef supaya request berikutnya pakai token baru
+          freshToken = newToken;
           tokenRef.current = newToken;
-          // Reload manifest HLS dengan token baru (video tidak restart)
-          const currentHls = hlsRef.current;
-          if (currentHls) {
-            currentHls.stopLoad();
-            currentHls.loadSource(src); // src (masterUrl) tetap sama, header sudah update via tokenRef
-            currentHls.startLoad(-1);
-          }
         } catch {
-          // silent — HLS akan retry sendiri kalau ada error
+          // Lanjut dengan token yang ada, HLS akan retry sendiri kalau error
         }
-      }, 30_000);
-    }
+      }
+
+      const hls = new Hls(makeHlsConfig());
+      hlsRef.current = hls;
+      hls.loadSource(src);
+      hls.attachMedia(video);
+
+      hls.on(Hls.Events.MANIFEST_PARSED, () => {
+        video.play().catch(() => {});
+      });
+
+      hls.on(Hls.Events.LEVEL_SWITCHED, (_, data) => {
+        const lvl = hls.levels[data.level];
+        if (lvl) {
+          setCurrentLevel(lvl.name || `${lvl.height}p`);
+          const bw = hls.bandwidthEstimate;
+          if (bw > 0) setBandwidth(
+            bw >= 1_000_000
+              ? (bw / 1_000_000).toFixed(1) + " Mbps"
+              : Math.round(bw / 1_000) + " Kbps"
+          );
+        }
+      });
+
+      hls.on(Hls.Events.ERROR, (_, data) => {
+        if (!data.fatal) return;
+        if (data.type === Hls.ErrorTypes.NETWORK_ERROR) {
+          hls.startLoad();
+        } else if (data.type === Hls.ErrorTypes.MEDIA_ERROR) {
+          hls.recoverMediaError();
+        } else {
+          destroyHls();
+          retryRef.current = setTimeout(async () => {
+            const v = videoRef.current;
+            if (!v) return;
+
+            // Untuk srv2: generate token baru lagi saat retry
+            if (srv2RefreshFn) {
+              try {
+                const { token: newToken } = await srv2RefreshFn();
+                tokenRef.current = newToken;
+              } catch {}
+            }
+
+            const newHls = new Hls(makeHlsConfig());
+            newHls.loadSource(src);
+            newHls.attachMedia(v);
+            newHls.on(Hls.Events.MANIFEST_PARSED, () => v.play().catch(() => {}));
+            hlsRef.current = newHls;
+          }, 2000);
+        }
+      });
+
+      // ── Server 2: refresh token + reload manifest setiap 30 detik ──────────
+      if (srv2RefreshFn) {
+        refreshRef.current = setInterval(async () => {
+          try {
+            const { token: newToken } = await srv2RefreshFn();
+            // Update tokenRef supaya request berikutnya pakai token baru
+            tokenRef.current = newToken;
+            // Reload manifest HLS dengan token baru (video tidak restart)
+            const currentHls = hlsRef.current;
+            if (currentHls) {
+              currentHls.stopLoad();
+              currentHls.loadSource(src);
+              currentHls.startLoad(-1);
+            }
+          } catch {
+            // silent — HLS akan retry sendiri kalau ada error
+          }
+        }, 30_000);
+      }
+    };
+
+    initHls();
 
     return destroyHls;
   }, [src, destroyHls, makeHlsConfig, srv2RefreshFn]); // eslint-disable-line
@@ -835,8 +862,9 @@ function LiveStream2() {
   const { comments: srComments, loading: srLoading, error: srError, lastPoll: srLastPoll, retry: srRetry } =
     useShowroomComments(isMember ? memberRoomId : null);
 
-  // ── srv2RefreshFn: dibuild dari state terkini, di-memo supaya stabil ────────
-  // Dipass ke HlsPlayer hanya saat activeServer === "2"
+  // ── srv2RefreshFn: generate token baru + warmup endpoint srv2 ───────────────
+  // Dipakai oleh HlsPlayer: (1) saat mount/src-change, (2) tiap 30 detik interval
+  // Setiap call menghasilkan token BARU yang belum pernah dipakai (JTI fresh)
   const srv2RefreshFn = useCallback(async (): Promise<{ url: string; token: string }> => {
     if (isIdn && idnShow?.slug) {
       const result = await refreshSrv2MasterUrl(idnShow.slug, true);
@@ -1148,13 +1176,14 @@ function LiveStream2() {
     if (mode === "auto") {
       try {
         if (isIdn && idnShow?.slug) {
-          const token = await generateStreamToken(idnShow.slug, true);
-          setStreamToken(token);
           if (activeServer === "2") {
-            // Kembali ke master URL srv2 untuk ABR
-            const param = `slug=${idnShow.slug}`;
-            setHlsUrl(`${SRV2_BASE}/playback?${param}`);
+            // Srv2: generate token baru, warmup, set master URL
+            const { url, token: newToken } = await refreshSrv2MasterUrl(idnShow.slug, true);
+            setStreamToken(newToken);
+            setHlsUrl(url);
           } else {
+            const token = await generateStreamToken(idnShow.slug, true);
+            setStreamToken(token);
             const { url: streamUrl } = await getStreamURL(token, idnShow.slug, true);
             setHlsUrl(streamUrl);
           }
@@ -1162,22 +1191,24 @@ function LiveStream2() {
           const identifier = memberShow.identifier || memberShow.slug || memberShow.url_key;
           const showId = memberShow.showid || memberShow.show_id || null;
           if (memberShow.is_group || memberShow.url_key === "jkt48-official") {
-            const token = await generateStreamToken(identifier, true);
-            setStreamToken(token);
             if (activeServer === "2") {
-              const param = `slug=${identifier}`;
-              setMemberHlsUrl(`${SRV2_BASE}/playback?${param}`);
+              const { url, token: newToken } = await refreshSrv2MasterUrl(identifier, true);
+              setStreamToken(newToken);
+              setMemberHlsUrl(url);
             } else {
+              const token = await generateStreamToken(identifier, true);
+              setStreamToken(token);
               const { url: streamUrl } = await getStreamURL(token, identifier, true);
               setMemberHlsUrl(streamUrl);
             }
           } else if (showId) {
-            const token = await generateStreamToken(String(showId), false);
-            setStreamToken(token);
             if (activeServer === "2") {
-              const param = `showId=${showId}`;
-              setMemberHlsUrl(`${SRV2_BASE}/playback?${param}`);
+              const { url, token: newToken } = await refreshSrv2MasterUrl(String(showId), false);
+              setStreamToken(newToken);
+              setMemberHlsUrl(url);
             } else {
+              const token = await generateStreamToken(String(showId), false);
+              setStreamToken(token);
               const { url: streamUrl } = await getStreamURL(token, String(showId), false);
               setMemberHlsUrl(streamUrl);
             }
