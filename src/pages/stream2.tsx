@@ -185,7 +185,6 @@ function parseM3U8Playlist(
     const bandwidth  = parseInt(line.match(/BANDWIDTH=(\d+)/)?.[1] || "0");
     const resolution = line.match(/RESOLUTION=([\dx]+)/)?.[1] || "";
     const fps        = line.match(/FRAME-RATE=([\d.]+)/)?.[1] || "";
-    // const codecs     = line.match(/CODECS="([^"]+)"/)?.[1] || "";
 
     // Look for NAME from the preceding #EXT-X-MEDIA line
     let name = "";
