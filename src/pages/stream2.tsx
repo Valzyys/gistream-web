@@ -445,7 +445,7 @@ function HlsPlayer({
     // Token lama sudah "used" begitu dipakai sekali, jadi setiap kali src
     // berubah (mount baru / switch server / switch quality) kita perlu token segar.
     const initHls = async () => {
-      const freshToken = tokenRef.current;
+      let freshToken = tokenRef.current;
 
       if (srv2RefreshFn) {
         try {
