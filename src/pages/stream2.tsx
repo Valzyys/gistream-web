@@ -126,7 +126,21 @@ async function getStreamURLSrv2(
       ...(isSlug ? { "x-slug": slugOrId } : { "x-showid": slugOrId }),
     },
   });
-  const data = await res.json();
+
+  const text = await res.text();
+
+  // If response is M3U8 playlist, parse it directly
+  if (text.trim().startsWith("#EXTM3U")) {
+    return parseM3U8Playlist(text, `${SRV2_BASE}/playback?${param}`);
+  }
+
+  // Otherwise try JSON (old behavior)
+  let data: any;
+  try {
+    data = JSON.parse(text);
+  } catch {
+    throw new Error("Server 2 returned an unrecognized response format");
+  }
   if (!data.success) throw new Error(data.message || "Gagal mendapatkan stream URL dari Server 2");
 
   const streams: any[] = data.streams || [];
@@ -151,6 +165,71 @@ async function getStreamURLSrv2(
   return { url: autoUrl, qualities };
 }
 
+// ── Parse raw M3U8 master playlist into QualityOption[] ──────────────────────
+function parseM3U8Playlist(
+  m3u8Text: string,
+  _baseUrl: string
+): { url: string; qualities: QualityOption[] } {
+  const lines = m3u8Text.split("\n").map((l) => l.trim()).filter(Boolean);
+  const qualities: QualityOption[] = [];
+  let index = 0;
+
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+    if (!line.startsWith("#EXT-X-STREAM-INF:")) continue;
+
+    const urlLine = lines[i + 1];
+    if (!urlLine || urlLine.startsWith("#")) continue;
+
+    // Parse attributes from #EXT-X-STREAM-INF
+    const bandwidth  = parseInt(line.match(/BANDWIDTH=(\d+)/)?.[1] || "0");
+    const resolution = line.match(/RESOLUTION=([\dx]+)/)?.[1] || "";
+    const fps        = line.match(/FRAME-RATE=([\d.]+)/)?.[1] || "";
+    const codecs     = line.match(/CODECS="([^"]+)"/)?.[1] || "";
+
+    // Look for NAME from the preceding #EXT-X-MEDIA line
+    let name = "";
+    for (let j = i - 1; j >= 0 && j >= i - 5; j--) {
+      const mediaLine = lines[j];
+      if (mediaLine.startsWith("#EXT-X-MEDIA:")) {
+        const nameMatch = mediaLine.match(/NAME="([^"]+)"/);
+        if (nameMatch) { name = nameMatch[1]; break; }
+      }
+    }
+
+    // Fallback name from resolution height
+    if (!name && resolution) {
+      const height = resolution.split("x")[1];
+      name = height ? `${height}p` : `Quality ${index + 1}`;
+    }
+    if (!name) name = `Quality ${index + 1}`;
+
+    const bandwidth_label = bandwidth >= 1_000_000
+      ? (bandwidth / 1_000_000).toFixed(1) + " Mbps"
+      : Math.round(bandwidth / 1_000) + " Kbps";
+
+    qualities.push({
+      index,
+      name,
+      quality:         name.toLowerCase().replace(/\s+/g, "_"),
+      bandwidth,
+      bandwidth_label,
+      resolution,
+      fps,
+      manual_url:   urlLine,
+      playlist_url: urlLine,
+    });
+
+    index++;
+  }
+
+  // Sort highest quality first
+  qualities.sort((a, b) => b.bandwidth - a.bandwidth);
+  qualities.forEach((q, i) => { q.index = i; });
+
+  const autoUrl = qualities[0]?.manual_url || "";
+  return { url: autoUrl, qualities };
+}
 const getSession = () => {
   try {
     const d = JSON.parse(
