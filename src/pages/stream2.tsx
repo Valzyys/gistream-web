@@ -448,14 +448,13 @@ function HlsPlayer({
       let freshToken = tokenRef.current;
 
       if (srv2RefreshFn) {
-        try {
-          const { token: newToken } = await srv2RefreshFn();
-          freshToken = newToken;
-          tokenRef.current = newToken;
-        } catch {
-          // Lanjut dengan token yang ada, HLS akan retry sendiri kalau error
-        }
-      }
+  try {
+    const { token: newToken } = await srv2RefreshFn();
+    tokenRef.current = newToken;
+  } catch {
+    // Lanjut dengan token yang ada
+  }
+}
 
       const hls = new Hls(makeHlsConfig());
       hlsRef.current = hls;
