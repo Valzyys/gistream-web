@@ -33,6 +33,7 @@ import MembershipPage from "./pages/MembershipPage";
 import StatusPage from "./pages/StatusPage";
 import LoyaltyPage from "./pages/LoyaltyPage";
 import MemberStream from "./pages/stream";
+import LiveStream2 from "./pages/stream2";
 
 export default function App() {
   return (
@@ -94,6 +95,7 @@ export default function App() {
           
           {/* Live Stream - Full Page (tanpa AppLayout) */}
           <Route path="/live/:playbackId" element={<LiveStream />} />
+          <Route path="/testlive/:playbackId" element={<LiveStream2 />} />
           <Route path="/replay/:id" element={<ReplayPlayerPage />} />
           <Route path="/stream/:playbackId" element={<MemberStream />} />
 
