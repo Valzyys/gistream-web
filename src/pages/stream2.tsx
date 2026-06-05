@@ -114,7 +114,6 @@ async function getStreamURL(
 }
 
 // ── Get stream URL dari srv2.jkt48connect.com (Server 2) ─────────────────────
-// Selalu return master URL playback untuk ABR, plus parse qualities untuk panel
 async function getStreamURLSrv2(
   token: string,
   slugOrId: string,
@@ -132,13 +131,11 @@ async function getStreamURLSrv2(
 
   const text = await res.text();
 
-  // Jika response adalah M3U8 → parse qualities, tapi URL utama tetap masterUrl (ABR)
   if (text.trim().startsWith("#EXTM3U")) {
     const { qualities } = parseM3U8Playlist(text, masterUrl);
     return { url: masterUrl, qualities };
   }
 
-  // Fallback JSON (legacy)
   let data: any;
   try {
     data = JSON.parse(text);
@@ -164,35 +161,26 @@ async function getStreamURLSrv2(
     playlist_url: s.url || "",
   }));
 
-  // Untuk JSON fallback, tetap pakai masterUrl sebagai ABR entry point
   return { url: masterUrl, qualities };
 }
 
-// ── Fetch ulang master URL srv2 dengan generate token baru + hit playback ─────
-// Dipakai oleh timer 30 detik di HlsPlayer:
-//   1. Generate token baru via HMAC
-//   2. Hit /playback dengan token baru agar server mencatat token valid
-//   3. Return { url, token } — HlsPlayer update tokenRef lalu reload HLS source
+// ── Fetch ulang master URL srv2 ───────────────────────────────────────────────
 async function refreshSrv2MasterUrl(
   slugOrId: string,
   isSlug: boolean
 ): Promise<{ url: string; token: string }> {
-  // Step 1: Generate token baru
   const token = await generateStreamToken(slugOrId, isSlug);
 
   const param     = isSlug ? `slug=${slugOrId}` : `showId=${slugOrId}`;
   const masterUrl = `${SRV2_BASE}/playback?${param}`;
 
-  // Step 2: Hit endpoint playback dengan token baru (WAJIB — server validasi token di sini)
   await fetch(masterUrl, {
     headers: {
       "x-api-token": token,
       ...(isSlug ? { "x-slug": slugOrId } : { "x-showid": slugOrId }),
     },
   });
-  // Sengaja tidak throw jika gagal — HLS akan retry sendiri
 
-  // Step 3: Return token baru + URL (URL tidak berubah, hanya token yang baru)
   return { url: masterUrl, token };
 }
 
@@ -363,7 +351,7 @@ function useShowroomComments(roomId: number | null) {
 // ── HLS Player ────────────────────────────────────────────────────────────────
 function HlsPlayer({
   src, title, qualities, onQualityChange, currentQuality, qualityMode, onModeChange, isIdn, token,
-  srv2RefreshFn,
+  srv2RefreshFn, hideAuto,
 }: {
   src: string;
   title: string;
@@ -374,20 +362,19 @@ function HlsPlayer({
   onModeChange: (mode: "auto" | "manual") => void;
   isIdn: boolean;
   token?: string;
-  // Kalau ada → ini server 2: dipanggil tiap 30 detik, return {url, token} baru
   srv2RefreshFn?: () => Promise<{ url: string; token: string }>;
+  hideAuto?: boolean; // ← saat true (server 2), tombol Auto disembunyikan
 }) {
   const videoRef    = useRef<HTMLVideoElement>(null);
   const hlsRef      = useRef<Hls | null>(null);
   const retryRef    = useRef<ReturnType<typeof setTimeout> | null>(null);
   const refreshRef  = useRef<ReturnType<typeof setInterval> | null>(null);
-  const tokenRef    = useRef<string | undefined>(token); // selalu up-to-date untuk xhrSetup
-  const srcRef      = useRef<string>(src);               // selalu up-to-date untuk reload
+  const tokenRef    = useRef<string | undefined>(token);
+  const srcRef      = useRef<string>(src);
   const [showQualityPanel, setShowQualityPanel] = useState(false);
   const [currentLevel, setCurrentLevel]         = useState<string>("Auto");
   const [bandwidth, setBandwidth]               = useState<string>("");
 
-  // Sync tokenRef & srcRef setiap kali prop berubah
   useEffect(() => { tokenRef.current = token; }, [token]);
   useEffect(() => { srcRef.current = src; }, [src]);
 
@@ -493,31 +480,21 @@ function HlsPlayer({
       }
     });
 
-    // ── Server 2: generate token baru + reload manifest setiap 30 detik ──────
-    // Flow:
-    //   1. Panggil srv2RefreshFn() → generate token baru + hit /playback dengan token tsb
-    //   2. Update tokenRef → semua request HLS berikutnya (fragment, level) pakai token baru
-    //   3. stopLoad → loadSource (URL sama, token sudah baru di header) → startLoad(-1)
-    //      Video tidak restart karena HLS.js hanya reload manifest, bukan detach/attach ulang
     if (srv2RefreshFn) {
       refreshRef.current = setInterval(async () => {
         try {
           const { token: newToken } = await srv2RefreshFn();
-
-          // Update tokenRef supaya xhrSetup/fetchSetup pakai token baru untuk semua request
           tokenRef.current = newToken;
-
-          // Reload manifest dengan token baru — video tetap jalan, tidak ada flicker
           const currentHls = hlsRef.current;
           if (currentHls) {
             currentHls.stopLoad();
-            currentHls.loadSource(srcRef.current); // URL sama, header token sudah baru via tokenRef
+            currentHls.loadSource(srcRef.current);
             currentHls.startLoad(-1);
           }
         } catch {
-          // silent — HLS akan retry sendiri via ERROR handler di atas
+          // silent
         }
-      }, 30_000); // 30 detik
+      }, 30_000);
     }
 
     return destroyHls;
@@ -561,13 +538,18 @@ function HlsPlayer({
           {showQualityPanel && (
             <div className="absolute bottom-[calc(100%+8px)] right-0 bg-gray-900/95 backdrop-blur-xl border border-white/10 rounded-2xl p-2 min-w-[190px] shadow-2xl">
               <p className="text-[9px] font-bold text-white/30 px-2 pb-1.5 uppercase tracking-widest">Kualitas</p>
-              <button
-                onClick={() => { onModeChange("auto"); onQualityChange(null); setShowQualityPanel(false); }}
-                className={`w-full px-3 py-2 rounded-xl border-0 text-[12px] cursor-pointer text-left flex items-center justify-between mb-0.5 transition-colors ${qualityMode === "auto" ? "bg-red-500/20 text-red-400 font-bold" : "bg-transparent text-white/70 hover:bg-white/5"}`}
-              >
-                <span>⚡ Auto</span>
-                {qualityMode === "auto" && <span className="text-[10px] opacity-60">{currentLevel}</span>}
-              </button>
+
+              {/* ── Tombol Auto hanya muncul di Server 1 (hideAuto=false) ── */}
+              {!hideAuto && (
+                <button
+                  onClick={() => { onModeChange("auto"); onQualityChange(null); setShowQualityPanel(false); }}
+                  className={`w-full px-3 py-2 rounded-xl border-0 text-[12px] cursor-pointer text-left flex items-center justify-between mb-0.5 transition-colors ${qualityMode === "auto" ? "bg-red-500/20 text-red-400 font-bold" : "bg-transparent text-white/70 hover:bg-white/5"}`}
+                >
+                  <span>⚡ Auto</span>
+                  {qualityMode === "auto" && <span className="text-[10px] opacity-60">{currentLevel}</span>}
+                </button>
+              )}
+
               {qualities.map((q) => {
                 const isActive = qualityMode === "manual" && currentQuality?.quality === q.quality;
                 return (
@@ -852,9 +834,6 @@ function LiveStream2() {
     useShowroomComments(isMember ? memberRoomId : null);
 
   // ── srv2RefreshFn ─────────────────────────────────────────────────────────
-  // Dipanggil oleh HlsPlayer setiap 30 detik saat activeServer === "2"
-  // Flow: generate token baru → hit /playback dengan token baru → return {url, token}
-  // HlsPlayer kemudian update tokenRef dan reload HLS manifest
   const srv2RefreshFn = useCallback(async (): Promise<{ url: string; token: string }> => {
     if (isIdn && idnShow?.slug) {
       const result = await refreshSrv2MasterUrl(idnShow.slug, true);
@@ -1108,7 +1087,8 @@ function LiveStream2() {
     setServerLoading(true);
     setQualities([]);
     setCurrentQuality(null);
-    setQualityMode("auto");
+    // ── Paksa mode manual saat server 2, reset ke auto saat server 1 ─────────
+    setQualityMode(server === "2" ? "manual" : "auto");
     try {
       if (isIdn) {
         if (!idnShow) { setServerLoading(false); return; }
@@ -1162,6 +1142,8 @@ function LiveStream2() {
   };
 
   const handleModeChange = async (mode: "auto" | "manual") => {
+    // Jika server 2 aktif, blokir perubahan ke mode auto
+    if (mode === "auto" && activeServer === "2") return;
     setQualityMode(mode);
     if (mode === "auto") {
       try {
@@ -1402,9 +1384,11 @@ function LiveStream2() {
     ? (idnShow?.title || "Live Stream JKT48")
     : (memberShow?.name || "Live Member JKT48");
 
-  // ── Tentukan apakah HlsPlayer harus pakai srv2RefreshFn ──────────────────
-  // Hanya pass srv2RefreshFn saat server 2 aktif — timer 30 detik hanya jalan di server 2
+  // ── Pass srv2RefreshFn hanya saat server 2 aktif ──────────────────────────
   const activeSrv2RefreshFn = activeServer === "2" ? srv2RefreshFn : undefined;
+
+  // ── hideAuto: true saat server 2 aktif → tombol Auto disembunyikan ────────
+  const hideAuto = activeServer === "2";
 
   if (isIdn && membershipLoading) {
     return (
@@ -1598,6 +1582,7 @@ function LiveStream2() {
                 isIdn={true}
                 token={streamToken}
                 srv2RefreshFn={activeSrv2RefreshFn}
+                hideAuto={hideAuto}
               />
             ) : isMember && memberHlsUrl ? (
               <HlsPlayer
@@ -1611,6 +1596,7 @@ function LiveStream2() {
                 isIdn={!!(memberShow?.is_group || memberShow?.url_key === "jkt48-official")}
                 token={streamToken}
                 srv2RefreshFn={activeSrv2RefreshFn}
+                hideAuto={hideAuto}
               />
             ) : (
               <div className="aspect-video bg-gray-100 dark:bg-gray-800/50 rounded-2xl flex items-center justify-center border border-gray-200 dark:border-gray-700">
