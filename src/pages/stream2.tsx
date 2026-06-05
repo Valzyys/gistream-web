@@ -114,24 +114,40 @@ async function getStreamURL(
 }
 
 // ── Get stream URL dari srv2.jkt48connect.com (Server 2) ─────────────────────
+// Selalu return master URL playback untuk ABR, plus parse qualities untuk panel
 async function getStreamURLSrv2(
   token: string,
   slugOrId: string,
   isSlug: boolean
 ): Promise<{ url: string; qualities: QualityOption[] }> {
   const param = isSlug ? `slug=${slugOrId}` : `showId=${slugOrId}`;
-  const res = await fetch(`${SRV2_BASE}/playback?${param}`, {
+  const masterUrl = `${SRV2_BASE}/playback?${param}`;
+
+  const res = await fetch(masterUrl, {
     headers: {
       "x-api-token": token,
       ...(isSlug ? { "x-slug": slugOrId } : { "x-showid": slugOrId }),
     },
   });
-  const data = await res.json();
+
+  const text = await res.text();
+
+  // Jika response adalah M3U8 → parse qualities, tapi URL utama tetap masterUrl (ABR)
+  if (text.trim().startsWith("#EXTM3U")) {
+    const { qualities } = parseM3U8Playlist(text, masterUrl);
+    return { url: masterUrl, qualities };
+  }
+
+  // Fallback JSON (legacy)
+  let data: any;
+  try {
+    data = JSON.parse(text);
+  } catch {
+    throw new Error("Server 2 returned an unrecognized response format");
+  }
   if (!data.success) throw new Error(data.message || "Gagal mendapatkan stream URL dari Server 2");
 
   const streams: any[] = data.streams || [];
-  const autoUrl = streams[0]?.url || "";
-
   const qualities: QualityOption[] = streams.map((s: any, idx: number) => ({
     index:           idx,
     name:            s.NAME || `${s.RESOLUTION?.split("x")[1] || "?"}p`,
@@ -148,6 +164,89 @@ async function getStreamURLSrv2(
     playlist_url: s.url || "",
   }));
 
+  // Untuk JSON fallback, tetap pakai masterUrl sebagai ABR entry point
+  return { url: masterUrl, qualities };
+}
+
+// ── Fetch ulang master URL srv2 tanpa mengubah state qualities ────────────────
+// Dipakai oleh timer 30 detik: generate token baru → return URL baru saja
+async function refreshSrv2MasterUrl(
+  slugOrId: string,
+  isSlug: boolean
+): Promise<{ url: string; token: string }> {
+  const token = await generateStreamToken(slugOrId, isSlug);
+  const param = isSlug ? `slug=${slugOrId}` : `showId=${slugOrId}`;
+  const masterUrl = `${SRV2_BASE}/playback?${param}`;
+
+  // Hit endpoint supaya token tercatat valid di sisi server, abaikan body-nya
+  await fetch(masterUrl, {
+    headers: {
+      "x-api-token": token,
+      ...(isSlug ? { "x-slug": slugOrId } : { "x-showid": slugOrId }),
+    },
+  }).catch(() => {});
+
+  return { url: masterUrl, token };
+}
+
+// ── Parse raw M3U8 master playlist into QualityOption[] ──────────────────────
+function parseM3U8Playlist(
+  m3u8Text: string,
+  _baseUrl: string
+): { url: string; qualities: QualityOption[] } {
+  const lines = m3u8Text.split("\n").map((l) => l.trim()).filter(Boolean);
+  const qualities: QualityOption[] = [];
+  let index = 0;
+
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+    if (!line.startsWith("#EXT-X-STREAM-INF:")) continue;
+
+    const urlLine = lines[i + 1];
+    if (!urlLine || urlLine.startsWith("#")) continue;
+
+    const bandwidth  = parseInt(line.match(/BANDWIDTH=(\d+)/)?.[1] || "0");
+    const resolution = line.match(/RESOLUTION=([\dx]+)/)?.[1] || "";
+    const fps        = line.match(/FRAME-RATE=([\d.]+)/)?.[1] || "";
+
+    let name = "";
+    for (let j = i - 1; j >= 0 && j >= i - 5; j--) {
+      const mediaLine = lines[j];
+      if (mediaLine.startsWith("#EXT-X-MEDIA:")) {
+        const nameMatch = mediaLine.match(/NAME="([^"]+)"/);
+        if (nameMatch) { name = nameMatch[1]; break; }
+      }
+    }
+
+    if (!name && resolution) {
+      const height = resolution.split("x")[1];
+      name = height ? `${height}p` : `Quality ${index + 1}`;
+    }
+    if (!name) name = `Quality ${index + 1}`;
+
+    const bandwidth_label = bandwidth >= 1_000_000
+      ? (bandwidth / 1_000_000).toFixed(1) + " Mbps"
+      : Math.round(bandwidth / 1_000) + " Kbps";
+
+    qualities.push({
+      index,
+      name,
+      quality:         name.toLowerCase().replace(/\s+/g, "_"),
+      bandwidth,
+      bandwidth_label,
+      resolution,
+      fps,
+      manual_url:   urlLine,
+      playlist_url: urlLine,
+    });
+
+    index++;
+  }
+
+  qualities.sort((a, b) => b.bandwidth - a.bandwidth);
+  qualities.forEach((q, i) => { q.index = i; });
+
+  const autoUrl = qualities[0]?.manual_url || "";
   return { url: autoUrl, qualities };
 }
 
@@ -257,6 +356,7 @@ function useShowroomComments(roomId: number | null) {
 // ── HLS Player ────────────────────────────────────────────────────────────────
 function HlsPlayer({
   src, title, qualities, onQualityChange, currentQuality, qualityMode, onModeChange, isIdn, token,
+  srv2RefreshFn,
 }: {
   src: string;
   title: string;
@@ -267,17 +367,64 @@ function HlsPlayer({
   onModeChange: (mode: "auto" | "manual") => void;
   isIdn: boolean;
   token?: string;
+  // Kalau ada → ini server 2: dipanggil tiap 30 detik, return {url, token} baru
+  srv2RefreshFn?: () => Promise<{ url: string; token: string }>;
 }) {
-  const videoRef = useRef<HTMLVideoElement>(null);
-  const hlsRef   = useRef<Hls | null>(null);
-  const retryRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const videoRef    = useRef<HTMLVideoElement>(null);
+  const hlsRef      = useRef<Hls | null>(null);
+  const retryRef    = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const refreshRef  = useRef<ReturnType<typeof setInterval> | null>(null);
+  const tokenRef    = useRef<string | undefined>(token); // selalu up-to-date untuk xhrSetup
   const [showQualityPanel, setShowQualityPanel] = useState(false);
   const [currentLevel, setCurrentLevel]         = useState<string>("Auto");
   const [bandwidth, setBandwidth]               = useState<string>("");
 
+  // Sync tokenRef setiap kali token prop berubah
+  useEffect(() => { tokenRef.current = token; }, [token]);
+
+  const makeHlsConfig = useCallback((startLevel?: number) => ({
+    enableWorker: true,
+    lowLatencyMode: false,
+    maxBufferLength:    30,
+    maxMaxBufferLength: 60,
+    maxBufferSize:      60 * 1000 * 1000,
+    backBufferLength: 30,
+    liveSyncDurationCount:       3,
+    liveMaxLatencyDurationCount: 10,
+    liveDurationInfinity:        true,
+    fragLoadingTimeOut:          10000,
+    fragLoadingMaxRetry:         6,
+    fragLoadingRetryDelay:       1000,
+    fragLoadingMaxRetryTimeout:  8000,
+    manifestLoadingTimeOut:      10000,
+    manifestLoadingMaxRetry:     4,
+    manifestLoadingRetryDelay:   1000,
+    levelLoadingTimeOut:         10000,
+    levelLoadingMaxRetry:        4,
+    levelLoadingRetryDelay:      1000,
+    startLevel:             startLevel ?? (qualityMode === "auto" ? -1 : undefined),
+    abrEwmaDefaultEstimate: 500_000,
+    abrBandWidthFactor:     0.8,
+    abrBandWidthUpFactor:   0.7,
+    abrEwmaFastLive:        3.0,
+    abrEwmaSlowLive:        9.0,
+    nudgeOffset:   0.3,
+    nudgeMaxRetry: 5,
+    xhrSetup: (xhr: XMLHttpRequest) => {
+      if (tokenRef.current) xhr.setRequestHeader("x-api-token", tokenRef.current);
+    },
+    fetchSetup: (context: any, initParams: any) => {
+      if (tokenRef.current) {
+        initParams.headers = { ...initParams.headers, "x-api-token": tokenRef.current };
+      }
+      return new Request(context.url, initParams);
+    },
+  }), [qualityMode]);
+
   const destroyHls = useCallback(() => {
-    if (retryRef.current) { clearTimeout(retryRef.current); retryRef.current = null; }
-    if (hlsRef.current) { hlsRef.current.destroy(); hlsRef.current = null; }
+    if (retryRef.current)   { clearTimeout(retryRef.current);    retryRef.current  = null; }
+    if (refreshRef.current) { clearInterval(refreshRef.current); refreshRef.current = null; }
+    if (hlsRef.current)     { hlsRef.current.destroy();           hlsRef.current    = null; }
   }, []);
 
   useEffect(() => {
@@ -295,48 +442,7 @@ function HlsPlayer({
       return;
     }
 
-    const hls = new Hls({
-      enableWorker: true,
-      lowLatencyMode: false,
-      maxBufferLength:    30,
-      maxMaxBufferLength: 60,
-      maxBufferSize:      60 * 1000 * 1000,
-      backBufferLength: 30,
-      liveSyncDurationCount:       3,
-      liveMaxLatencyDurationCount: 10,
-      liveDurationInfinity:        true,
-      fragLoadingTimeOut:          10000,
-      fragLoadingMaxRetry:         6,
-      fragLoadingRetryDelay:       1000,
-      fragLoadingMaxRetryTimeout:  8000,
-      manifestLoadingTimeOut:      10000,
-      manifestLoadingMaxRetry:     4,
-      manifestLoadingRetryDelay:   1000,
-      levelLoadingTimeOut:         10000,
-      levelLoadingMaxRetry:        4,
-      levelLoadingRetryDelay:      1000,
-      startLevel:             qualityMode === "auto" ? -1 : undefined,
-      abrEwmaDefaultEstimate: 500_000,
-      abrBandWidthFactor:     0.8,
-      abrBandWidthUpFactor:   0.7,
-      abrEwmaFastLive:        3.0,
-      abrEwmaSlowLive:        9.0,
-      nudgeOffset:   0.3,
-      nudgeMaxRetry: 5,
-      ...(token && {
-        xhrSetup: (xhr: XMLHttpRequest) => {
-          xhr.setRequestHeader("x-api-token", token);
-        },
-        fetchSetup: (context: any, initParams: any) => {
-          initParams.headers = {
-            ...initParams.headers,
-            "x-api-token": token,
-          };
-          return new Request(context.url, initParams);
-        },
-      }),
-    });
-
+    const hls = new Hls(makeHlsConfig());
     hlsRef.current = hls;
     hls.loadSource(src);
     hls.attachMedia(video);
@@ -369,19 +475,7 @@ function HlsPlayer({
         retryRef.current = setTimeout(() => {
           const v = videoRef.current;
           if (!v) return;
-          const newHls = new Hls({
-            lowLatencyMode: false,
-            maxBufferLength: 30,
-            ...(token && {
-              xhrSetup: (xhr: XMLHttpRequest) => {
-                xhr.setRequestHeader("x-api-token", token);
-              },
-              fetchSetup: (context: any, initParams: any) => {
-                initParams.headers = { ...initParams.headers, "x-api-token": token };
-                return new Request(context.url, initParams);
-              },
-            }),
-          });
+          const newHls = new Hls(makeHlsConfig());
           newHls.loadSource(src);
           newHls.attachMedia(v);
           newHls.on(Hls.Events.MANIFEST_PARSED, () => v.play().catch(() => {}));
@@ -390,8 +484,28 @@ function HlsPlayer({
       }
     });
 
+    // ── Server 2: refresh token + reload manifest setiap 30 detik ────────────
+    if (srv2RefreshFn) {
+      refreshRef.current = setInterval(async () => {
+        try {
+          const { token: newToken } = await srv2RefreshFn();
+          // Update tokenRef supaya request berikutnya pakai token baru
+          tokenRef.current = newToken;
+          // Reload manifest HLS dengan token baru (video tidak restart)
+          const currentHls = hlsRef.current;
+          if (currentHls) {
+            currentHls.stopLoad();
+            currentHls.loadSource(src); // src (masterUrl) tetap sama, header sudah update via tokenRef
+            currentHls.startLoad(-1);
+          }
+        } catch {
+          // silent — HLS akan retry sendiri kalau ada error
+        }
+      }, 30_000);
+    }
+
     return destroyHls;
-  }, [src, token, destroyHls]); // eslint-disable-line
+  }, [src, destroyHls, makeHlsConfig, srv2RefreshFn]); // eslint-disable-line
 
   return (
     <div className="relative w-full rounded-2xl overflow-hidden bg-black shadow-2xl">
@@ -721,6 +835,32 @@ function LiveStream2() {
   const { comments: srComments, loading: srLoading, error: srError, lastPoll: srLastPoll, retry: srRetry } =
     useShowroomComments(isMember ? memberRoomId : null);
 
+  // ── srv2RefreshFn: dibuild dari state terkini, di-memo supaya stabil ────────
+  // Dipass ke HlsPlayer hanya saat activeServer === "2"
+  const srv2RefreshFn = useCallback(async (): Promise<{ url: string; token: string }> => {
+    if (isIdn && idnShow?.slug) {
+      const result = await refreshSrv2MasterUrl(idnShow.slug, true);
+      setStreamToken(result.token);
+      setHlsUrl(result.url);
+      return result;
+    } else if (isMember && memberShow) {
+      const identifier = memberShow.identifier || memberShow.slug || memberShow.url_key;
+      const showId     = memberShow.showid || memberShow.show_id || null;
+      if (memberShow.is_group || memberShow.url_key === "jkt48-official") {
+        const result = await refreshSrv2MasterUrl(identifier, true);
+        setStreamToken(result.token);
+        setMemberHlsUrl(result.url);
+        return result;
+      } else if (showId) {
+        const result = await refreshSrv2MasterUrl(String(showId), false);
+        setStreamToken(result.token);
+        setMemberHlsUrl(result.url);
+        return result;
+      }
+    }
+    throw new Error("No show info available for srv2 refresh");
+  }, [isIdn, isMember, idnShow, memberShow]); // eslint-disable-line
+
   const fetchClientIP = async () => {
     try {
       const res = await fetch("https://api.ipify.org?format=json");
@@ -965,19 +1105,28 @@ function LiveStream2() {
         }
       } else {
         if (!memberShow) { setServerLoading(false); return; }
-        const getUrl = server === "2" ? getStreamURLSrv2 : getStreamURL;
         const identifier = memberShow.identifier || memberShow.slug || memberShow.url_key;
         const showId = memberShow.showid || memberShow.show_id || null;
         if (memberShow.is_group || memberShow.url_key === "jkt48-official") {
           const token = await generateStreamToken(identifier, true);
           setStreamToken(token);
-          const { url, qualities: q } = await getUrl(token, identifier, true);
-          setMemberHlsUrl(url); setQualities(q);
+          if (server === "2") {
+            const { url, qualities: q } = await getStreamURLSrv2(token, identifier, true);
+            setMemberHlsUrl(url); setQualities(q);
+          } else {
+            const { url, qualities: q } = await getStreamURL(token, identifier, true);
+            setMemberHlsUrl(url); setQualities(q);
+          }
         } else if (showId) {
           const token = await generateStreamToken(String(showId), false);
           setStreamToken(token);
-          const { url, qualities: q } = await getUrl(token, String(showId), false);
-          setMemberHlsUrl(url); setQualities(q);
+          if (server === "2") {
+            const { url, qualities: q } = await getStreamURLSrv2(token, String(showId), false);
+            setMemberHlsUrl(url); setQualities(q);
+          } else {
+            const { url, qualities: q } = await getStreamURL(token, String(showId), false);
+            setMemberHlsUrl(url); setQualities(q);
+          }
         }
       }
     } catch (err: any) {
@@ -1001,23 +1150,37 @@ function LiveStream2() {
         if (isIdn && idnShow?.slug) {
           const token = await generateStreamToken(idnShow.slug, true);
           setStreamToken(token);
-          const getUrl = activeServer === "2" ? getStreamURLSrv2 : getStreamURL;
-          const { url: streamUrl } = await getUrl(token, idnShow.slug, true);
-          setHlsUrl(streamUrl);
+          if (activeServer === "2") {
+            // Kembali ke master URL srv2 untuk ABR
+            const param = `slug=${idnShow.slug}`;
+            setHlsUrl(`${SRV2_BASE}/playback?${param}`);
+          } else {
+            const { url: streamUrl } = await getStreamURL(token, idnShow.slug, true);
+            setHlsUrl(streamUrl);
+          }
         } else if (isMember && memberShow) {
           const identifier = memberShow.identifier || memberShow.slug || memberShow.url_key;
           const showId = memberShow.showid || memberShow.show_id || null;
-          const getUrl = activeServer === "2" ? getStreamURLSrv2 : getStreamURL;
           if (memberShow.is_group || memberShow.url_key === "jkt48-official") {
             const token = await generateStreamToken(identifier, true);
             setStreamToken(token);
-            const { url: streamUrl } = await getUrl(token, identifier, true);
-            setMemberHlsUrl(streamUrl);
+            if (activeServer === "2") {
+              const param = `slug=${identifier}`;
+              setMemberHlsUrl(`${SRV2_BASE}/playback?${param}`);
+            } else {
+              const { url: streamUrl } = await getStreamURL(token, identifier, true);
+              setMemberHlsUrl(streamUrl);
+            }
           } else if (showId) {
             const token = await generateStreamToken(String(showId), false);
             setStreamToken(token);
-            const { url: streamUrl } = await getUrl(token, String(showId), false);
-            setMemberHlsUrl(streamUrl);
+            if (activeServer === "2") {
+              const param = `showId=${showId}`;
+              setMemberHlsUrl(`${SRV2_BASE}/playback?${param}`);
+            } else {
+              const { url: streamUrl } = await getStreamURL(token, String(showId), false);
+              setMemberHlsUrl(streamUrl);
+            }
           }
         }
       } catch {}
@@ -1222,6 +1385,9 @@ function LiveStream2() {
     ? (idnShow?.title || "Live Stream JKT48")
     : (memberShow?.name || "Live Member JKT48");
 
+  // ── Tentukan apakah HlsPlayer harus pakai srv2RefreshFn ──────────────────
+  const activeSrv2RefreshFn = activeServer === "2" ? srv2RefreshFn : undefined;
+
   if (isIdn && membershipLoading) {
     return (
       <div className="min-h-screen rounded-2xl border border-gray-200 bg-white dark:border-gray-800 dark:bg-white/[0.03] flex items-center justify-center">
@@ -1413,6 +1579,7 @@ function LiveStream2() {
                 onModeChange={handleModeChange}
                 isIdn={true}
                 token={streamToken}
+                srv2RefreshFn={activeSrv2RefreshFn}
               />
             ) : isMember && memberHlsUrl ? (
               <HlsPlayer
@@ -1425,6 +1592,7 @@ function LiveStream2() {
                 onModeChange={handleModeChange}
                 isIdn={!!(memberShow?.is_group || memberShow?.url_key === "jkt48-official")}
                 token={streamToken}
+                srv2RefreshFn={activeSrv2RefreshFn}
               />
             ) : (
               <div className="aspect-video bg-gray-100 dark:bg-gray-800/50 rounded-2xl flex items-center justify-center border border-gray-200 dark:border-gray-700">
