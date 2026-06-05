@@ -1,8 +1,8 @@
 import React, { useEffect, useState, useCallback, useRef } from "react";
 import PageMeta from "../components/common/PageMeta";
-import PixelBlast from "../components/common/PixelBlast"
-// ── Constants ────────────────────────────────────────────────────────────────
-// SESUDAH — proxy lewat Pages Functions, no CORS issue:
+import PixelBlast from "../components/common/PixelBlast";
+
+// ── Constants ─────────────────────────────────────────────────────────────────
 const MEMBERSHIP_API = "/api/membership";
 const API_KEY        = "JKTCONNECT";
 const q              = `?apikey=${API_KEY}`;
@@ -28,25 +28,7 @@ interface MembershipProduct {
   stock_remaining: number;
 }
 
-interface PaymentMethod {
-  channel_code: string;
-  channel_name: string;
-  fee_flat?: number;
-  fee_percent?: number;
-  fee?: number | string;
-  min_amount?: number;
-  max_amount?: number;
-}
-
-interface PaymentMethods {
-  virtual_account?: PaymentMethod[];
-  emoney?: PaymentMethod[];
-  retail?: PaymentMethod[];
-  pulsa?: PaymentMethod[];
-  qris?: PaymentMethod[];
-  [key: string]: PaymentMethod[] | undefined;
-}
-
+// V2: tidak ada method selection, murni QRIS
 interface MembershipOrder {
   order_id: number;
   ref_id: string;
@@ -56,17 +38,18 @@ interface MembershipOrder {
   membership_type: string;
   duration_days: number;
   amount: number;
-  fee: number;
   amount_to_pay: number;
   method: string;
   method_name: string;
-  category: string | null;
-  payment_url: string | null;
-  checkout_url: string | null;
-  nomor_va: string | null;
+  // V2 fields
+  qris_content: string | null;
   qr_image: string | null;
+  payment_url: string | null;
+  ybp_expired_at: string | null;
   expired_at: string;
   membership_expired_at?: string;
+  customer_name?: string;
+  customer_email?: string;
 }
 
 interface UserMembershipStatus {
@@ -121,8 +104,9 @@ interface AdminStockItem {
   stock_updated_at: string | null;
 }
 
-type AdminTab = "orders" | "products" | "stock";
-type ModalStep = "method" | "confirm" | "payment" | "success" | "already_active";
+type AdminTab  = "orders" | "products" | "stock";
+// V2: hilangkan step "method", flow: confirm → payment → success
+type ModalStep = "confirm" | "payment" | "success" | "already_active";
 
 // ── Auth helper ───────────────────────────────────────────────────────────────
 function getLoginData() {
@@ -138,13 +122,6 @@ function getLoginData() {
 // ── Formatters ────────────────────────────────────────────────────────────────
 function fmtRp(n: number) {
   return `Rp ${Number(n).toLocaleString("id-ID")}`;
-}
-function formatFee(m: PaymentMethod): string {
-  if (m.fee_flat && m.fee_flat > 0) return `Rp ${m.fee_flat.toLocaleString("id-ID")}`;
-  if (m.fee_percent && m.fee_percent > 0) return `${m.fee_percent}%`;
-  if (typeof m.fee === "number" && m.fee > 0) return `Rp ${m.fee.toLocaleString("id-ID")}`;
-  if (typeof m.fee === "string" && m.fee) return m.fee;
-  return "Gratis";
 }
 function fmtDate(iso: string) {
   return new Date(iso).toLocaleDateString("id-ID", {
@@ -197,11 +174,6 @@ const Ic = {
   ChevronRight: ({ s = 16, c = "#9ca3af" }) => (
     <svg width={s} height={s} viewBox="0 0 24 24" fill="none" stroke={c} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
       <polyline points="9 18 15 12 9 6" />
-    </svg>
-  ),
-  ChevronLeft: ({ s = 18, c = "currentColor" }) => (
-    <svg width={s} height={s} viewBox="0 0 24 24" fill="none" stroke={c} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-      <polyline points="15 18 9 12 15 6" />
     </svg>
   ),
   Alert: ({ s = 14, c = "currentColor" }) => (
@@ -265,7 +237,8 @@ const Ic = {
   ),
   BarChart: ({ s = 16, c = "currentColor" }) => (
     <svg width={s} height={s} viewBox="0 0 24 24" fill="none" stroke={c} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-      <line x1="18" y1="20" x2="18" y2="10" /><line x1="12" y1="20" x2="12" y2="4" /><line x1="6" y1="20" x2="6" y2="14" /><line x1="2" y1="20" x2="22" y2="20" />
+      <line x1="18" y1="20" x2="18" y2="10" /><line x1="12" y1="20" x2="12" y2="4" />
+      <line x1="6" y1="20" x2="6" y2="14" /><line x1="2" y1="20" x2="22" y2="20" />
     </svg>
   ),
   List: ({ s = 16, c = "currentColor" }) => (
@@ -274,20 +247,40 @@ const Ic = {
       <line x1="3" y1="6" x2="3.01" y2="6" /><line x1="3" y1="12" x2="3.01" y2="12" /><line x1="3" y1="18" x2="3.01" y2="18" />
     </svg>
   ),
-  Toggle: ({ s = 14, c = "currentColor" }) => (
-    <svg width={s} height={s} viewBox="0 0 24 24" fill="none" stroke={c} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-      <rect x="1" y="5" width="22" height="14" rx="7" ry="7" />
-      <circle cx="16" cy="12" r="3" fill={c} stroke="none" />
-    </svg>
-  ),
   DollarSign: ({ s = 14, c = "currentColor" }) => (
     <svg width={s} height={s} viewBox="0 0 24 24" fill="none" stroke={c} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
       <line x1="12" y1="1" x2="12" y2="23" /><path d="M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6" />
     </svg>
   ),
+  // QR icon baru untuk V2
+  QrCode: ({ s = 18, c = "currentColor" }) => (
+    <svg width={s} height={s} viewBox="0 0 24 24" fill="none" stroke={c} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <rect x="3" y="3" width="7" height="7" /><rect x="14" y="3" width="7" height="7" />
+      <rect x="3" y="14" width="7" height="7" />
+      <path d="M14 14h3v3h-3zM17 17h3v3h-3zM14 20h3" />
+    </svg>
+  ),
+  Scan: ({ s = 16, c = "currentColor" }) => (
+    <svg width={s} height={s} viewBox="0 0 24 24" fill="none" stroke={c} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M3 7V5a2 2 0 0 1 2-2h2M17 3h2a2 2 0 0 1 2 2v2M21 17v2a2 2 0 0 1-2 2h-2M7 21H5a2 2 0 0 1-2-2v-2" />
+      <line x1="3" y1="12" x2="21" y2="12" />
+    </svg>
+  ),
 };
 
-// ── Payment Modal ─────────────────────────────────────────────────────────────
+// ── QRIS Badge ─────────────────────────────────────────────────────────────────
+// Logo QRIS nasional bergaya minimalis
+function QrisBadge() {
+  return (
+    <div className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-[10px] font-black tracking-widest border"
+      style={{ background: "rgba(239,68,68,0.06)", borderColor: "rgba(239,68,68,0.2)", color: "#dc2626" }}>
+      <Ic.QrCode s={11} c="#dc2626" />
+      QRIS
+    </div>
+  );
+}
+
+// ── Payment Modal (V2 — pure QRIS) ────────────────────────────────────────────
 interface PaymentModalProps {
   product: MembershipProduct;
   onClose: () => void;
@@ -296,38 +289,24 @@ interface PaymentModalProps {
 }
 
 function PaymentModal({ product, onClose, onSuccess, loginData }: PaymentModalProps) {
-  const [step, setStep]                     = useState<ModalStep>("method");
-  const [methods, setMethods]               = useState<PaymentMethods>({});
-  const [loadingMethods, setLoadingMethods] = useState(true);
-  const [selectedMethod, setSelectedMethod] = useState<PaymentMethod | null>(null);
-  const [order, setOrder]                   = useState<MembershipOrder | null>(null);
-  const [creating, setCreating]             = useState(false);
-  const [checking, setChecking]             = useState(false);
-  const [cancelling, setCancelling]         = useState(false);
-  const [pollStatus, setPollStatus]         = useState<"pending" | "paid" | "expired">("pending");
-  const [paymentTimer, setPaymentTimer]     = useState(0);
-  const [error, setError]                   = useState("");
-  const [copied, setCopied]                 = useState(false);
+  // V2: langsung mulai dari "confirm"
+  const [step, setStep]             = useState<ModalStep>("confirm");
+  const [order, setOrder]           = useState<MembershipOrder | null>(null);
+  const [creating, setCreating]     = useState(false);
+  const [checking, setChecking]     = useState(false);
+  const [cancelling, setCancelling] = useState(false);
+  const [pollStatus, setPollStatus] = useState<"pending" | "paid" | "expired">("pending");
+  const [paymentTimer, setPaymentTimer] = useState(0);
+  const [error, setError]           = useState("");
+  const [copied, setCopied]         = useState(false);
+  const [qrImgError, setQrImgError] = useState(false);
+
   const pollRef    = useRef<ReturnType<typeof setTimeout> | null>(null);
   const stoppedRef = useRef(false);
 
   const price = product.price_sale ?? product.price;
 
-  useEffect(() => {
-    fetch(`${MEMBERSHIP_API}/methods${q}`)
-      .then((r) => r.json())
-      .then((d) => {
-        const raw = d.data?.payment_methods || {};
-        const normalized: PaymentMethods = {};
-        for (const [k, v] of Object.entries(raw)) {
-          normalized[k === "" ? "qris" : k] = v as PaymentMethod[];
-        }
-        setMethods(normalized);
-      })
-      .catch(() => setError("Gagal memuat metode pembayaran"))
-      .finally(() => setLoadingMethods(false));
-  }, []);
-
+  // ── Countdown timer ────────────────────────────────────────────────────────
   useEffect(() => {
     if (step !== "payment" || !order) return;
     const expiry = new Date(order.expired_at).getTime();
@@ -337,27 +316,41 @@ function PaymentModal({ product, onClose, onSuccess, loginData }: PaymentModalPr
     return () => clearInterval(iv);
   }, [step, order]);
 
+  // ── Auto-poll setiap 8 detik ───────────────────────────────────────────────
   useEffect(() => {
     if (step !== "payment" || !order) return;
     stoppedRef.current = false;
+
     const poll = async () => {
       if (stoppedRef.current) return;
       setChecking(true);
       try {
         const res  = await fetch(`${MEMBERSHIP_API}/check/${order.ref_id}${q}`);
         const data = await res.json();
-        if (data.order_status === "paid")    { setPollStatus("paid");    setStep("success"); onSuccess(); return; }
-        if (data.order_status === "expired") { setPollStatus("expired"); setChecking(false); return; }
+        if (data.order_status === "paid") {
+          setPollStatus("paid"); setStep("success"); onSuccess(); return;
+        }
+        if (data.order_status === "expired") {
+          setPollStatus("expired"); setChecking(false); return;
+        }
+        // Update qr_image kalau ada (dari check response)
+        if (data.data?.qr_image && !order.qr_image) {
+          setOrder((o) => o ? { ...o, qr_image: data.data.qr_image } : o);
+        }
       } catch {}
       setChecking(false);
-      if (!stoppedRef.current) pollRef.current = setTimeout(poll, 15000);
+      if (!stoppedRef.current) pollRef.current = setTimeout(poll, 8000);
     };
+
     pollRef.current = setTimeout(poll, 5000);
-    return () => { stoppedRef.current = true; if (pollRef.current) clearTimeout(pollRef.current); };
+    return () => {
+      stoppedRef.current = true;
+      if (pollRef.current) clearTimeout(pollRef.current);
+    };
   }, [step, order]);
 
+  // ── Buat order V2 (tidak perlu method param) ───────────────────────────────
   const handleCreateOrder = async () => {
-    if (!selectedMethod) return;
     setCreating(true); setError("");
     try {
       const res  = await fetch(`${MEMBERSHIP_API}/buy${q}`, {
@@ -366,14 +359,16 @@ function PaymentModal({ product, onClose, onSuccess, loginData }: PaymentModalPr
         body: JSON.stringify({
           user_id:        loginData.user.user_id,
           product_code:   product.product_code,
-          method:         selectedMethod.channel_code,
+          // V2: tidak perlu kirim `method`
           customer_name:  loginData.user.full_name || loginData.user.username,
           customer_email: loginData.user.email,
         }),
       });
       const data = await res.json();
       if (!data.status) {
-        if (res.status === 409 || data.message?.includes("sudah")) { setStep("already_active"); return; }
+        if (res.status === 409 || data.message?.includes("sudah")) {
+          setStep("already_active"); return;
+        }
         setError(data.message || "Gagal membuat order"); return;
       }
       setOrder(data.data);
@@ -406,7 +401,7 @@ function PaymentModal({ product, onClose, onSuccess, loginData }: PaymentModalPr
       if (data.status) onClose();
       else setError(data.message || "Gagal membatalkan");
     } catch { setError("Koneksi gagal saat membatalkan."); }
-    finally { setCancelling(false); }
+    finally  { setCancelling(false); }
   };
 
   const handleCopy = (text: string) => {
@@ -415,15 +410,14 @@ function PaymentModal({ product, onClose, onSuccess, loginData }: PaymentModalPr
     setTimeout(() => setCopied(false), 2000);
   };
 
-  const categoryOrder = ["emoney", "qris", "pulsa", "virtual_account", "retail"];
-  const categoryLabel: Record<string, string> = {
-    virtual_account: "Virtual Account",
-    emoney:          "E-Money / Dompet Digital",
-    qris:            "QRIS",
-    retail:          "Gerai Retail",
-    pulsa:           "Pulsa",
-  };
   const timerDanger = paymentTimer < 300;
+
+  const stepTitle: Record<ModalStep, string> = {
+    confirm:        "Konfirmasi Pembelian",
+    payment:        "Scan & Bayar QRIS",
+    success:        "Membership Aktif!",
+    already_active: "Membership Sudah Aktif",
+  };
 
   return (
     <div
@@ -435,23 +429,14 @@ function PaymentModal({ product, onClose, onSuccess, loginData }: PaymentModalPr
         className="w-full sm:max-w-md bg-white dark:bg-gray-900 rounded-t-3xl sm:rounded-3xl overflow-hidden shadow-2xl"
         style={{ maxHeight: "92vh", display: "flex", flexDirection: "column" }}
       >
+        {/* Header */}
         <div className="flex items-center justify-between px-5 py-4 border-b border-gray-100 dark:border-gray-800 flex-shrink-0">
-          <div className="flex items-center gap-2">
-            {step === "confirm" && (
-              <button onClick={() => setStep("method")} className="text-gray-400 hover:text-gray-600 mr-1 p-1">
-                <Ic.ChevronLeft />
-              </button>
-            )}
-            <div>
-              <h2 className="text-sm font-bold text-gray-800 dark:text-white">
-                {step === "method"         && "Pilih Metode Pembayaran"}
-                {step === "confirm"        && "Konfirmasi Pembelian"}
-                {step === "payment"        && "Selesaikan Pembayaran"}
-                {step === "success"        && "Membership Aktif!"}
-                {step === "already_active" && "Membership Sudah Aktif"}
-              </h2>
-              <p className="text-xs text-gray-400 mt-0.5">{product.product_name}</p>
-            </div>
+          <div>
+            <h2 className="text-sm font-bold text-gray-800 dark:text-white flex items-center gap-2">
+              {step === "payment" && <Ic.QrCode s={14} c="#465FFF" />}
+              {stepTitle[step]}
+            </h2>
+            <p className="text-xs text-gray-400 mt-0.5">{product.product_name}</p>
           </div>
           {step !== "payment" && (
             <button onClick={onClose} className="text-gray-400 hover:text-gray-600 dark:hover:text-gray-300 p-1">
@@ -461,86 +446,30 @@ function PaymentModal({ product, onClose, onSuccess, loginData }: PaymentModalPr
         </div>
 
         <div className="overflow-y-auto flex-1 p-5 space-y-4">
-          {/* METHOD */}
-          {step === "method" && (
-            <div>
-              <div className="flex gap-3 p-3 rounded-2xl border border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-white/[0.03] mb-4">
-                <div className="w-12 h-12 rounded-xl flex items-center justify-center flex-shrink-0"
-                  style={{ background: "linear-gradient(135deg, #465FFF22, #465FFF44)" }}>
-                  <Ic.Crown s={22} c="#465FFF" />
-                </div>
-                <div className="flex-1 min-w-0">
-                  <p className="text-sm font-bold text-gray-800 dark:text-white">{product.product_name}</p>
-                  <p className="text-xs text-gray-400 mt-0.5">{product.duration_days} hari akses premium</p>
-                  <p className="text-sm font-black text-brand-500 mt-1">{fmtRp(price)}</p>
-                </div>
-              </div>
-              {error && (
-                <div className="mb-3 p-3 rounded-xl bg-red-50 dark:bg-red-500/10 border border-red-200 dark:border-red-500/20 text-xs text-red-600 dark:text-red-400 flex items-center gap-2">
-                  <Ic.Alert c="#ef4444" />{error}
-                </div>
-              )}
-              {loadingMethods ? (
-                <div className="flex items-center justify-center gap-2 py-10 text-gray-400">
-                  <div className="w-5 h-5 border-2 border-gray-200 border-t-brand-500 rounded-full animate-spin" />
-                  <span className="text-sm">Memuat metode...</span>
-                </div>
-              ) : (
-                <div className="space-y-5">
-                  {categoryOrder.map((cat) => {
-                    const items = methods[cat];
-                    if (!items || items.length === 0) return null;
-                    return (
-                      <div key={cat}>
-                        <p className="text-[10px] font-bold text-gray-400 dark:text-gray-500 uppercase tracking-widest mb-2">
-                          {categoryLabel[cat] || cat}
-                        </p>
-                        <div className="space-y-1.5">
-                          {items.map((m) => (
-                            <button
-                              key={m.channel_code}
-                              onClick={() => { setSelectedMethod(m); setStep("confirm"); }}
-                              className="w-full flex items-center justify-between p-3 rounded-xl border transition-all text-left border-gray-200 dark:border-gray-700 hover:border-brand-400 dark:hover:border-brand-500/50 bg-white dark:bg-white/[0.02] hover:bg-brand-50/50 dark:hover:bg-brand-500/5"
-                            >
-                              <div className="flex items-center gap-3">
-                                <div className="w-9 h-9 rounded-lg bg-gray-100 dark:bg-white/10 flex items-center justify-center flex-shrink-0">
-                                  <span className="text-[10px] font-black text-gray-600 dark:text-gray-300">
-                                    {m.channel_code.slice(0, 2).toUpperCase()}
-                                  </span>
-                                </div>
-                                <div>
-                                  <p className="text-sm font-semibold text-gray-800 dark:text-white">{m.channel_name}</p>
-                                  <p className="text-xs text-gray-400">Fee: {formatFee(m)}</p>
-                                </div>
-                              </div>
-                              <Ic.ChevronRight />
-                            </button>
-                          ))}
-                        </div>
-                      </div>
-                    );
-                  })}
-                </div>
-              )}
-            </div>
-          )}
 
-          {/* CONFIRM */}
-          {step === "confirm" && selectedMethod && (
+          {/* ── CONFIRM ─────────────────────────────────────────────────── */}
+          {step === "confirm" && (
             <div className="space-y-4">
+              {/* Ringkasan produk */}
               <div className="p-4 rounded-2xl border border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-white/[0.03] space-y-3">
                 <div className="flex items-center gap-3">
-                  <div className="w-10 h-10 rounded-xl flex items-center justify-center"
+                  <div className="w-10 h-10 rounded-xl flex items-center justify-center flex-shrink-0"
                     style={{ background: "linear-gradient(135deg, #465FFF22, #465FFF44)" }}>
                     <Ic.Crown s={18} c="#465FFF" />
                   </div>
-                  <div>
+                  <div className="flex-1">
                     <p className="text-sm font-bold text-gray-800 dark:text-white">{product.product_name}</p>
                     <p className="text-xs text-gray-400">{product.duration_days} hari akses premium</p>
                   </div>
+                  <div className="text-right">
+                    {product.price_sale && (
+                      <p className="text-[11px] text-gray-400 line-through">{fmtRp(product.price)}</p>
+                    )}
+                    <p className="text-base font-black text-brand-500">{fmtRp(price)}</p>
+                  </div>
                 </div>
                 {product.features.length > 0 && (
-                  <div className="flex flex-wrap gap-1.5 pt-1 border-t border-gray-200 dark:border-gray-700">
+                  <div className="flex flex-wrap gap-1.5 pt-2 border-t border-gray-200 dark:border-gray-700">
                     {product.features.map((f, i) => (
                       <span key={i} className="text-[10px] font-semibold px-2 py-0.5 rounded-full bg-brand-50 dark:bg-brand-500/10 text-brand-600 dark:text-brand-400 border border-brand-200 dark:border-brand-500/20">
                         {f}
@@ -549,120 +478,178 @@ function PaymentModal({ product, onClose, onSuccess, loginData }: PaymentModalPr
                   </div>
                 )}
               </div>
+
+              {/* Rincian pembayaran */}
               <div className="rounded-2xl border border-gray-200 dark:border-gray-700 overflow-hidden divide-y divide-gray-100 dark:divide-gray-800">
                 {[
                   { label: "Harga Membership", value: fmtRp(price) },
-                  { label: "Fee Pembayaran",   value: formatFee(selectedMethod) },
-                  { label: "Metode",           value: selectedMethod.channel_name },
-                  { label: "Durasi",           value: `${product.duration_days} hari` },
+                  { label: "Metode Pembayaran", value: "QRIS (semua e-wallet & m-banking)" },
+                  { label: "Biaya Transaksi",   value: "Sudah termasuk" },
+                  { label: "Durasi",            value: `${product.duration_days} hari` },
                 ].map((row, i) => (
                   <div key={i} className="flex items-center justify-between px-4 py-3">
                     <span className="text-sm text-gray-500 dark:text-gray-400">{row.label}</span>
-                    <span className="text-sm font-semibold text-gray-800 dark:text-white">{row.value}</span>
+                    <span className="text-sm font-semibold text-gray-800 dark:text-white text-right max-w-[55%]">{row.value}</span>
                   </div>
                 ))}
+                <div className="flex items-center justify-between px-4 py-3 bg-brand-50/50 dark:bg-brand-500/5">
+                  <span className="text-sm font-bold text-gray-700 dark:text-gray-200">Total Bayar</span>
+                  <span className="text-base font-black text-brand-500">{fmtRp(price)}</span>
+                </div>
               </div>
-              <div className="p-3 rounded-xl bg-amber-50 dark:bg-amber-500/10 border border-amber-200 dark:border-amber-500/20 flex items-start gap-2">
-                <Ic.Alert s={13} c="#d97706" />
-                <p className="text-xs text-amber-700 dark:text-amber-400">
-                  Total akhir mungkin berbeda sedikit karena fee dihitung oleh payment gateway saat transaksi dibuat.
-                </p>
+
+              {/* QRIS info banner */}
+              <div className="p-3 rounded-xl border flex items-start gap-2.5"
+                style={{ background: "rgba(239,68,68,0.04)", borderColor: "rgba(239,68,68,0.15)" }}>
+                <Ic.Scan s={14} c="#dc2626" />
+                <div>
+                  <p className="text-xs font-semibold text-red-700 dark:text-red-400 mb-0.5">Pembayaran via QRIS</p>
+                  <p className="text-[11px] text-red-600/80 dark:text-red-400/70 leading-relaxed">
+                    Scan QR code menggunakan GoPay, OVO, Dana, ShopeePay, BCA, BRI, Mandiri, atau aplikasi m-banking lainnya yang mendukung QRIS.
+                  </p>
+                </div>
               </div>
+
               {error && (
                 <div className="p-3 rounded-xl bg-red-50 dark:bg-red-500/10 border border-red-200 dark:border-red-500/20 text-xs text-red-600 dark:text-red-400 flex items-center gap-2">
-                  <Ic.Alert />{error}
+                  <Ic.Alert c="#ef4444" />{error}
                 </div>
               )}
+
               <button
                 onClick={handleCreateOrder}
                 disabled={creating}
-                className="w-full flex items-center justify-center gap-2 py-3 rounded-xl text-sm font-bold text-white transition-colors disabled:opacity-50"
+                className="w-full flex items-center justify-center gap-2 py-3.5 rounded-xl text-sm font-bold text-white transition-all disabled:opacity-50 active:scale-[0.98]"
                 style={{ background: creating ? "#6b7280" : "linear-gradient(135deg, #465FFF, #7c3aed)" }}
               >
-                {creating
-                  ? <><div className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" />Membuat Order...</>
-                  : <><Ic.Crown s={14} c="white" />Bayar Sekarang</>}
+                {creating ? (
+                  <><div className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" />Membuat QRIS...</>
+                ) : (
+                  <><Ic.QrCode s={16} c="white" />Buat QRIS &amp; Bayar</>
+                )}
               </button>
+
+              <p className="text-center text-[11px] text-gray-400">
+                QR code berlaku selama 60 menit setelah dibuat
+              </p>
             </div>
           )}
 
-          {/* PAYMENT */}
+          {/* ── PAYMENT (tampilkan QRIS) ───────────────────────────────── */}
           {step === "payment" && order && (
             <div className="space-y-4">
-              <div className={`flex items-center justify-between p-3 rounded-xl border ${timerDanger
-                ? "bg-red-50 dark:bg-red-500/10 border-red-200 dark:border-red-500/20"
-                : "bg-brand-50 dark:bg-brand-500/10 border-brand-200 dark:border-brand-500/20"}`}
-              >
+              {/* Timer */}
+              <div className={`flex items-center justify-between p-3 rounded-xl border ${
+                timerDanger
+                  ? "bg-red-50 dark:bg-red-500/10 border-red-200 dark:border-red-500/20"
+                  : "bg-brand-50 dark:bg-brand-500/10 border-brand-200 dark:border-brand-500/20"
+              }`}>
                 <div className="flex items-center gap-2">
                   <Ic.Clock s={14} c={timerDanger ? "#ef4444" : "#465FFF"} />
                   <span className={`text-xs font-medium ${timerDanger ? "text-red-600 dark:text-red-400" : "text-brand-600 dark:text-brand-400"}`}>
-                    Selesaikan dalam
+                    {timerDanger ? "Segera selesaikan pembayaran!" : "Selesaikan dalam"}
                   </span>
                 </div>
                 <span className={`text-sm font-black tabular-nums ${timerDanger ? "text-red-600 dark:text-red-400" : "text-brand-600 dark:text-brand-400"}`}>
                   {fmtTimer(paymentTimer)}
                 </span>
               </div>
-              <div className="p-3 rounded-xl bg-gray-50 dark:bg-white/[0.04] border border-gray-200 dark:border-gray-700 space-y-2">
-                {[
-                  { label: "Ref ID",  value: order.ref_id,       mono: true },
-                  { label: "Produk",  value: order.product_name, mono: false },
-                  { label: "Metode",  value: order.method_name,  mono: false },
-                ].map(({ label, value, mono }) => value ? (
-                  <div key={label} className="flex justify-between items-center">
-                    <span className="text-xs text-gray-500 dark:text-gray-400">{label}</span>
-                    <span className={`text-xs font-semibold text-gray-700 dark:text-gray-300 ${mono ? "font-mono" : ""}`}>{value}</span>
-                  </div>
-                ) : null)}
-                <div className="flex justify-between items-center pt-1 border-t border-gray-200 dark:border-gray-700">
-                  <span className="text-xs text-gray-500 dark:text-gray-400">Total Bayar</span>
-                  <span className="text-base font-black text-gray-800 dark:text-white">{fmtRp(order.amount_to_pay)}</span>
+
+              {/* QR Code — utamakan qr_image dari API */}
+              <div className="flex flex-col items-center p-5 rounded-2xl border border-gray-200 dark:border-gray-700 bg-white dark:bg-white/[0.03] gap-3">
+                <div className="flex items-center gap-2 mb-1">
+                  <QrisBadge />
+                  <span className="text-xs text-gray-400">Scan dengan aplikasi apapun</span>
                 </div>
+
+                {order.qr_image && !qrImgError ? (
+                  <div className="p-2 bg-white rounded-xl shadow-sm border border-gray-100">
+                    <img
+                      src={order.qr_image}
+                      alt="QRIS Code"
+                      className="w-52 h-52 object-contain"
+                      onError={() => setQrImgError(true)}
+                    />
+                  </div>
+                ) : order.qris_content ? (
+                  // Fallback: render QR dari qris_content menggunakan qrserver API
+                  <div className="p-2 bg-white rounded-xl shadow-sm border border-gray-100">
+                    <img
+                      src={`https://api.qrserver.com/v1/create-qr-code/?size=208x208&data=${encodeURIComponent(order.qris_content)}`}
+                      alt="QRIS Code"
+                      className="w-52 h-52 object-contain"
+                    />
+                  </div>
+                ) : (
+                  <div className="w-52 h-52 rounded-xl bg-gray-100 dark:bg-white/5 flex flex-col items-center justify-center gap-2 text-gray-400">
+                    <Ic.QrCode s={36} />
+                    <p className="text-xs">Memuat QR...</p>
+                  </div>
+                )}
+
+                <p className="text-xs font-black text-gray-800 dark:text-white">
+                  {fmtRp(order.amount_to_pay)}
+                </p>
+                <p className="text-[11px] text-gray-400 text-center leading-relaxed">
+                  Buka aplikasi e-wallet atau m-banking → Pilih Bayar/Scan QR → Arahkan kamera ke QR di atas
+                </p>
               </div>
-              {order.nomor_va && (
-                <div className="p-4 rounded-xl border border-gray-200 dark:border-gray-700 bg-white dark:bg-white/[0.03]">
-                  <p className="text-xs text-gray-500 dark:text-gray-400 mb-2">Nomor Virtual Account</p>
-                  <div className="flex items-center justify-between gap-2">
-                    <span className="text-xl font-black text-gray-800 dark:text-white tracking-widest">{order.nomor_va}</span>
-                    <button
-                      onClick={() => handleCopy(order.nomor_va!)}
-                      className={`flex items-center gap-1.5 text-xs font-semibold px-3 py-1.5 rounded-lg border transition-colors ${copied
-                        ? "bg-green-50 dark:bg-green-500/10 text-green-600 border-green-200 dark:border-green-500/20"
-                        : "bg-brand-50 dark:bg-brand-500/10 text-brand-500 border-brand-200 dark:border-brand-500/20"}`}
-                    >
-                      {copied ? <><Ic.Check s={12} c="#16a34a" />Disalin</> : <><Ic.Copy s={12} />Salin</>}
-                    </button>
-                  </div>
-                  <p className="text-xs text-gray-400 mt-2">Bank: <strong className="text-gray-600 dark:text-gray-300">{order.method_name}</strong></p>
-                </div>
-              )}
-              {order.qr_image && (
-                <div className="flex flex-col items-center p-4 rounded-xl border border-gray-200 dark:border-gray-700 bg-white dark:bg-white/[0.03]">
-                  <p className="text-xs font-semibold text-gray-500 dark:text-gray-400 mb-3">Scan QR Code</p>
-                  <img src={order.qr_image} alt="QR Code" className="w-48 h-48 rounded-xl" />
-                </div>
-              )}
-              {(order.checkout_url || order.payment_url) && !order.nomor_va && !order.qr_image && (
-                <a
-                  href={order.checkout_url || order.payment_url!}
-                  target="_blank" rel="noopener noreferrer"
-                  className="flex items-center justify-center gap-2 w-full py-3 rounded-xl text-white text-sm font-bold"
-                  style={{ background: "linear-gradient(135deg, #465FFF, #7c3aed)" }}
+
+              {/* Copy QRIS content (untuk yang mau paste manual) */}
+              {order.qris_content && (
+                <button
+                  onClick={() => handleCopy(order.qris_content!)}
+                  className={`w-full flex items-center justify-center gap-2 py-2.5 rounded-xl border text-xs font-semibold transition-colors ${
+                    copied
+                      ? "bg-green-50 dark:bg-green-500/10 border-green-200 dark:border-green-500/20 text-green-600 dark:text-green-400"
+                      : "bg-gray-50 dark:bg-white/[0.03] border-gray-200 dark:border-gray-700 text-gray-500 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-white/[0.06]"
+                  }`}
                 >
-                  <Ic.Link s={14} c="white" />Buka Halaman Pembayaran
+                  {copied
+                    ? <><Ic.Check s={13} c="#16a34a" />String QRIS disalin!</>
+                    : <><Ic.Copy s={13} />Salin String QRIS (untuk paste manual)</>}
+                </button>
+              )}
+
+              {/* payment_url fallback */}
+              {order.payment_url && (
+                <a
+                  href={order.payment_url}
+                  target="_blank" rel="noopener noreferrer"
+                  className="flex items-center justify-center gap-2 w-full py-2.5 rounded-xl border border-brand-200 dark:border-brand-500/30 text-brand-500 text-xs font-semibold hover:bg-brand-50 dark:hover:bg-brand-500/10 transition-colors"
+                >
+                  <Ic.Link s={13} c="#465FFF" />Buka Halaman Pembayaran
                 </a>
               )}
+
+              {/* Info Ref */}
+              <div className="p-3 rounded-xl bg-gray-50 dark:bg-white/[0.04] border border-gray-200 dark:border-gray-700 space-y-1.5">
+                {[
+                  { label: "Ref ID",    value: order.ref_id,      mono: true },
+                  { label: "Produk",    value: order.product_name,mono: false },
+                ].map(({ label, value, mono }) => (
+                  <div key={label} className="flex justify-between items-center">
+                    <span className="text-[11px] text-gray-400">{label}</span>
+                    <span className={`text-[11px] font-semibold text-gray-600 dark:text-gray-300 ${mono ? "font-mono" : ""}`}>{value}</span>
+                  </div>
+                ))}
+              </div>
+
+              {/* Expired state */}
               {pollStatus === "expired" && (
                 <div className="p-3 rounded-xl bg-red-50 dark:bg-red-500/10 border border-red-200 dark:border-red-500/20 flex items-center gap-2">
                   <Ic.Clock s={14} c="#ef4444" />
-                  <span className="text-xs text-red-600 dark:text-red-400">Order expired. Tutup dan buat order baru.</span>
+                  <span className="text-xs text-red-600 dark:text-red-400">QRIS kadaluarsa. Tutup dan buat order baru.</span>
                 </div>
               )}
+
               {error && (
                 <div className="p-3 rounded-xl bg-red-50 dark:bg-red-500/10 border border-red-200 dark:border-red-500/20 text-xs text-red-600 dark:text-red-400 flex items-center gap-2">
                   <Ic.Alert />{error}
                 </div>
               )}
+
+              {/* Actions */}
               <div className="flex gap-2">
                 <button
                   onClick={handleManualCheck}
@@ -671,7 +658,7 @@ function PaymentModal({ product, onClose, onSuccess, loginData }: PaymentModalPr
                 >
                   {checking
                     ? <><div className="w-3.5 h-3.5 border-2 border-gray-300 border-t-gray-600 rounded-full animate-spin" />Mengecek...</>
-                    : <><Ic.Refresh s={14} />Cek Status</>}
+                    : <><Ic.Refresh s={13} />Cek Status</>}
                 </button>
                 {pollStatus !== "expired" && pollStatus !== "paid" && (
                   <button
@@ -681,17 +668,23 @@ function PaymentModal({ product, onClose, onSuccess, loginData }: PaymentModalPr
                   >
                     {cancelling
                       ? <div className="w-3.5 h-3.5 border-2 border-red-300 border-t-red-500 rounded-full animate-spin" />
-                      : <><Ic.Trash s={14} />Batalkan</>}
+                      : <><Ic.Trash s={13} />Batalkan</>}
                   </button>
                 )}
               </div>
+
+              {/* Checking indicator */}
+              {checking && (
+                <p className="text-center text-[11px] text-gray-400 animate-pulse">Memeriksa status pembayaran...</p>
+              )}
+
               <button onClick={onClose} className="w-full py-2 text-xs text-gray-400 hover:text-gray-500 transition-colors">
                 Tutup — pembayaran tetap berjalan di background
               </button>
             </div>
           )}
 
-          {/* SUCCESS */}
+          {/* ── SUCCESS ───────────────────────────────────────────────── */}
           {step === "success" && (
             <div className="flex flex-col items-center text-center py-6 gap-4">
               <div className="relative">
@@ -726,7 +719,7 @@ function PaymentModal({ product, onClose, onSuccess, loginData }: PaymentModalPr
             </div>
           )}
 
-          {/* ALREADY ACTIVE */}
+          {/* ── ALREADY ACTIVE ────────────────────────────────────────── */}
           {step === "already_active" && (
             <div className="flex flex-col items-center text-center py-6 gap-4">
               <div className="w-20 h-20 rounded-full flex items-center justify-center"
@@ -737,7 +730,8 @@ function PaymentModal({ product, onClose, onSuccess, loginData }: PaymentModalPr
                 <h3 className="text-lg font-bold text-gray-800 dark:text-white mb-1">Sudah Berlangganan</h3>
                 <p className="text-sm text-gray-500 dark:text-gray-400">Kamu sudah memiliki membership aktif.</p>
               </div>
-              <button onClick={onClose} className="w-full py-3 rounded-xl text-white text-sm font-bold" style={{ background: "linear-gradient(135deg, #465FFF, #7c3aed)" }}>
+              <button onClick={onClose} className="w-full py-3 rounded-xl text-white text-sm font-bold"
+                style={{ background: "linear-gradient(135deg, #465FFF, #7c3aed)" }}>
                 Tutup
               </button>
             </div>
@@ -750,7 +744,7 @@ function PaymentModal({ product, onClose, onSuccess, loginData }: PaymentModalPr
 
 // ── Admin: Edit Product Modal ──────────────────────────────────────────────────
 interface AdminEditProductModalProps {
-  product: MembershipProduct | null; // null = create new
+  product: MembershipProduct | null;
   onClose: () => void;
   onSaved: () => void;
 }
@@ -759,34 +753,33 @@ function AdminEditProductModal({ product, onClose, onSaved }: AdminEditProductMo
   const isNew = !product;
   const [saving, setSaving] = useState(false);
   const [error, setError]   = useState("");
-  // Helper: parse features ke string textarea (defensive)
-const parseFeaturesToStr = (raw: any): string => {
-  if (Array.isArray(raw)) return raw.join("\n");
-  if (typeof raw === "string") {
-    try { return JSON.parse(raw).join("\n"); } catch { return raw; }
-  }
-  return "";
-};
 
-// Helper: normalize membership_type — jaga-jaga kalau DB masih punya nilai lama
-const VALID_TYPES = ["weekly", "monthly", "ramadhan"];
-const normType = (t?: string) =>
-  VALID_TYPES.includes(t ?? "") ? t! : "monthly";
+  const parseFeaturesToStr = (raw: any): string => {
+    if (Array.isArray(raw)) return raw.join("\n");
+    if (typeof raw === "string") {
+      try { return JSON.parse(raw).join("\n"); } catch { return raw; }
+    }
+    return "";
+  };
 
-const [form, setForm] = useState({
-  product_code:     product?.product_code          ?? "",
-  product_name:     product?.product_name          ?? "",
-  membership_type:  normType(product?.membership_type),
-  duration_days:    product?.duration_days         ?? 30,
-  price:            product?.price                 ?? 0,
-  price_sale:       product?.price_sale            ?? "",
-  description:      product?.description           ?? "",
-  features:         parseFeaturesToStr(product?.features),
-  stock_per_month:  product?.stock_per_month       ?? 100,
-  is_active:        product?.is_active             ?? true,
-  is_purchase_open: product?.is_purchase_open      ?? true,
-  sort_order:       product?.sort_order            ?? 0,
-});
+  const VALID_TYPES = ["weekly", "monthly", "ramadhan"];
+  const normType    = (t?: string) => VALID_TYPES.includes(t ?? "") ? t! : "monthly";
+
+  const [form, setForm] = useState({
+    product_code:     product?.product_code     ?? "",
+    product_name:     product?.product_name     ?? "",
+    membership_type:  normType(product?.membership_type),
+    duration_days:    product?.duration_days    ?? 30,
+    price:            product?.price            ?? 0,
+    price_sale:       product?.price_sale       ?? "",
+    description:      product?.description      ?? "",
+    features:         parseFeaturesToStr(product?.features),
+    stock_per_month:  product?.stock_per_month  ?? 100,
+    is_active:        product?.is_active        ?? true,
+    is_purchase_open: product?.is_purchase_open ?? true,
+    sort_order:       product?.sort_order       ?? 0,
+  });
+
   const set = (k: string, v: any) => setForm((f) => ({ ...f, [k]: v }));
 
   const handleSave = async () => {
@@ -801,22 +794,14 @@ const [form, setForm] = useState({
         sort_order:      Number(form.sort_order),
         features:        form.features.split("\n").map((s) => s.trim()).filter(Boolean),
       };
-
-      let res;
-      if (isNew) {
-        res = await fetch(`${MEMBERSHIP_API}/admin/products${q}`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(payload),
-        });
-      } else {
-        res = await fetch(`${MEMBERSHIP_API}/admin/products/${product!.product_code}${q}`, {
-          method: "PUT",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(payload),
-        });
-      }
-
+      const url = isNew
+        ? `${MEMBERSHIP_API}/admin/products${q}`
+        : `${MEMBERSHIP_API}/admin/products/${product!.product_code}${q}`;
+      const res  = await fetch(url, {
+        method: isNew ? "POST" : "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      });
       const data = await res.json();
       if (!data.status) { setError(data.message || "Gagal menyimpan"); return; }
       onSaved();
@@ -836,10 +821,8 @@ const [form, setForm] = useState({
       style={{ background: "rgba(0,0,0,0.7)", backdropFilter: "blur(8px)" }}
       onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}
     >
-      <div
-        className="w-full sm:max-w-lg bg-white dark:bg-gray-900 rounded-t-3xl sm:rounded-3xl overflow-hidden shadow-2xl"
-        style={{ maxHeight: "92vh", display: "flex", flexDirection: "column" }}
-      >
+      <div className="w-full sm:max-w-lg bg-white dark:bg-gray-900 rounded-t-3xl sm:rounded-3xl overflow-hidden shadow-2xl"
+        style={{ maxHeight: "92vh", display: "flex", flexDirection: "column" }}>
         <div className="flex items-center justify-between px-5 py-4 border-b border-gray-100 dark:border-gray-800 flex-shrink-0">
           <h2 className="text-sm font-bold text-gray-800 dark:text-white flex items-center gap-2">
             <Ic.Edit s={15} c="#465FFF" />
@@ -847,7 +830,6 @@ const [form, setForm] = useState({
           </h2>
           <button onClick={onClose} className="text-gray-400 hover:text-gray-600 p-1"><Ic.X /></button>
         </div>
-
         <div className="overflow-y-auto flex-1 p-5 space-y-4">
           <div className="grid grid-cols-2 gap-3">
             <div className="col-span-2 sm:col-span-1">
@@ -905,23 +887,16 @@ const [form, setForm] = useState({
               </label>
             </div>
           </div>
-
           {error && (
             <div className="p-3 rounded-xl bg-red-50 dark:bg-red-500/10 border border-red-200 dark:border-red-500/20 text-xs text-red-600 dark:text-red-400 flex items-center gap-2">
               <Ic.Alert />{error}
             </div>
           )}
-
           <div className="flex gap-2 pt-1">
-            <button onClick={onClose} className="flex-1 py-2.5 rounded-xl border border-gray-200 dark:border-gray-700 text-sm font-semibold text-gray-600 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-white/5 transition-colors">
-              Batal
-            </button>
-            <button
-              onClick={handleSave}
-              disabled={saving}
-              className="flex-1 flex items-center justify-center gap-2 py-2.5 rounded-xl text-sm font-bold text-white disabled:opacity-50 transition-colors"
-              style={{ background: "linear-gradient(135deg, #465FFF, #7c3aed)" }}
-            >
+            <button onClick={onClose} className="flex-1 py-2.5 rounded-xl border border-gray-200 dark:border-gray-700 text-sm font-semibold text-gray-600 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-white/5 transition-colors">Batal</button>
+            <button onClick={handleSave} disabled={saving}
+              className="flex-1 flex items-center justify-center gap-2 py-2.5 rounded-xl text-sm font-bold text-white disabled:opacity-50"
+              style={{ background: "linear-gradient(135deg, #465FFF, #7c3aed)" }}>
               {saving ? <><div className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" />Menyimpan...</> : <><Ic.Check s={14} c="white" />Simpan</>}
             </button>
           </div>
@@ -932,18 +907,14 @@ const [form, setForm] = useState({
 }
 
 // ── Admin: Edit Price Modal ────────────────────────────────────────────────────
-interface AdminPriceModalProps {
-  product: MembershipProduct;
-  onClose: () => void;
-  onSaved: () => void;
-}
+interface AdminPriceModalProps { product: MembershipProduct; onClose: () => void; onSaved: () => void; }
 
 function AdminPriceModal({ product, onClose, onSaved }: AdminPriceModalProps) {
-  const [saving, setSaving] = useState(false);
-  const [error, setError]   = useState("");
-  const [price, setPrice]       = useState(String(product.price));
+  const [saving, setSaving]       = useState(false);
+  const [error, setError]         = useState("");
+  const [price, setPrice]         = useState(String(product.price));
   const [priceSale, setPriceSale] = useState(product.price_sale !== null ? String(product.price_sale) : "");
-  const [reason, setReason]     = useState("");
+  const [reason, setReason]       = useState("");
 
   const handleSave = async () => {
     setSaving(true); setError("");
@@ -952,31 +923,23 @@ function AdminPriceModal({ product, onClose, onSaved }: AdminPriceModalProps) {
       if (price !== "")     payload.price      = Number(price);
       if (priceSale !== "") payload.price_sale = Number(priceSale);
       else                  payload.price_sale = null;
-
       const res  = await fetch(`${MEMBERSHIP_API}/admin/products/${product.product_code}/price${q}`, {
-        method: "PATCH",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(payload),
+        method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload),
       });
       const data = await res.json();
       if (!data.status) { setError(data.message || "Gagal update harga"); return; }
       onSaved();
-    } catch {
-      setError("Koneksi gagal.");
-    } finally {
-      setSaving(false);
-    }
+    } catch { setError("Koneksi gagal."); }
+    finally  { setSaving(false); }
   };
 
   const inputCls = "w-full px-3 py-2 rounded-xl border border-gray-200 dark:border-gray-700 bg-white dark:bg-white/[0.04] text-sm text-gray-800 dark:text-white placeholder:text-gray-400 focus:outline-none focus:ring-2 focus:ring-brand-400/40 focus:border-brand-400 transition-all";
   const labelCls = "block text-xs font-semibold text-gray-500 dark:text-gray-400 mb-1";
 
   return (
-    <div
-      className="fixed inset-0 z-50 flex items-center justify-center p-4"
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-4"
       style={{ background: "rgba(0,0,0,0.7)", backdropFilter: "blur(8px)" }}
-      onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}
-    >
+      onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}>
       <div className="w-full max-w-sm bg-white dark:bg-gray-900 rounded-3xl overflow-hidden shadow-2xl p-6 space-y-4">
         <div className="flex items-center justify-between">
           <h2 className="text-sm font-bold text-gray-800 dark:text-white flex items-center gap-2">
@@ -985,32 +948,19 @@ function AdminPriceModal({ product, onClose, onSaved }: AdminPriceModalProps) {
           <button onClick={onClose} className="text-gray-400 hover:text-gray-600 p-1"><Ic.X /></button>
         </div>
         <div className="space-y-3">
-          <div>
-            <label className={labelCls}>Harga Normal (Rp)</label>
-            <input className={inputCls} type="number" min={0} value={price} onChange={(e) => setPrice(e.target.value)} />
-          </div>
-          <div>
-            <label className={labelCls}>Harga Promo (Rp) — kosongkan untuk hapus promo</label>
-            <input className={inputCls} type="number" min={0} value={priceSale} onChange={(e) => setPriceSale(e.target.value)} placeholder="kosongkan = hapus promo" />
-          </div>
-          <div>
-            <label className={labelCls}>Alasan perubahan (opsional)</label>
-            <input className={inputCls} value={reason} onChange={(e) => setReason(e.target.value)} placeholder="e.g. Promo Lebaran" />
-          </div>
+          <div><label className={labelCls}>Harga Normal (Rp)</label>
+            <input className={inputCls} type="number" min={0} value={price} onChange={(e) => setPrice(e.target.value)} /></div>
+          <div><label className={labelCls}>Harga Promo (Rp) — kosongkan untuk hapus promo</label>
+            <input className={inputCls} type="number" min={0} value={priceSale} onChange={(e) => setPriceSale(e.target.value)} placeholder="kosongkan = hapus promo" /></div>
+          <div><label className={labelCls}>Alasan perubahan (opsional)</label>
+            <input className={inputCls} value={reason} onChange={(e) => setReason(e.target.value)} placeholder="e.g. Promo Lebaran" /></div>
         </div>
-        {error && (
-          <div className="p-3 rounded-xl bg-red-50 dark:bg-red-500/10 border border-red-200 text-xs text-red-600 flex items-center gap-2">
-            <Ic.Alert />{error}
-          </div>
-        )}
+        {error && <div className="p-3 rounded-xl bg-red-50 dark:bg-red-500/10 border border-red-200 text-xs text-red-600 flex items-center gap-2"><Ic.Alert />{error}</div>}
         <div className="flex gap-2">
           <button onClick={onClose} className="flex-1 py-2.5 rounded-xl border border-gray-200 dark:border-gray-700 text-sm font-semibold text-gray-600 dark:text-gray-300">Batal</button>
-          <button
-            onClick={handleSave}
-            disabled={saving}
+          <button onClick={handleSave} disabled={saving}
             className="flex-1 flex items-center justify-center gap-2 py-2.5 rounded-xl text-sm font-bold text-white disabled:opacity-50"
-            style={{ background: "linear-gradient(135deg, #465FFF, #7c3aed)" }}
-          >
+            style={{ background: "linear-gradient(135deg, #465FFF, #7c3aed)" }}>
             {saving ? <div className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" /> : <><Ic.Check s={14} c="white" />Simpan</>}
           </button>
         </div>
@@ -1020,52 +970,37 @@ function AdminPriceModal({ product, onClose, onSaved }: AdminPriceModalProps) {
 }
 
 // ── Admin: Edit Stock Modal ───────────────────────────────────────────────────
-interface AdminStockModalProps {
-  item: AdminStockItem;
-  onClose: () => void;
-  onSaved: () => void;
-}
+interface AdminStockModalProps { item: AdminStockItem; onClose: () => void; onSaved: () => void; }
 
 function AdminStockModal({ item, onClose, onSaved }: AdminStockModalProps) {
-  const now   = new Date(Date.now() + 7 * 3600 * 1000);
-  const [saving, setSaving] = useState(false);
-  const [error, setError]   = useState("");
+  const now = new Date(Date.now() + 7 * 3600 * 1000);
+  const [saving, setSaving]         = useState(false);
+  const [error, setError]           = useState("");
   const [totalStock, setTotalStock] = useState(String(item.total_stock));
-  const [year, setYear]   = useState(String(item.year   ?? now.getUTCFullYear()));
-  const [month, setMonth] = useState(String(item.month  ?? now.getUTCMonth() + 1));
+  const [year, setYear]   = useState(String(item.year  ?? now.getUTCFullYear()));
+  const [month, setMonth] = useState(String(item.month ?? now.getUTCMonth() + 1));
 
   const handleSave = async () => {
     setSaving(true); setError("");
     try {
       const res  = await fetch(`${MEMBERSHIP_API}/admin/stock${q}`, {
-        method: "PUT",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          product_code: item.product_code,
-          year:         Number(year),
-          month:        Number(month),
-          total_stock:  Number(totalStock),
-        }),
+        method: "PUT", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ product_code: item.product_code, year: Number(year), month: Number(month), total_stock: Number(totalStock) }),
       });
       const data = await res.json();
       if (!data.status) { setError(data.message || "Gagal update stok"); return; }
       onSaved();
-    } catch {
-      setError("Koneksi gagal.");
-    } finally {
-      setSaving(false);
-    }
+    } catch { setError("Koneksi gagal."); }
+    finally  { setSaving(false); }
   };
 
   const inputCls = "w-full px-3 py-2 rounded-xl border border-gray-200 dark:border-gray-700 bg-white dark:bg-white/[0.04] text-sm text-gray-800 dark:text-white focus:outline-none focus:ring-2 focus:ring-brand-400/40 focus:border-brand-400 transition-all";
   const labelCls = "block text-xs font-semibold text-gray-500 dark:text-gray-400 mb-1";
 
   return (
-    <div
-      className="fixed inset-0 z-50 flex items-center justify-center p-4"
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-4"
       style={{ background: "rgba(0,0,0,0.7)", backdropFilter: "blur(8px)" }}
-      onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}
-    >
+      onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}>
       <div className="w-full max-w-sm bg-white dark:bg-gray-900 rounded-3xl overflow-hidden shadow-2xl p-6 space-y-4">
         <div className="flex items-center justify-between">
           <h2 className="text-sm font-bold text-gray-800 dark:text-white flex items-center gap-2">
@@ -1074,32 +1009,19 @@ function AdminStockModal({ item, onClose, onSaved }: AdminStockModalProps) {
           <button onClick={onClose} className="text-gray-400 hover:text-gray-600 p-1"><Ic.X /></button>
         </div>
         <div className="grid grid-cols-2 gap-3">
-          <div>
-            <label className={labelCls}>Tahun</label>
-            <input className={inputCls} type="number" value={year} onChange={(e) => setYear(e.target.value)} />
-          </div>
-          <div>
-            <label className={labelCls}>Bulan (1–12)</label>
-            <input className={inputCls} type="number" min={1} max={12} value={month} onChange={(e) => setMonth(e.target.value)} />
-          </div>
-          <div className="col-span-2">
-            <label className={labelCls}>Total Stok</label>
-            <input className={inputCls} type="number" min={0} value={totalStock} onChange={(e) => setTotalStock(e.target.value)} />
-          </div>
+          <div><label className={labelCls}>Tahun</label>
+            <input className={inputCls} type="number" value={year} onChange={(e) => setYear(e.target.value)} /></div>
+          <div><label className={labelCls}>Bulan (1–12)</label>
+            <input className={inputCls} type="number" min={1} max={12} value={month} onChange={(e) => setMonth(e.target.value)} /></div>
+          <div className="col-span-2"><label className={labelCls}>Total Stok</label>
+            <input className={inputCls} type="number" min={0} value={totalStock} onChange={(e) => setTotalStock(e.target.value)} /></div>
         </div>
-        {error && (
-          <div className="p-3 rounded-xl bg-red-50 dark:bg-red-500/10 border border-red-200 text-xs text-red-600 flex items-center gap-2">
-            <Ic.Alert />{error}
-          </div>
-        )}
+        {error && <div className="p-3 rounded-xl bg-red-50 dark:bg-red-500/10 border border-red-200 text-xs text-red-600 flex items-center gap-2"><Ic.Alert />{error}</div>}
         <div className="flex gap-2">
           <button onClick={onClose} className="flex-1 py-2.5 rounded-xl border border-gray-200 dark:border-gray-700 text-sm font-semibold text-gray-600 dark:text-gray-300">Batal</button>
-          <button
-            onClick={handleSave}
-            disabled={saving}
+          <button onClick={handleSave} disabled={saving}
             className="flex-1 flex items-center justify-center gap-2 py-2.5 rounded-xl text-sm font-bold text-white disabled:opacity-50"
-            style={{ background: "linear-gradient(135deg, #465FFF, #7c3aed)" }}
-          >
+            style={{ background: "linear-gradient(135deg, #465FFF, #7c3aed)" }}>
             {saving ? <div className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" /> : <><Ic.Check s={14} c="white" />Simpan</>}
           </button>
         </div>
@@ -1109,9 +1031,7 @@ function AdminStockModal({ item, onClose, onSaved }: AdminStockModalProps) {
 }
 
 // ── Admin Panel ───────────────────────────────────────────────────────────────
-interface AdminPanelProps {
-  onRefreshProducts: () => void;
-}
+interface AdminPanelProps { onRefreshProducts: () => void; }
 
 function AdminPanel({ onRefreshProducts }: AdminPanelProps) {
   const [tab, setTab]         = useState<AdminTab>("orders");
@@ -1139,23 +1059,21 @@ function AdminPanel({ onRefreshProducts }: AdminPanelProps) {
   }, [filterStatus]);
 
   const fetchProducts = useCallback(async () => {
-  setLoading(true);
-  try {
-    const res  = await fetch(`${MEMBERSHIP_API}/admin/products${q}`);
-    const data = await res.json();
-    // Normalize features — sama seperti di main page fetch
-    const normalized = (data.data || []).map((p: MembershipProduct) => ({
-      ...p,
-      features: Array.isArray(p.features)
-        ? p.features
-        : typeof p.features === "string"
-        ? (() => { try { return JSON.parse(p.features); } catch { return []; } })()
-        : [],
-    }));
-    setProducts(normalized);
-  } catch {}
-  setLoading(false);
-}, []);
+    setLoading(true);
+    try {
+      const res  = await fetch(`${MEMBERSHIP_API}/admin/products${q}`);
+      const data = await res.json();
+      const normalized = (data.data || []).map((p: MembershipProduct) => ({
+        ...p,
+        features: Array.isArray(p.features) ? p.features
+          : typeof p.features === "string"
+          ? (() => { try { return JSON.parse(p.features); } catch { return []; } })()
+          : [],
+      }));
+      setProducts(normalized);
+    } catch {}
+    setLoading(false);
+  }, []);
 
   const fetchStock = useCallback(async () => {
     setLoading(true);
@@ -1184,14 +1102,14 @@ function AdminPanel({ onRefreshProducts }: AdminPanelProps) {
   };
 
   const tabs: { key: AdminTab; label: string; icon: React.ReactNode }[] = [
-    { key: "orders",   label: "Orders",   icon: <Ic.List s={14} /> },
-    { key: "products", label: "Produk",   icon: <Ic.Package s={14} /> },
-    { key: "stock",    label: "Stok",     icon: <Ic.BarChart s={14} /> },
+    { key: "orders",   label: "Orders",  icon: <Ic.List s={14} /> },
+    { key: "products", label: "Produk",  icon: <Ic.Package s={14} /> },
+    { key: "stock",    label: "Stok",    icon: <Ic.BarChart s={14} /> },
   ];
 
   return (
     <div className="rounded-2xl border border-amber-200 dark:border-amber-500/30 bg-amber-50/50 dark:bg-amber-500/5 overflow-hidden">
-      {/* Admin Header */}
+      {/* Header */}
       <div className="px-6 py-4 flex items-center justify-between border-b border-amber-200 dark:border-amber-500/20"
         style={{ background: "linear-gradient(135deg, rgba(245,158,11,0.08), rgba(217,119,6,0.06))" }}>
         <div className="flex items-center gap-3">
@@ -1201,30 +1119,26 @@ function AdminPanel({ onRefreshProducts }: AdminPanelProps) {
           </div>
           <div>
             <p className="text-sm font-bold text-gray-800 dark:text-white">Admin Panel</p>
-            <p className="text-xs text-amber-600 dark:text-amber-400">Membership Management</p>
+            <p className="text-xs text-amber-600 dark:text-amber-400">Membership Management · YoBasePay V2</p>
           </div>
         </div>
         <button
-          onClick={() => {
-            if (tab === "orders")   fetchOrders();
-            if (tab === "products") fetchProducts();
-            if (tab === "stock")    fetchStock();
-          }}
+          onClick={() => { if (tab === "orders") fetchOrders(); if (tab === "products") fetchProducts(); if (tab === "stock") fetchStock(); }}
           className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold text-amber-700 dark:text-amber-400 border border-amber-200 dark:border-amber-500/30 hover:bg-amber-100 dark:hover:bg-amber-500/10 transition-colors"
         >
           <Ic.Refresh s={12} />Refresh
         </button>
       </div>
 
-      {/* Stats row (only on orders tab) */}
+      {/* Stats row */}
       {tab === "orders" && stats && (
         <div className="grid grid-cols-2 sm:grid-cols-5 gap-px bg-amber-100 dark:bg-amber-500/10 border-b border-amber-200 dark:border-amber-500/20">
           {[
-            { label: "Total",    value: stats.total,          color: "#6b7280" },
-            { label: "Paid",     value: stats.paid,           color: "#16a34a" },
-            { label: "Pending",  value: stats.pending,        color: "#d97706" },
-            { label: "Expired",  value: stats.expired,        color: "#9ca3af" },
-            { label: "Revenue",  value: fmtRp(Number(stats.total_revenue)), color: "#465FFF" },
+            { label: "Total",   value: stats.total,                              color: "#6b7280" },
+            { label: "Paid",    value: stats.paid,                               color: "#16a34a" },
+            { label: "Pending", value: stats.pending,                            color: "#d97706" },
+            { label: "Expired", value: stats.expired,                            color: "#9ca3af" },
+            { label: "Revenue", value: fmtRp(Number(stats.total_revenue)),       color: "#465FFF" },
           ].map((s) => (
             <div key={s.label} className="bg-white dark:bg-gray-900 px-4 py-3">
               <p className="text-[10px] font-semibold text-gray-400 uppercase tracking-wide">{s.label}</p>
@@ -1237,36 +1151,30 @@ function AdminPanel({ onRefreshProducts }: AdminPanelProps) {
       {/* Tabs */}
       <div className="flex border-b border-amber-200 dark:border-amber-500/20 bg-white dark:bg-gray-900">
         {tabs.map((t) => (
-          <button
-            key={t.key}
-            onClick={() => setTab(t.key)}
+          <button key={t.key} onClick={() => setTab(t.key)}
             className={`flex items-center gap-1.5 px-5 py-3 text-xs font-semibold border-b-2 transition-colors ${
               tab === t.key
                 ? "border-amber-500 text-amber-600 dark:text-amber-400"
                 : "border-transparent text-gray-400 hover:text-gray-600 dark:hover:text-gray-300"
-            }`}
-          >
+            }`}>
             {t.icon}{t.label}
           </button>
         ))}
       </div>
 
       <div className="bg-white dark:bg-gray-900">
-        {/* ── ORDERS TAB ── */}
+        {/* ORDERS */}
         {tab === "orders" && (
           <div>
             <div className="flex items-center gap-2 px-5 py-3 border-b border-gray-100 dark:border-gray-800">
               <span className="text-xs text-gray-400 font-medium">Filter:</span>
               {["", "paid", "pending", "expired", "cancelled"].map((s) => (
-                <button
-                  key={s}
-                  onClick={() => setFilterStatus(s)}
+                <button key={s} onClick={() => setFilterStatus(s)}
                   className={`px-2.5 py-1 rounded-lg text-[10px] font-bold transition-colors ${
                     filterStatus === s
                       ? "bg-amber-500 text-white"
                       : "bg-gray-100 dark:bg-white/5 text-gray-500 dark:text-gray-400 hover:bg-gray-200 dark:hover:bg-white/10"
-                  }`}
-                >
+                  }`}>
                   {s || "Semua"}
                 </button>
               ))}
@@ -1298,7 +1206,11 @@ function AdminPanel({ onRefreshProducts }: AdminPanelProps) {
                         </td>
                         <td className="px-4 py-3 text-gray-700 dark:text-gray-300 whitespace-nowrap">{o.product_name}</td>
                         <td className="px-4 py-3 font-semibold text-gray-800 dark:text-white whitespace-nowrap">{fmtRp(o.amount_to_pay)}</td>
-                        <td className="px-4 py-3 text-gray-500 dark:text-gray-400 whitespace-nowrap">{o.method_name}</td>
+                        <td className="px-4 py-3 whitespace-nowrap">
+                          <span className="inline-flex items-center gap-1 text-[10px] font-bold text-red-600 dark:text-red-400">
+                            <Ic.QrCode s={10} c="#dc2626" />QRIS
+                          </span>
+                        </td>
                         <td className="px-4 py-3 whitespace-nowrap"><span className={statusBadge(o.status)}>{o.status}</span></td>
                         <td className="px-4 py-3 text-gray-400 whitespace-nowrap">{fmtDateShort(o.created_at)}</td>
                       </tr>
@@ -1310,16 +1222,14 @@ function AdminPanel({ onRefreshProducts }: AdminPanelProps) {
           </div>
         )}
 
-        {/* ── PRODUCTS TAB ── */}
+        {/* PRODUCTS */}
         {tab === "products" && (
           <div>
             <div className="flex items-center justify-between px-5 py-3 border-b border-gray-100 dark:border-gray-800">
               <span className="text-xs text-gray-400">{products.length} produk</span>
-              <button
-                onClick={() => setEditProduct("new")}
+              <button onClick={() => setEditProduct("new")}
                 className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold text-white"
-                style={{ background: "linear-gradient(135deg, #465FFF, #7c3aed)" }}
-              >
+                style={{ background: "linear-gradient(135deg, #465FFF, #7c3aed)" }}>
                 <Ic.Plus s={12} c="white" />Tambah Produk
               </button>
             </div>
@@ -1340,27 +1250,19 @@ function AdminPanel({ onRefreshProducts }: AdminPanelProps) {
                         {!p.is_purchase_open && <span className="text-[10px] font-bold text-amber-500 bg-amber-50 dark:bg-amber-500/10 px-1.5 py-0.5 rounded-full">TUTUP</span>}
                       </div>
                       <div className="flex items-center gap-3 mt-1 text-xs text-gray-400">
-                        <span>{p.duration_days} hari</span>
-                        <span>·</span>
+                        <span>{p.duration_days} hari</span><span>·</span>
                         <span className="font-semibold text-gray-600 dark:text-gray-300">{fmtRp(p.price_sale ?? p.price)}</span>
                         {p.price_sale && <span className="line-through">{fmtRp(p.price)}</span>}
-                        <span>·</span>
-                        <span>Stok: {p.stock_remaining}/{p.current_stock}</span>
+                        <span>·</span><span>Stok: {p.stock_remaining}/{p.current_stock}</span>
                       </div>
                     </div>
                     <div className="flex items-center gap-1.5 flex-shrink-0">
-                      <button
-                        onClick={() => setEditPrice(p)}
-                        title="Update Harga"
-                        className="p-2 rounded-lg border border-gray-200 dark:border-gray-700 text-gray-400 hover:text-brand-500 hover:border-brand-300 transition-colors"
-                      >
+                      <button onClick={() => setEditPrice(p)} title="Update Harga"
+                        className="p-2 rounded-lg border border-gray-200 dark:border-gray-700 text-gray-400 hover:text-brand-500 hover:border-brand-300 transition-colors">
                         <Ic.DollarSign s={13} />
                       </button>
-                      <button
-                        onClick={() => setEditProduct(p)}
-                        title="Edit Produk"
-                        className="p-2 rounded-lg border border-gray-200 dark:border-gray-700 text-gray-400 hover:text-brand-500 hover:border-brand-300 transition-colors"
-                      >
+                      <button onClick={() => setEditProduct(p)} title="Edit Produk"
+                        className="p-2 rounded-lg border border-gray-200 dark:border-gray-700 text-gray-400 hover:text-brand-500 hover:border-brand-300 transition-colors">
                         <Ic.Edit s={13} />
                       </button>
                     </div>
@@ -1371,7 +1273,7 @@ function AdminPanel({ onRefreshProducts }: AdminPanelProps) {
           </div>
         )}
 
-        {/* ── STOCK TAB ── */}
+        {/* STOCK */}
         {tab === "stock" && (
           <div>
             <div className="px-5 py-3 border-b border-gray-100 dark:border-gray-800">
@@ -1389,11 +1291,8 @@ function AdminPanel({ onRefreshProducts }: AdminPanelProps) {
                   const low = item.remaining <= 10 && item.remaining > 0;
                   const out = item.remaining === 0;
                   return (
-                    <div
-                      key={item.product_id}
-                      className="px-5 py-4 hover:bg-gray-50 dark:hover:bg-white/[0.02] transition-colors cursor-pointer"
-                      onClick={() => setEditStock(item)}
-                    >
+                    <div key={item.product_id} className="px-5 py-4 hover:bg-gray-50 dark:hover:bg-white/[0.02] transition-colors cursor-pointer"
+                      onClick={() => setEditStock(item)}>
                       <div className="flex items-center justify-between mb-2">
                         <div>
                           <span className="text-sm font-bold text-gray-800 dark:text-white">{item.product_name}</span>
@@ -1409,13 +1308,10 @@ function AdminPanel({ onRefreshProducts }: AdminPanelProps) {
                         </div>
                       </div>
                       <div className="h-1.5 rounded-full bg-gray-100 dark:bg-white/10 overflow-hidden">
-                        <div
-                          className="h-full rounded-full transition-all duration-500"
-                          style={{
-                            width: `${100 - pct}%`,
-                            background: out ? "#ef4444" : low ? "#f59e0b" : "linear-gradient(90deg, #465FFF, #7c3aed)",
-                          }}
-                        />
+                        <div className="h-full rounded-full transition-all duration-500" style={{
+                          width: `${100 - pct}%`,
+                          background: out ? "#ef4444" : low ? "#f59e0b" : "linear-gradient(90deg, #465FFF, #7c3aed)",
+                        }} />
                       </div>
                     </div>
                   );
@@ -1426,7 +1322,7 @@ function AdminPanel({ onRefreshProducts }: AdminPanelProps) {
         )}
       </div>
 
-      {/* Admin Modals */}
+      {/* Modals */}
       {editProduct !== undefined && editProduct !== null && (
         <AdminEditProductModal
           product={editProduct === "new" ? null : editProduct}
@@ -1435,18 +1331,14 @@ function AdminPanel({ onRefreshProducts }: AdminPanelProps) {
         />
       )}
       {editPrice && (
-        <AdminPriceModal
-          product={editPrice}
+        <AdminPriceModal product={editPrice}
           onClose={() => setEditPrice(null)}
-          onSaved={() => { setEditPrice(null); fetchProducts(); onRefreshProducts(); }}
-        />
+          onSaved={() => { setEditPrice(null); fetchProducts(); onRefreshProducts(); }} />
       )}
       {editStock && (
-        <AdminStockModal
-          item={editStock}
+        <AdminStockModal item={editStock}
           onClose={() => setEditStock(null)}
-          onSaved={() => { setEditStock(null); fetchStock(); onRefreshProducts(); }}
-        />
+          onSaved={() => { setEditStock(null); fetchStock(); onRefreshProducts(); }} />
       )}
     </div>
   );
@@ -1461,21 +1353,9 @@ interface ProductCardProps {
 }
 
 const BADGE_CONFIG: Record<string, { label: string; color: string; bg: string; border: string; icon: React.ReactNode }> = {
-  weekly: {
-    label: "Mingguan",
-    color: "#059669", bg: "rgba(5,150,105,0.08)", border: "rgba(5,150,105,0.2)",
-    icon: <Ic.Sparkles s={11} c="#059669" />,
-  },
-  monthly: {
-    label: "Bulanan",
-    color: "#465FFF", bg: "rgba(70,95,255,0.08)", border: "rgba(70,95,255,0.2)",
-    icon: <Ic.Star s={11} c="#465FFF" filled />,
-  },
-  ramadhan: {
-    label: "Ramadhan",
-    color: "#d97706", bg: "rgba(217,119,6,0.08)", border: "rgba(217,119,6,0.2)",
-    icon: <Ic.Moon s={11} c="#d97706" />,
-  },
+  weekly:   { label: "Mingguan",  color: "#059669", bg: "rgba(5,150,105,0.08)",  border: "rgba(5,150,105,0.2)",  icon: <Ic.Sparkles s={11} c="#059669" /> },
+  monthly:  { label: "Bulanan",   color: "#465FFF", bg: "rgba(70,95,255,0.08)",  border: "rgba(70,95,255,0.2)",  icon: <Ic.Star s={11} c="#465FFF" filled /> },
+  ramadhan: { label: "Ramadhan",  color: "#d97706", bg: "rgba(217,119,6,0.08)", border: "rgba(217,119,6,0.2)",  icon: <Ic.Moon s={11} c="#d97706" /> },
 };
 
 function ProductCard({ product, isLoggedIn, currentMembership, onBuy }: ProductCardProps) {
@@ -1513,6 +1393,8 @@ function ProductCard({ product, isLoggedIn, currentMembership, onBuy }: ProductC
                 style={{ color: badge.color, background: badge.bg, borderColor: badge.border }}>
                 {badge.icon}{badge.label}
               </span>
+              {/* QRIS badge di card */}
+              <QrisBadge />
             </div>
             <h3 className="text-base font-bold text-gray-800 dark:text-white leading-tight">{product.product_name}</h3>
             <p className="text-xs text-gray-400 mt-0.5">{product.duration_days} hari akses</p>
@@ -1543,6 +1425,7 @@ function ProductCard({ product, isLoggedIn, currentMembership, onBuy }: ProductC
             ))}
           </ul>
         )}
+        {/* Stock bar */}
         <div className="space-y-1.5">
           <div className="flex items-center justify-between">
             <span className="text-[10px] font-semibold text-gray-400">Stok bulan ini</span>
@@ -1560,16 +1443,15 @@ function ProductCard({ product, isLoggedIn, currentMembership, onBuy }: ProductC
             }} />
           </div>
         </div>
+        {/* CTA */}
         <div className="mt-auto pt-1">
           {!isLoggedIn ? (
             <a href="/signin" className="flex items-center justify-center gap-2 w-full py-2.5 rounded-xl text-sm font-bold border border-gray-200 dark:border-gray-700 text-gray-500 dark:text-gray-400 hover:bg-gray-50 dark:hover:bg-white/5 transition-colors">
               Login untuk Berlangganan
             </a>
           ) : isActive ? (
-            <div
-              className="flex items-center justify-center gap-2 py-2.5 rounded-xl text-sm font-bold border dark:text-brand-400"
-              style={{ background: "rgba(70,95,255,0.06)", borderColor: "rgba(70,95,255,0.2)", color: "#465FFF" }}
-            >
+            <div className="flex items-center justify-center gap-2 py-2.5 rounded-xl text-sm font-bold border"
+              style={{ background: "rgba(70,95,255,0.06)", borderColor: "rgba(70,95,255,0.2)", color: "#465FFF" }}>
               <Ic.Check s={14} c="#465FFF" /> Membership Aktif
             </div>
           ) : stockOut ? (
@@ -1581,8 +1463,7 @@ function ProductCard({ product, isLoggedIn, currentMembership, onBuy }: ProductC
               Pembelian Ditutup
             </div>
           ) : (
-            <button
-              onClick={() => onBuy(product)}
+            <button onClick={() => onBuy(product)}
               className="w-full flex items-center justify-center gap-2 py-2.5 rounded-xl text-sm font-bold text-white transition-all hover:opacity-90 active:scale-[0.98]"
               style={{
                 background: product.product_code === "monthly"
@@ -1590,9 +1471,8 @@ function ProductCard({ product, isLoggedIn, currentMembership, onBuy }: ProductC
                   : product.product_code === "ramadhan"
                   ? "linear-gradient(135deg, #d97706, #f59e0b)"
                   : "linear-gradient(135deg, #059669, #10b981)",
-              }}
-            >
-              <Ic.Crown s={14} c="white" />Berlangganan Sekarang
+              }}>
+              <Ic.QrCode s={14} c="white" />Bayar via QRIS
             </button>
           )}
         </div>
@@ -1605,10 +1485,8 @@ function ProductCard({ product, isLoggedIn, currentMembership, onBuy }: ProductC
 function MembershipBanner({ status }: { status: UserMembershipStatus }) {
   if (!status.is_active) return null;
   return (
-    <div
-      className="rounded-2xl p-4 flex items-center gap-4 mb-6"
-      style={{ background: "linear-gradient(135deg, rgba(70,95,255,0.08), rgba(124,58,237,0.08))", border: "1px solid rgba(70,95,255,0.2)" }}
-    >
+    <div className="rounded-2xl p-4 flex items-center gap-4 mb-6"
+      style={{ background: "linear-gradient(135deg, rgba(70,95,255,0.08), rgba(124,58,237,0.08))", border: "1px solid rgba(70,95,255,0.2)" }}>
       <div className="w-12 h-12 rounded-xl flex items-center justify-center flex-shrink-0"
         style={{ background: "linear-gradient(135deg, #465FFF, #7c3aed)" }}>
         <Ic.Crown s={22} c="white" />
@@ -1643,28 +1521,26 @@ const MembershipPage: React.FC = () => {
   const userId     = loginData?.user?.user_id;
   const isAdmin    = userId === ADMIN_USER_ID;
 
-useEffect(() => {
-  setLoading(true);
-  fetch(`${MEMBERSHIP_API}/products${q}`)
-    .then((r) => r.json())
-    .then((d) => {
-      if (d.status) {
-        // Normalisasi features — pastikan selalu array
-        const normalized = (d.data || []).map((p: MembershipProduct) => ({
-          ...p,
-          features: Array.isArray(p.features)
-            ? p.features
-            : typeof p.features === "string"
-            ? (() => { try { return JSON.parse(p.features); } catch { return []; } })()
-            : [],
-        }));
-        setProducts(normalized);
-        setPeriod(d.period || null);
-      }
-    })
-    .catch(() => {})
-    .finally(() => setLoading(false));
-}, [refreshKey]);
+  useEffect(() => {
+    setLoading(true);
+    fetch(`${MEMBERSHIP_API}/products${q}`)
+      .then((r) => r.json())
+      .then((d) => {
+        if (d.status) {
+          const normalized = (d.data || []).map((p: MembershipProduct) => ({
+            ...p,
+            features: Array.isArray(p.features) ? p.features
+              : typeof p.features === "string"
+              ? (() => { try { return JSON.parse(p.features); } catch { return []; } })()
+              : [],
+          }));
+          setProducts(normalized);
+          setPeriod(d.period || null);
+        }
+      })
+      .catch(() => {})
+      .finally(() => setLoading(false));
+  }, [refreshKey]);
 
   useEffect(() => {
     if (!isLoggedIn || !userId) return;
@@ -1690,83 +1566,57 @@ useEffect(() => {
       <div className="space-y-6">
         {/* Page Header */}
         <div className="rounded-2xl border border-gray-200 bg-white dark:border-gray-800 dark:bg-white/[0.03] overflow-hidden">
-  <div
-    className="px-6 py-8 relative overflow-hidden"
-    style={{ minHeight: 140 }}
-  >
-    {/* PixelBlast background */}
-    <div className="absolute inset-0 z-0">
-      <PixelBlast
-        variant="circle"
-        pixelSize={5}
-        color="#465FFF"
-        patternScale={3}
-        patternDensity={1.1}
-        pixelSizeJitter={0.4}
-        enableRipples
-        rippleSpeed={0.35}
-        rippleThickness={0.1}
-        rippleIntensityScale={1.2}
-        liquid
-        liquidStrength={0.08}
-        liquidRadius={1.1}
-        liquidWobbleSpeed={4.5}
-        speed={0.4}
-        edgeFade={0.3}
-        transparent
-      />
-    </div>
-
-    {/* Overlay gelap supaya teks tetap terbaca */}
-    <div
-      className="absolute inset-0 z-10"
-      style={{ background: "linear-gradient(135deg, rgba(70,95,255,0.12) 0%, rgba(124,58,237,0.18) 100%)" }}
-    />
-
-    <div className="relative z-20 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
-      <div className="flex items-center gap-4">
-        <div
-          className="w-14 h-14 rounded-2xl flex items-center justify-center flex-shrink-0"
-          style={{ background: "linear-gradient(135deg, #465FFF, #7c3aed)" }}
-        >
-          <Ic.Crown s={26} c="white" />
-        </div>
-        <div>
-          <h1 className="text-xl font-bold text-gray-800 dark:text-white">Membership Premium</h1>
-          <p className="text-sm text-gray-500 dark:text-gray-400 mt-0.5">
-            Akses penuh semua livestream JKT48 tanpa batas
-          </p>
-        </div>
-      </div>
-      <div className="flex items-center gap-2 self-start sm:self-auto flex-wrap">
-        {isAdmin && (
-          <div
-            className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-bold"
-            style={{ background: "rgba(245,158,11,0.12)", border: "1px solid rgba(245,158,11,0.3)", color: "#d97706" }}
-          >
-            <Ic.Shield s={12} c="#d97706" />Admin
+          <div className="px-6 py-8 relative overflow-hidden" style={{ minHeight: 140 }}>
+            <div className="absolute inset-0 z-0">
+              <PixelBlast
+                variant="circle" pixelSize={5} color="#465FFF" patternScale={3} patternDensity={1.1}
+                pixelSizeJitter={0.4} enableRipples rippleSpeed={0.35} rippleThickness={0.1}
+                rippleIntensityScale={1.2} liquid liquidStrength={0.08} liquidRadius={1.1}
+                liquidWobbleSpeed={4.5} speed={0.4} edgeFade={0.3} transparent
+              />
+            </div>
+            <div className="absolute inset-0 z-10"
+              style={{ background: "linear-gradient(135deg, rgba(70,95,255,0.12) 0%, rgba(124,58,237,0.18) 100%)" }} />
+            <div className="relative z-20 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
+              <div className="flex items-center gap-4">
+                <div className="w-14 h-14 rounded-2xl flex items-center justify-center flex-shrink-0"
+                  style={{ background: "linear-gradient(135deg, #465FFF, #7c3aed)" }}>
+                  <Ic.Crown s={26} c="white" />
+                </div>
+                <div>
+                  <h1 className="text-xl font-bold text-gray-800 dark:text-white">Membership Premium</h1>
+                  <p className="text-sm text-gray-500 dark:text-gray-400 mt-0.5">
+                    Akses penuh semua livestream JKT48 tanpa batas
+                  </p>
+                </div>
+              </div>
+              <div className="flex items-center gap-2 self-start sm:self-auto flex-wrap">
+                {isAdmin && (
+                  <div className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-bold"
+                    style={{ background: "rgba(245,158,11,0.12)", border: "1px solid rgba(245,158,11,0.3)", color: "#d97706" }}>
+                    <Ic.Shield s={12} c="#d97706" />Admin
+                  </div>
+                )}
+                {/* QRIS only badge di header */}
+                <div className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-bold"
+                  style={{ background: "rgba(239,68,68,0.08)", border: "1px solid rgba(239,68,68,0.2)", color: "#dc2626" }}>
+                  <Ic.QrCode s={12} c="#dc2626" />Bayar via QRIS
+                </div>
+                {period && (
+                  <div className="inline-flex items-center gap-2 px-3 py-1.5 rounded-xl text-xs font-semibold"
+                    style={{ background: "rgba(255,255,255,0.15)", border: "1px solid rgba(70,95,255,0.3)", color: "#465FFF" }}>
+                    <Ic.Package s={13} c="#465FFF" />
+                    Stok {monthNames[period.month - 1]} {period.year}
+                  </div>
+                )}
+              </div>
+            </div>
           </div>
-        )}
-        {period && (
-          <div
-            className="inline-flex items-center gap-2 px-3 py-1.5 rounded-xl text-xs font-semibold"
-            style={{ background: "rgba(255,255,255,0.15)", border: "1px solid rgba(70,95,255,0.3)", color: "#465FFF" }}
-          >
-            <Ic.Package s={13} c="#465FFF" />
-            Stok {monthNames[period.month - 1]} {period.year}
-          </div>
-        )}
-      </div>
-    </div>
-  </div>
-</div>
+        </div>
 
-        {/* Admin Panel — hanya muncul untuk admin */}
-        {isAdmin && (
-          <AdminPanel onRefreshProducts={() => setRefreshKey((k) => k + 1)} />
-        )}
+        {isAdmin && <AdminPanel onRefreshProducts={() => setRefreshKey((k) => k + 1)} />}
 
-        {/* Main Content */}
+        {/* Products */}
         <div className="rounded-2xl border border-gray-200 bg-white dark:border-gray-800 dark:bg-white/[0.03]">
           <div className="p-6">
             {membershipStatus && <MembershipBanner status={membershipStatus} />}
@@ -1786,13 +1636,8 @@ useEffect(() => {
             ) : (
               <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
                 {products.map((p) => (
-                  <ProductCard
-                    key={p.id}
-                    product={p}
-                    isLoggedIn={isLoggedIn}
-                    currentMembership={currentMembership}
-                    onBuy={(prod) => setBuyingProduct(prod)}
-                  />
+                  <ProductCard key={p.id} product={p} isLoggedIn={isLoggedIn}
+                    currentMembership={currentMembership} onBuy={(prod) => setBuyingProduct(prod)} />
                 ))}
               </div>
             )}
@@ -1812,7 +1657,8 @@ useEffect(() => {
             )}
             {!loading && products.length > 0 && (
               <p className="text-center text-xs text-gray-400 dark:text-gray-600 mt-6">
-                Stok membership diperbarui setiap bulan. Pembayaran diproses via yang aman &amp; terenkripsi.
+                Pembayaran diproses via QRIS — diterima semua e-wallet &amp; mobile banking.
+                Stok diperbarui setiap bulan.
               </p>
             )}
           </div>
@@ -1827,8 +1673,6 @@ useEffect(() => {
           loginData={loginData}
         />
       )}
-
-      <style>{`@keyframes spin { to { transform: rotate(360deg); } }`}</style>
     </>
   );
 };
