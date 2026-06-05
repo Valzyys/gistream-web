@@ -1224,6 +1224,58 @@ function LiveStream2() {
 
   useEffect(() => { if (isIdn && isVerified && !idnShow) loadIdnStream("1"); }, [isVerified]); // eslint-disable-line
 
+  // ── Server 2 auto-refresh every 30s ──────────────────────────────────────
+  const srv2RefreshTimer = useRef<ReturnType<typeof setInterval> | null>(null);
+
+  useEffect(() => {
+    if (srv2RefreshTimer.current) {
+      clearInterval(srv2RefreshTimer.current);
+      srv2RefreshTimer.current = null;
+    }
+
+    if (activeServer !== "2") return;
+
+    const refreshSrv2 = async () => {
+      if (loading || error) return;
+      try {
+        if (isIdn && idnShow?.slug) {
+          const newToken = await generateStreamToken(idnShow.slug, true);
+          setStreamToken(newToken);
+          const { url, qualities: q } = await getStreamURLSrv2(newToken, idnShow.slug, true);
+          setQualities(q);
+          setHlsUrl(url);
+        } else if (isMember && memberShow) {
+          const identifier = memberShow.identifier || memberShow.slug || memberShow.url_key;
+          const showId = memberShow.showid || memberShow.show_id || null;
+          if (memberShow.is_group || memberShow.url_key === "jkt48-official") {
+            const newToken = await generateStreamToken(identifier, true);
+            setStreamToken(newToken);
+            const { url, qualities: q } = await getStreamURLSrv2(newToken, identifier, true);
+            setQualities(q);
+            setMemberHlsUrl(url);
+          } else if (showId) {
+            const newToken = await generateStreamToken(String(showId), false);
+            setStreamToken(newToken);
+            const { url, qualities: q } = await getStreamURLSrv2(newToken, String(showId), false);
+            setQualities(q);
+            setMemberHlsUrl(url);
+          }
+        }
+      } catch {
+        // silent fail
+      }
+    };
+
+    srv2RefreshTimer.current = setInterval(refreshSrv2, 30_000);
+
+    return () => {
+      if (srv2RefreshTimer.current) {
+        clearInterval(srv2RefreshTimer.current);
+        srv2RefreshTimer.current = null;
+      }
+    };
+  }, [activeServer, loading, error, isIdn, isMember, idnShow, memberShow]); // eslint-disable-line
+
   const handleLogout = () => {
     localStorage.removeItem("stream_verification");
     setIsVerified(false);
