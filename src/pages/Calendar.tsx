@@ -27,25 +27,7 @@ interface NormalizedShow {
   showId?: string;
 }
 
-interface PaymentMethod {
-  channel_code: string;
-  channel_name: string;
-  fee_flat?: number;
-  fee_percent?: number;
-  fee?: number | string;
-  min_amount?: number;
-  max_amount?: number;
-}
-
-interface PaymentMethods {
-  virtual_account?: PaymentMethod[];
-  emoney?: PaymentMethod[];
-  retail?: PaymentMethod[];
-  pulsa?: PaymentMethod[];
-  qris?: PaymentMethod[];
-  [key: string]: PaymentMethod[] | undefined;
-}
-
+// V2: hanya QRIS, tidak ada method/VA/fee
 interface TicketOrder {
   ticket_id: string;
   ref_id: string;
@@ -53,15 +35,9 @@ interface TicketOrder {
   show_id: string;
   show_title: string;
   amount: number;
-  amount_to_pay: number;
-  fee: number;
-  method: string;
-  method_name: string;
-  category: string;
-  payment_url: string | null;
-  checkout_url: string | null;
-  nomor_va: string | null;
+  qris_content: string | null;
   qr_image: string | null;
+  payment_url: string | null;
   expired_at: string;
 }
 
@@ -69,11 +45,12 @@ interface UserTicketStatus {
   has_ticket: boolean;
   has_pending: boolean;
   ticket: { ref_id: string; paid_at: string } | null;
-  pending_ticket: { ref_id: string; expired_at: string; method?: string } | null;
+  pending_ticket: { ref_id: string; expired_at: string } | null;
 }
 
 type FilterType = "all" | "live" | "scheduled";
-type ModalStep = "method" | "confirm" | "payment" | "success" | "already_paid";
+// V2: tidak perlu step "method" dan "confirm" — langsung payment
+type ModalStep = "loading" | "payment" | "success" | "already_paid" | "error";
 
 // ── Auth helper ──────────────────────────────────────────────────────────────
 function getLoginData() {
@@ -84,15 +61,6 @@ function getLoginData() {
     if (ss) return JSON.parse(ss);
   } catch {}
   return null;
-}
-
-// ── Fee formatter ─────────────────────────────────────────────────────────────
-function formatFee(m: PaymentMethod): string {
-  if (m.fee_flat && m.fee_flat > 0) return `Rp ${m.fee_flat.toLocaleString("id-ID")}`;
-  if (m.fee_percent && m.fee_percent > 0) return `${m.fee_percent}%`;
-  if (typeof m.fee === "number" && m.fee > 0) return `Rp ${m.fee.toLocaleString("id-ID")}`;
-  if (typeof m.fee === "string" && m.fee) return m.fee;
-  return "Gratis";
 }
 
 // ── SVG Icons ────────────────────────────────────────────────────────────────
@@ -136,20 +104,9 @@ const IconExternalLink = ({ size = 14, color = "currentColor" }: { size?: number
     <polyline points="15 3 21 3 21 9" /><line x1="10" y1="14" x2="21" y2="3" />
   </svg>
 );
-const IconCopy = ({ size = 14, color = "currentColor" }: { size?: number; color?: string }) => (
-  <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-    <rect x="9" y="9" width="13" height="13" rx="2" ry="2" />
-    <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1" />
-  </svg>
-);
 const IconChevronRight = ({ size = 16, color = "#9ca3af" }: { size?: number; color?: string }) => (
   <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
     <polyline points="9 18 15 12 9 6" />
-  </svg>
-);
-const IconChevronLeft = ({ size = 18, color = "currentColor" }: { size?: number; color?: string }) => (
-  <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-    <polyline points="15 18 9 12 15 6" />
   </svg>
 );
 const IconCalendar = ({ size = 13, color = "#9ca3af" }: { size?: number; color?: string }) => (
@@ -161,6 +118,15 @@ const IconCalendar = ({ size = 13, color = "#9ca3af" }: { size?: number; color?:
 const IconAlertCircle = ({ size = 14, color = "currentColor" }: { size?: number; color?: string }) => (
   <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
     <circle cx="12" cy="12" r="10" /><line x1="12" y1="8" x2="12" y2="12" /><line x1="12" y1="16" x2="12.01" y2="16" />
+  </svg>
+);
+const IconQris = ({ size = 20 }: { size?: number }) => (
+  <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+    <rect x="3" y="3" width="7" height="7" rx="1" /><rect x="14" y="3" width="7" height="7" rx="1" />
+    <rect x="3" y="14" width="7" height="7" rx="1" />
+    <line x1="14" y1="14" x2="14" y2="14.01" /><line x1="18" y1="14" x2="18" y2="14.01" />
+    <line x1="21" y1="17" x2="21" y2="17.01" /><line x1="14" y1="21" x2="14" y2="21.01" />
+    <line x1="17" y1="18" x2="17" y2="21" /><line x1="21" y1="20" x2="18" y2="20" />
   </svg>
 );
 
@@ -225,7 +191,7 @@ function useCountdown(target: number | null, active: boolean) {
   return cd;
 }
 
-// ── Payment Modal ─────────────────────────────────────────────────────────────
+// ── Payment Modal (V2 — QRIS Only) ───────────────────────────────────────────
 interface PaymentModalProps {
   show: NormalizedShow;
   onClose: () => void;
@@ -236,79 +202,100 @@ interface PaymentModalProps {
 }
 
 function PaymentModal({ show, onClose, onSuccess, onCancelled, loginData, pendingOrder }: PaymentModalProps) {
-  const [step, setStep] = useState<ModalStep>(pendingOrder ? "payment" : "method");
-  const [methods, setMethods] = useState<PaymentMethods>({});
-  const [loadingMethods, setLoadingMethods] = useState(!pendingOrder);
-  const [selectedMethod, setSelectedMethod] = useState<PaymentMethod | null>(null);
+  const [step, setStep] = useState<ModalStep>("loading");
   const [order, setOrder] = useState<TicketOrder | null>(null);
-  const [creating, setCreating] = useState(false);
   const [checking, setChecking] = useState(false);
   const [cancelling, setCancelling] = useState(false);
   const [pollStatus, setPollStatus] = useState<"pending" | "paid" | "expired">("pending");
   const [paymentTimer, setPaymentTimer] = useState(0);
   const [error, setError] = useState("");
-  const [copied, setCopied] = useState(false);
 
+  // ── Init: create new order or restore pending ──────────────────────────────
   useEffect(() => {
-    if (!pendingOrder) return;
-    const fetchPending = async () => {
-      try {
-        const res = await fetch(`${TICKETS_API}/check/${pendingOrder.ref_id}?apikey=JKTCONNECT`);
-        const data = await res.json();
-        if (data.ticket_status === "paid") {
-          setPollStatus("paid");
-          setStep("success");
-          onSuccess(show.id);
-          return;
+    const init = async () => {
+      // Restore pending order
+      if (pendingOrder) {
+        try {
+          const res = await fetch(`${TICKETS_API}/check/${pendingOrder.ref_id}?apikey=JKTCONNECT`);
+          const data = await res.json();
+          if (data.ticket_status === "paid") {
+            setPollStatus("paid");
+            setStep("success");
+            onSuccess(show.id);
+            return;
+          }
+          if (data.ticket_status === "expired") {
+            // Expired — buat order baru langsung
+            await createNewOrder();
+            return;
+          }
+          setOrder({
+            ticket_id: data.data?.ticket_id || "",
+            ref_id: pendingOrder.ref_id,
+            ybp_trx_id: "",
+            show_id: show.id,
+            show_title: show.title,
+            amount: data.data?.amount || 7000,
+            qris_content: data.data?.qris_content || null,
+            qr_image: data.data?.qr_image || null,
+            payment_url: data.data?.payment_url || null,
+            expired_at: pendingOrder.expired_at,
+          });
+          setStep("payment");
+        } catch {
+          await createNewOrder();
         }
-        if (data.ticket_status === "expired") {
-          setPollStatus("expired");
-          setStep("method");
-          return;
-        }
-        setOrder({
-          ticket_id: data.data?.ticket_id || "",
-          ref_id: pendingOrder.ref_id,
-          ybp_trx_id: "",
-          show_id: show.id,
-          show_title: show.title,
-          amount: data.data?.amount || 7000,
-          amount_to_pay: data.data?.amount_to_pay || data.data?.amount || 7000,
-          fee: 0,
-          method: data.data?.method || "",
-          method_name: data.data?.method_name || "",
-          category: "",
-          payment_url: null,
-          checkout_url: null,
-          nomor_va: null,
-          qr_image: null,
-          expired_at: pendingOrder.expired_at,
-        });
-        setStep("payment");
-      } catch {
-        setStep("method");
+        return;
       }
+      // Buat order baru
+      await createNewOrder();
     };
-    fetchPending();
-  }, [pendingOrder]);
+    init();
+  }, []);
 
-  useEffect(() => {
-    if (pendingOrder) return;
-    fetch(`${TICKETS_API}/methods?apikey=JKTCONNECT`)
-      .then((r) => r.json())
-      .then((d) => {
-        const raw = d.data?.payment_methods || {};
-        const normalized: PaymentMethods = {};
-        for (const [k, v] of Object.entries(raw)) {
-          const key = k === "" ? "qris" : k;
-          normalized[key] = v as PaymentMethod[];
-        }
-        setMethods(normalized);
-      })
-      .catch(() => setError("Gagal memuat metode pembayaran"))
-      .finally(() => setLoadingMethods(false));
-  }, [pendingOrder]);
+  const createNewOrder = async () => {
+    setStep("loading");
+    setError("");
+    try {
+      const res = await fetch(`${TICKETS_API}/buy?apikey=JKTCONNECT`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          user_id:     loginData.user.user_id,
+          show_id:     show.id,
+          show_title:  show.title,
+          show_source: show.source,
+          show_image:  show.image,
+          show_date:   show.scheduledAt ? new Date(show.scheduledAt).toISOString() : null,
+        }),
+      });
+      const data = await res.json();
+      if (!data.status) {
+        if (res.status === 409) { setStep("already_paid"); return; }
+        setError(data.message || "Gagal membuat order");
+        setStep("error");
+        return;
+      }
+      setOrder({
+        ticket_id:    data.data.ticket_id,
+        ref_id:       data.data.ref_id,
+        ybp_trx_id:   data.data.ybp_trx_id,
+        show_id:      show.id,
+        show_title:   show.title,
+        amount:       data.data.amount,
+        qris_content: data.data.qris_content || null,
+        qr_image:     data.data.qr_image     || null,
+        payment_url:  data.data.payment_url  || null,
+        expired_at:   data.data.expired_at,
+      });
+      setStep("payment");
+    } catch {
+      setError("Koneksi gagal. Coba lagi.");
+      setStep("error");
+    }
+  };
 
+  // ── Payment countdown timer ────────────────────────────────────────────────
   useEffect(() => {
     if (step !== "payment" || !order) return;
     const expiry = new Date(order.expired_at).getTime();
@@ -318,6 +305,7 @@ function PaymentModal({ show, onClose, onSuccess, onCancelled, loginData, pendin
     return () => clearInterval(iv);
   }, [step, order]);
 
+  // ── Auto-poll status ───────────────────────────────────────────────────────
   useEffect(() => {
     if (step !== "payment" || !order) return;
     let stopped = false;
@@ -345,41 +333,6 @@ function PaymentModal({ show, onClose, onSuccess, onCancelled, loginData, pendin
     const timer = setTimeout(poll, 5000);
     return () => { stopped = true; clearTimeout(timer); };
   }, [step, order]);
-
-  const handleCreateOrder = async () => {
-    if (!selectedMethod) return;
-    setCreating(true);
-    setError("");
-    try {
-      const res = await fetch(`${TICKETS_API}/buy?apikey=JKTCONNECT`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          user_id: loginData.user.user_id,
-          show_id: show.id,
-          show_title: show.title,
-          show_source: show.source,
-          show_image: show.image,
-          show_date: show.scheduledAt ? new Date(show.scheduledAt).toISOString() : null,
-          method: selectedMethod.channel_code,
-          customer_name: loginData.user.full_name || loginData.user.username,
-          customer_email: loginData.user.email,
-        }),
-      });
-      const data = await res.json();
-      if (!data.status) {
-        if (res.status === 409) { setStep("already_paid"); return; }
-        setError(data.message || "Gagal membuat order");
-        return;
-      }
-      setOrder(data.data);
-      setStep("payment");
-    } catch {
-      setError("Koneksi gagal. Coba lagi.");
-    } finally {
-      setCreating(false);
-    }
-  };
 
   const handleManualCheck = async () => {
     if (!order || checking) return;
@@ -418,23 +371,16 @@ function PaymentModal({ show, onClose, onSuccess, onCancelled, loginData, pendin
     }
   };
 
-  const handleCopy = (text: string) => {
-    navigator.clipboard.writeText(text);
-    setCopied(true);
-    setTimeout(() => setCopied(false), 2000);
-  };
-
-  const categoryLabel: Record<string, string> = {
-    virtual_account: "Virtual Account",
-    emoney: "E-Money / Dompet Digital",
-    qris: "QRIS",
-    retail: "Gerai Retail",
-    pulsa: "Pulsa",
-  };
-
-  const orderedCats = ["emoney", "qris", "pulsa"];
   const fmtTimer = (s: number) => `${String(Math.floor(s / 60)).padStart(2, "0")}:${String(s % 60).padStart(2, "0")}`;
   const timerDanger = paymentTimer < 300;
+
+  const headerTitle: Record<ModalStep, string> = {
+    loading:      "Membuat Order...",
+    payment:      "Selesaikan Pembayaran",
+    success:      "Pembelian Berhasil",
+    already_paid: "Tiket Sudah Dimiliki",
+    error:        "Terjadi Kesalahan",
+  };
 
   return (
     <div
@@ -448,22 +394,11 @@ function PaymentModal({ show, onClose, onSuccess, onCancelled, loginData, pendin
       >
         {/* Header */}
         <div className="flex items-center justify-between px-5 py-4 border-b border-gray-100 dark:border-gray-800 flex-shrink-0">
-          <div className="flex items-center gap-2">
-            {step === "confirm" && (
-              <button onClick={() => setStep("method")} className="text-gray-400 hover:text-gray-600 mr-1">
-                <IconChevronLeft />
-              </button>
-            )}
-            <div>
-              <h2 className="text-sm font-bold text-gray-800 dark:text-white">
-                {step === "method" && "Pilih Metode Pembayaran"}
-                {step === "confirm" && "Konfirmasi Pembelian"}
-                {step === "payment" && "Selesaikan Pembayaran"}
-                {step === "success" && "Pembelian Berhasil"}
-                {step === "already_paid" && "Tiket Sudah Dimiliki"}
-              </h2>
-              <p className="text-xs text-gray-400 dark:text-gray-500 mt-0.5 line-clamp-1">{show.title}</p>
-            </div>
+          <div>
+            <h2 className="text-sm font-bold text-gray-800 dark:text-white">
+              {headerTitle[step]}
+            </h2>
+            <p className="text-xs text-gray-400 dark:text-gray-500 mt-0.5 line-clamp-1">{show.title}</p>
           </div>
           {step !== "payment" && (
             <button onClick={onClose} className="text-gray-400 hover:text-gray-600 dark:hover:text-gray-300 p-1">
@@ -475,126 +410,43 @@ function PaymentModal({ show, onClose, onSuccess, onCancelled, loginData, pendin
         {/* Content */}
         <div className="overflow-y-auto flex-1 p-5 space-y-4">
 
-          {/* METHOD */}
-          {step === "method" && (
-            <div>
-              <div className="flex gap-3 p-3 rounded-xl bg-gray-50 dark:bg-white/[0.04] border border-gray-200 dark:border-gray-700 mb-4">
-                <img src={show.image} alt={show.title} className="w-16 h-10 object-cover rounded-lg flex-shrink-0"
-                  onError={(e) => { (e.target as HTMLImageElement).src = DEFAULT_IMG; }} />
-                <div className="flex-1 min-w-0">
-                  <p className="text-xs font-bold text-gray-800 dark:text-white line-clamp-2">{show.title}</p>
-                  <p className="text-xs text-brand-500 font-semibold mt-0.5">Rp 7.000</p>
-                </div>
+          {/* LOADING — membuat order ke YoBasePay V2 */}
+          {step === "loading" && (
+            <div className="flex flex-col items-center justify-center gap-4 py-12">
+              <div className="w-12 h-12 rounded-full bg-brand-50 dark:bg-brand-500/10 flex items-center justify-center">
+                <div className="w-6 h-6 border-2 border-brand-200 border-t-brand-500 rounded-full animate-spin" />
               </div>
-
-              {error && (
-                <div className="mb-3 p-3 rounded-xl bg-red-50 dark:bg-red-500/10 border border-red-200 dark:border-red-500/20 text-xs text-red-600 dark:text-red-400 flex items-center gap-2">
-                  <IconAlertCircle size={14} />{error}
-                </div>
-              )}
-
-              {loadingMethods ? (
-                <div className="flex items-center justify-center gap-2 py-10 text-gray-400">
-                  <div className="w-5 h-5 border-2 border-gray-200 border-t-brand-500 rounded-full animate-spin" />
-                  <span className="text-sm">Memuat metode...</span>
-                </div>
-              ) : (
-                <div className="space-y-5">
-                  {orderedCats.map((cat) => {
-                    const items = methods[cat];
-                    if (!items || items.length === 0) return null;
-                    return (
-                      <div key={cat}>
-                        <p className="text-xs font-bold text-gray-400 dark:text-gray-500 uppercase tracking-widest mb-2">
-                          {categoryLabel[cat] || cat}
-                        </p>
-                        <div className="space-y-1.5">
-                          {items.map((m) => (
-                            <button
-                              key={m.channel_code}
-                              onClick={() => { setSelectedMethod(m); setStep("confirm"); }}
-                              className="w-full flex items-center justify-between p-3 rounded-xl border transition-all text-left border-gray-200 dark:border-gray-700 hover:border-brand-400 dark:hover:border-brand-500/50 bg-white dark:bg-white/[0.02] hover:bg-brand-50/50 dark:hover:bg-brand-500/5"
-                            >
-                              <div className="flex items-center gap-3">
-                                <div className="w-9 h-9 rounded-lg bg-gray-100 dark:bg-white/10 flex items-center justify-center flex-shrink-0">
-                                  <span className="text-xs font-black text-gray-600 dark:text-gray-300">
-                                    {m.channel_code.slice(0, 2)}
-                                  </span>
-                                </div>
-                                <div>
-                                  <p className="text-sm font-semibold text-gray-800 dark:text-white">{m.channel_name}</p>
-                                  <p className="text-xs text-gray-400 dark:text-gray-500">Fee: {formatFee(m)}</p>
-                                </div>
-                              </div>
-                              <IconChevronRight />
-                            </button>
-                          ))}
-                        </div>
-                      </div>
-                    );
-                  })}
-                </div>
-              )}
+              <div className="text-center">
+                <p className="text-sm font-semibold text-gray-700 dark:text-gray-300">Membuat invoice QRIS...</p>
+                <p className="text-xs text-gray-400 dark:text-gray-500 mt-1">Mohon tunggu sebentar</p>
+              </div>
             </div>
           )}
 
-          {/* CONFIRM */}
-          {step === "confirm" && selectedMethod && (
-            <div className="space-y-4">
-              <div className="flex gap-3 p-3 rounded-xl bg-gray-50 dark:bg-white/[0.04] border border-gray-200 dark:border-gray-700">
-                <img src={show.image} alt={show.title} className="w-16 h-10 object-cover rounded-lg flex-shrink-0"
-                  onError={(e) => { (e.target as HTMLImageElement).src = DEFAULT_IMG; }} />
-                <div className="flex-1 min-w-0">
-                  <p className="text-xs font-bold text-gray-800 dark:text-white line-clamp-2">{show.title}</p>
-                  {show.scheduledAt && (
-                    <p className="text-xs text-gray-500 dark:text-gray-400 mt-0.5">
-                      {new Date(show.scheduledAt).toLocaleDateString("id-ID", { weekday: "long", day: "numeric", month: "long" })}
-                    </p>
-                  )}
-                </div>
+          {/* ERROR */}
+          {step === "error" && (
+            <div className="flex flex-col items-center text-center py-6 gap-4">
+              <div className="w-16 h-16 rounded-full bg-red-100 dark:bg-red-500/10 flex items-center justify-center">
+                <IconAlertCircle size={32} color="#ef4444" />
               </div>
-
-              <div className="rounded-xl border border-gray-200 dark:border-gray-700 overflow-hidden divide-y divide-gray-100 dark:divide-gray-800">
-                {[
-                  { label: "Harga Tiket", value: "Rp 7.000" },
-                  { label: "Fee Pembayaran", value: formatFee(selectedMethod) },
-                  { label: "Metode", value: selectedMethod.channel_name },
-                ].map((row, i) => (
-                  <div key={i} className="flex items-center justify-between px-4 py-3">
-                    <span className="text-sm text-gray-500 dark:text-gray-400">{row.label}</span>
-                    <span className="text-sm font-semibold text-gray-800 dark:text-white">{row.value}</span>
-                  </div>
-                ))}
+              <div>
+                <h3 className="text-base font-bold text-gray-800 dark:text-white mb-1">Gagal Membuat Order</h3>
+                <p className="text-sm text-gray-500 dark:text-gray-400">{error || "Terjadi kesalahan yang tidak diketahui."}</p>
               </div>
-
-              <div className="p-3 rounded-xl bg-amber-50 dark:bg-amber-500/10 border border-amber-200 dark:border-amber-500/20 flex items-start gap-2">
-                <IconAlertCircle size={13} color="#d97706" />
-                <p className="text-xs text-amber-700 dark:text-amber-400">
-                  Total yang dibayar mungkin sedikit berbeda karena fee dihitung oleh payment gateway saat transaksi dibuat.
-                </p>
-              </div>
-
-              {error && (
-                <div className="p-3 rounded-xl bg-red-50 dark:bg-red-500/10 border border-red-200 dark:border-red-500/20 text-xs text-red-600 dark:text-red-400 flex items-center gap-2">
-                  <IconAlertCircle size={14} />{error}
-                </div>
-              )}
-
               <button
-                onClick={handleCreateOrder}
-                disabled={creating}
-                className="w-full flex items-center justify-center gap-2 py-3 rounded-xl bg-brand-500 hover:bg-brand-600 disabled:opacity-50 text-white text-sm font-bold transition-colors"
+                onClick={createNewOrder}
+                className="w-full flex items-center justify-center gap-2 py-3 rounded-xl bg-brand-500 hover:bg-brand-600 text-white text-sm font-bold transition-colors"
               >
-                {creating
-                  ? <><div className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" />Membuat Order...</>
-                  : "Bayar Sekarang"}
+                <IconRefresh size={14} color="white" /> Coba Lagi
               </button>
+              <button onClick={onClose} className="text-xs text-gray-400 hover:text-gray-500 transition-colors">Tutup</button>
             </div>
           )}
 
-          {/* PAYMENT */}
+          {/* PAYMENT — tampilkan QRIS native */}
           {step === "payment" && order && (
             <div className="space-y-4">
+              {/* Timer */}
               <div className={`flex items-center justify-between p-3 rounded-xl border ${
                 timerDanger
                   ? "bg-red-50 dark:bg-red-500/10 border-red-200 dark:border-red-500/20"
@@ -611,61 +463,72 @@ function PaymentModal({ show, onClose, onSuccess, onCancelled, loginData, pendin
                 </span>
               </div>
 
+              {/* Summary */}
               <div className="p-3 rounded-xl bg-gray-50 dark:bg-white/[0.04] border border-gray-200 dark:border-gray-700 space-y-2">
                 <div className="flex justify-between items-center">
                   <span className="text-xs text-gray-500 dark:text-gray-400">Ref ID</span>
                   <span className="text-xs font-mono font-bold text-gray-700 dark:text-gray-300">{order.ref_id}</span>
                 </div>
-                {order.method_name && (
-                  <div className="flex justify-between items-center">
-                    <span className="text-xs text-gray-500 dark:text-gray-400">Metode</span>
-                    <span className="text-xs font-semibold text-gray-700 dark:text-gray-300">{order.method_name}</span>
-                  </div>
-                )}
+                <div className="flex justify-between items-center">
+                  <span className="text-xs text-gray-500 dark:text-gray-400">Metode</span>
+                  <span className="flex items-center gap-1.5 text-xs font-semibold text-gray-700 dark:text-gray-300">
+                    <IconQris size={13} /> QRIS
+                  </span>
+                </div>
                 <div className="flex justify-between items-center pt-1 border-t border-gray-200 dark:border-gray-700">
                   <span className="text-xs text-gray-500 dark:text-gray-400">Total Bayar</span>
                   <span className="text-base font-black text-gray-800 dark:text-white">
-                    Rp {order.amount_to_pay.toLocaleString("id-ID")}
+                    Rp {order.amount.toLocaleString("id-ID")}
                   </span>
                 </div>
               </div>
 
-              {order.nomor_va && (
-                <div className="p-4 rounded-xl border border-gray-200 dark:border-gray-700 bg-white dark:bg-white/[0.03]">
-                  <p className="text-xs text-gray-500 dark:text-gray-400 mb-2">Nomor Virtual Account</p>
-                  <div className="flex items-center justify-between gap-2">
-                    <span className="text-xl font-black text-gray-800 dark:text-white tracking-widest">{order.nomor_va}</span>
-                    <button
-                      onClick={() => handleCopy(order.nomor_va!)}
-                      className={`flex items-center gap-1.5 text-xs font-semibold px-3 py-1.5 rounded-lg border transition-colors ${
-                        copied
-                          ? "bg-green-50 dark:bg-green-500/10 text-green-600 border-green-200 dark:border-green-500/20"
-                          : "bg-brand-50 dark:bg-brand-500/10 text-brand-500 border-brand-200 dark:border-brand-500/20"
-                      }`}
-                    >
-                      {copied ? <><IconCheck size={12} />Disalin</> : <><IconCopy size={12} />Salin</>}
-                    </button>
-                  </div>
-                  <p className="text-xs text-gray-400 mt-2">Bank: <strong className="text-gray-600 dark:text-gray-300">{order.method_name}</strong></p>
-                </div>
-              )}
-
+              {/* QR Image (render dari YoBasePay V2) */}
               {order.qr_image && (
                 <div className="flex flex-col items-center p-4 rounded-xl border border-gray-200 dark:border-gray-700 bg-white dark:bg-white/[0.03]">
-                  <p className="text-xs font-semibold text-gray-500 dark:text-gray-400 mb-3">Scan QR Code</p>
-                  <img src={order.qr_image} alt="QR Code" className="w-48 h-48 rounded-xl" />
+                  <div className="flex items-center gap-2 mb-3">
+                    <IconQris size={16} />
+                    <p className="text-xs font-bold text-gray-600 dark:text-gray-300">Scan QRIS untuk Bayar</p>
+                  </div>
+                  <div className="p-2 bg-white rounded-xl border border-gray-100 dark:border-gray-700">
+                    <img src={order.qr_image} alt="QRIS" className="w-52 h-52 object-contain" />
+                  </div>
+                  <p className="text-xs text-gray-400 dark:text-gray-500 mt-2 text-center">
+                    Scan dengan aplikasi bank atau e-wallet manapun
+                  </p>
                 </div>
               )}
 
-              {(order.checkout_url || order.payment_url) && !order.nomor_va && !order.qr_image && (
+              {/* qris_content — untuk copy atau debug; tampilkan hanya jika tidak ada qr_image */}
+              {!order.qr_image && order.qris_content && (
+                <div className="p-4 rounded-xl border border-gray-200 dark:border-gray-700 bg-white dark:bg-white/[0.03]">
+                  <p className="text-xs font-semibold text-gray-500 dark:text-gray-400 mb-2">QRIS Content</p>
+                  <p className="text-xs font-mono text-gray-600 dark:text-gray-300 break-all leading-relaxed">{order.qris_content}</p>
+                </div>
+              )}
+
+              {/* Fallback: tombol buka halaman bayar (jika tidak ada QR sama sekali) */}
+              {!order.qr_image && !order.qris_content && order.payment_url && (
                 <a
-                  href={order.checkout_url || order.payment_url!}
+                  href={order.payment_url}
                   target="_blank"
                   rel="noopener noreferrer"
                   className="flex items-center justify-center gap-2 w-full py-3 rounded-xl bg-brand-500 hover:bg-brand-600 text-white text-sm font-bold transition-colors"
                 >
                   <IconExternalLink size={14} color="white" />
                   Buka Halaman Pembayaran
+                </a>
+              )}
+
+              {/* Link alternatif (selalu tampil jika ada payment_url) */}
+              {order.payment_url && (order.qr_image || order.qris_content) && (
+                <a
+                  href={order.payment_url}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="flex items-center justify-center gap-1.5 w-full py-2 rounded-xl border border-gray-200 dark:border-gray-700 text-xs font-semibold text-gray-500 dark:text-gray-400 hover:bg-gray-50 dark:hover:bg-white/[0.04] transition-colors"
+                >
+                  <IconExternalLink size={12} /> Buka di halaman pembayaran
                 </a>
               )}
 
