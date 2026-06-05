@@ -168,24 +168,31 @@ async function getStreamURLSrv2(
   return { url: masterUrl, qualities };
 }
 
-// ── Fetch ulang master URL srv2 tanpa mengubah state qualities ────────────────
-// Dipakai oleh timer 30 detik: generate token baru → return URL baru saja
+// ── Fetch ulang master URL srv2 dengan generate token baru + hit playback ─────
+// Dipakai oleh timer 30 detik di HlsPlayer:
+//   1. Generate token baru via HMAC
+//   2. Hit /playback dengan token baru agar server mencatat token valid
+//   3. Return { url, token } — HlsPlayer update tokenRef lalu reload HLS source
 async function refreshSrv2MasterUrl(
   slugOrId: string,
   isSlug: boolean
 ): Promise<{ url: string; token: string }> {
+  // Step 1: Generate token baru
   const token = await generateStreamToken(slugOrId, isSlug);
-  const param = isSlug ? `slug=${slugOrId}` : `showId=${slugOrId}`;
+
+  const param     = isSlug ? `slug=${slugOrId}` : `showId=${slugOrId}`;
   const masterUrl = `${SRV2_BASE}/playback?${param}`;
 
-  // Hit endpoint supaya token tercatat valid di sisi server, abaikan body-nya
+  // Step 2: Hit endpoint playback dengan token baru (WAJIB — server validasi token di sini)
   await fetch(masterUrl, {
     headers: {
       "x-api-token": token,
       ...(isSlug ? { "x-slug": slugOrId } : { "x-showid": slugOrId }),
     },
-  }).catch(() => {});
+  });
+  // Sengaja tidak throw jika gagal — HLS akan retry sendiri
 
+  // Step 3: Return token baru + URL (URL tidak berubah, hanya token yang baru)
   return { url: masterUrl, token };
 }
 
@@ -375,12 +382,14 @@ function HlsPlayer({
   const retryRef    = useRef<ReturnType<typeof setTimeout> | null>(null);
   const refreshRef  = useRef<ReturnType<typeof setInterval> | null>(null);
   const tokenRef    = useRef<string | undefined>(token); // selalu up-to-date untuk xhrSetup
+  const srcRef      = useRef<string>(src);               // selalu up-to-date untuk reload
   const [showQualityPanel, setShowQualityPanel] = useState(false);
   const [currentLevel, setCurrentLevel]         = useState<string>("Auto");
   const [bandwidth, setBandwidth]               = useState<string>("");
 
-  // Sync tokenRef setiap kali token prop berubah
+  // Sync tokenRef & srcRef setiap kali prop berubah
   useEffect(() => { tokenRef.current = token; }, [token]);
+  useEffect(() => { srcRef.current = src; }, [src]);
 
   const makeHlsConfig = useCallback((startLevel?: number) => ({
     enableWorker: true,
@@ -476,7 +485,7 @@ function HlsPlayer({
           const v = videoRef.current;
           if (!v) return;
           const newHls = new Hls(makeHlsConfig());
-          newHls.loadSource(src);
+          newHls.loadSource(srcRef.current);
           newHls.attachMedia(v);
           newHls.on(Hls.Events.MANIFEST_PARSED, () => v.play().catch(() => {}));
           hlsRef.current = newHls;
@@ -484,24 +493,31 @@ function HlsPlayer({
       }
     });
 
-    // ── Server 2: refresh token + reload manifest setiap 30 detik ────────────
+    // ── Server 2: generate token baru + reload manifest setiap 30 detik ──────
+    // Flow:
+    //   1. Panggil srv2RefreshFn() → generate token baru + hit /playback dengan token tsb
+    //   2. Update tokenRef → semua request HLS berikutnya (fragment, level) pakai token baru
+    //   3. stopLoad → loadSource (URL sama, token sudah baru di header) → startLoad(-1)
+    //      Video tidak restart karena HLS.js hanya reload manifest, bukan detach/attach ulang
     if (srv2RefreshFn) {
       refreshRef.current = setInterval(async () => {
         try {
           const { token: newToken } = await srv2RefreshFn();
-          // Update tokenRef supaya request berikutnya pakai token baru
+
+          // Update tokenRef supaya xhrSetup/fetchSetup pakai token baru untuk semua request
           tokenRef.current = newToken;
-          // Reload manifest HLS dengan token baru (video tidak restart)
+
+          // Reload manifest dengan token baru — video tetap jalan, tidak ada flicker
           const currentHls = hlsRef.current;
           if (currentHls) {
             currentHls.stopLoad();
-            currentHls.loadSource(src); // src (masterUrl) tetap sama, header sudah update via tokenRef
+            currentHls.loadSource(srcRef.current); // URL sama, header token sudah baru via tokenRef
             currentHls.startLoad(-1);
           }
         } catch {
-          // silent — HLS akan retry sendiri kalau ada error
+          // silent — HLS akan retry sendiri via ERROR handler di atas
         }
-      }, 30_000);
+      }, 30_000); // 30 detik
     }
 
     return destroyHls;
@@ -835,8 +851,10 @@ function LiveStream2() {
   const { comments: srComments, loading: srLoading, error: srError, lastPoll: srLastPoll, retry: srRetry } =
     useShowroomComments(isMember ? memberRoomId : null);
 
-  // ── srv2RefreshFn: dibuild dari state terkini, di-memo supaya stabil ────────
-  // Dipass ke HlsPlayer hanya saat activeServer === "2"
+  // ── srv2RefreshFn ─────────────────────────────────────────────────────────
+  // Dipanggil oleh HlsPlayer setiap 30 detik saat activeServer === "2"
+  // Flow: generate token baru → hit /playback dengan token baru → return {url, token}
+  // HlsPlayer kemudian update tokenRef dan reload HLS manifest
   const srv2RefreshFn = useCallback(async (): Promise<{ url: string; token: string }> => {
     if (isIdn && idnShow?.slug) {
       const result = await refreshSrv2MasterUrl(idnShow.slug, true);
@@ -1151,7 +1169,6 @@ function LiveStream2() {
           const token = await generateStreamToken(idnShow.slug, true);
           setStreamToken(token);
           if (activeServer === "2") {
-            // Kembali ke master URL srv2 untuk ABR
             const param = `slug=${idnShow.slug}`;
             setHlsUrl(`${SRV2_BASE}/playback?${param}`);
           } else {
@@ -1386,6 +1403,7 @@ function LiveStream2() {
     : (memberShow?.name || "Live Member JKT48");
 
   // ── Tentukan apakah HlsPlayer harus pakai srv2RefreshFn ──────────────────
+  // Hanya pass srv2RefreshFn saat server 2 aktif — timer 30 detik hanya jalan di server 2
   const activeSrv2RefreshFn = activeServer === "2" ? srv2RefreshFn : undefined;
 
   if (isIdn && membershipLoading) {
