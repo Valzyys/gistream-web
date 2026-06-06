@@ -8,13 +8,12 @@ const supabaseUrl = import.meta.env.VITE_SUPABASE_URL || "https://mzxfuaoihgzxvo
 const supabaseKey = import.meta.env.VITE_SUPABASE_ANON_KEY || "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im16eGZ1YW9paGd6eHZva3dhcmFvIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzQ0MDg0NjIsImV4cCI6MjA4OTk4NDQ2Mn0.OFYCkBFXCSfLn-wG94OHHKL5CX8T_BLrbDGPiBdPIog";
 const supabase = createClient(supabaseUrl, supabaseKey);
 
-const API_BASE  = "https://v5.jkt48connect.com/api/jkt48connect";
-const API_KEY   = "JKTCONNECT";
-const IDN_API   = "https://v5.jkt48connect.com/api/jkt48/idnplus?apikey=JKTCONNECT";
-const LIVE_API  = "https://v5.jkt48connect.com/api/jkt48/live?apikey=JKTCONNECT";
+const API_BASE    = "https://v5.jkt48connect.com/api/jkt48connect";
+const API_KEY     = "JKTCONNECT";
+const IDN_API     = "https://v5.jkt48connect.com/api/jkt48/idnplus?apikey=JKTCONNECT";
+const LIVE_API    = "https://v5.jkt48connect.com/api/jkt48/live?apikey=JKTCONNECT";
 const TICKETS_API = "https://v5.jkt48connect.com/api/tickets";
 
-// ── GiStream token constants ──────────────────────────────────────────────────
 const PARTNER_KID    = "jkt48connect-v1";
 const PARTNER_SECRET = "gstream@jkt48connect@2108";
 const TOKEN_API_BASE = "https://v5.jkt48connect.com";
@@ -22,7 +21,7 @@ const CTV_BASE       = "https://ctv.jkt48connect.com";
 const SRV2_BASE      = "https://srv2.jkt48connect.com";
 const SIGNING_PATH   = "/api/token/generate?apikey=JKTCONNECT";
 
-// ── HMAC helpers (browser SubtleCrypto) ──────────────────────────────────────
+// ── HMAC helpers ──────────────────────────────────────────────────────────────
 async function sha256Hex(str: string): Promise<string> {
   const buf = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(str));
   return Array.from(new Uint8Array(buf)).map(b => b.toString(16).padStart(2, "0")).join("");
@@ -43,15 +42,9 @@ async function buildHMACHeaders(): Promise<Record<string, string>> {
   const bodyHash   = await sha256Hex("{}");
   const signingStr = `${timestamp}:${nonce}:POST:${SIGNING_PATH}:${bodyHash}`;
   const signature  = await hmacSHA256Hex(PARTNER_SECRET, signingStr);
-  return {
-    "x-kid":       PARTNER_KID,
-    "x-timestamp": timestamp,
-    "x-nonce":     nonce,
-    "x-signature": signature,
-  };
+  return { "x-kid": PARTNER_KID, "x-timestamp": timestamp, "x-nonce": nonce, "x-signature": signature };
 }
 
-// ── Generate JWT token dari GiStream ─────────────────────────────────────────
 async function generateStreamToken(slugOrId: string, isSlug: boolean): Promise<string> {
   const hmacHeaders = await buildHMACHeaders();
   const res = await fetch(`${TOKEN_API_BASE}${SIGNING_PATH}`, {
@@ -63,23 +56,16 @@ async function generateStreamToken(slugOrId: string, isSlug: boolean): Promise<s
     },
     body: "{}",
   });
-
   const text = await res.text();
   let data: any;
-  try {
-    data = JSON.parse(text);
-  } catch {
-    throw new Error("Token server returned non-JSON response");
-  }
+  try { data = JSON.parse(text); } catch { throw new Error("Token server returned non-JSON response"); }
   if (!data.status) throw new Error("Generate token gagal: " + data.message);
   return data.data.token;
 }
 
-// ── Get stream URL dari ctv.jkt48connect.com (Server 1) ───────────────────────
+// ── Get stream URL dari ctv (Server 1) ────────────────────────────────────────
 async function getStreamURL(
-  token: string,
-  slugOrId: string,
-  isSlug: boolean
+  token: string, slugOrId: string, isSlug: boolean
 ): Promise<{ url: string; qualities: QualityOption[] }> {
   const param = isSlug ? `slug=${slugOrId}` : `showId=${slugOrId}`;
   const res = await fetch(`${CTV_BASE}/stream?${param}`, {
@@ -88,39 +74,53 @@ async function getStreamURL(
       ...(isSlug ? { "x-slug": slugOrId } : { "x-showid": slugOrId }),
     },
   });
-  const data = await res.json();
+  const text = await res.text();
+  let data: any;
+  try { data = JSON.parse(text); } catch {
+    throw new Error(`ctv non-JSON (HTTP ${res.status}): ${text.slice(0, 200)}`);
+  }
   if (!data.success) throw new Error(data.message || "Gagal mendapatkan stream URL");
 
   const streams: any[] = data.streams || [];
-  const autoUrl = streams[0]?.url || "";
+  const sorted = streams
+    .filter((s) => s && typeof s["url-2"] === "string" && s["url-2"].length > 0)
+    .sort((a, b) => {
+      const bwA = parseInt((a.BANDWIDTH || "0").split(",")[0]);
+      const bwB = parseInt((b.BANDWIDTH || "0").split(",")[0]);
+      return bwB - bwA;
+    });
 
-  const qualities: QualityOption[] = streams.map((s: any, idx: number) => ({
-    index:           idx,
-    name:            s.NAME || `${s.RESOLUTION?.split("x")[1] || "?"}p`,
-    quality:         s.NAME || `q${idx}`,
-    bandwidth:       parseInt(s.BANDWIDTH) || 0,
-    bandwidth_label: s.BANDWIDTH
-      ? parseInt(s.BANDWIDTH) >= 1_000_000
-        ? (parseInt(s.BANDWIDTH) / 1_000_000).toFixed(1) + " Mbps"
-        : Math.round(parseInt(s.BANDWIDTH) / 1_000) + " Kbps"
-      : "",
-    resolution:  s.RESOLUTION || "",
-    fps:         s["FRAME-RATE"] || "",
-    manual_url:  s.url || "",
-    playlist_url: s.url || "",
-  }));
+  if (sorted.length === 0) throw new Error(`Streams kosong. Response: ${JSON.stringify(data).slice(0, 300)}`);
+
+  const autoUrl = sorted[0]["url-2"] || "";
+  const qualities: QualityOption[] = sorted.map((s: any, idx: number) => {
+    const bw = parseInt((s.BANDWIDTH || "0").split(",")[0]);
+    return {
+      index: idx,
+      name: s.NAME || `q${idx}`,
+      quality: s.NAME || `q${idx}`,
+      bandwidth: bw,
+      bandwidth_label: bw
+        ? bw >= 1_000_000 ? (bw / 1_000_000).toFixed(1) + " Mbps" : Math.round(bw / 1_000) + " Kbps"
+        : "",
+      resolution: s.RESOLUTION || "",
+      fps: s["FRAME-RATE"] || "",
+      manual_url: s["url-2"] || "",
+      playlist_url: s["url-2"] || "",
+    };
+  });
 
   return { url: autoUrl, qualities };
 }
 
-// ── Get stream URL dari srv2.jkt48connect.com (Server 2) ─────────────────────
+// ── Get stream URL dari srv2 (Server 2) — returns master M3U8 ─────────────────
 async function getStreamURLSrv2(
-  token: string,
-  slugOrId: string,
-  isSlug: boolean
-): Promise<{ url: string; qualities: QualityOption[] }> {
+  token: string, slugOrId: string, isSlug: boolean
+): Promise<{ url: string; qualities: QualityOption[]; masterUrl: string }> {
   const param = isSlug ? `slug=${slugOrId}` : `showId=${slugOrId}`;
-  const res = await fetch(`${SRV2_BASE}/playback?${param}`, {
+  const playbackEndpoint = `${SRV2_BASE}/playback?${param}`;
+
+  const res = await fetch(playbackEndpoint, {
     headers: {
       "x-api-token": token,
       ...(isSlug ? { "x-slug": slugOrId } : { "x-showid": slugOrId }),
@@ -129,46 +129,27 @@ async function getStreamURLSrv2(
 
   const text = await res.text();
 
-  // If response is M3U8 playlist, parse it directly
-  if (text.trim().startsWith("#EXTM3U")) {
-    return parseM3U8Playlist(text, `${SRV2_BASE}/playback?${param}`);
+  if (!text.trim().startsWith("#EXTM3U")) {
+    let data: any;
+    try { data = JSON.parse(text); } catch {
+      throw new Error(`Server 2 non-JSON (HTTP ${res.status}): ${text.slice(0, 200)}`);
+    }
+    throw new Error(data?.message || "Server 2 gagal mengembalikan M3U8");
   }
 
-  // Otherwise try JSON (old behavior)
-  let data: any;
-  try {
-    data = JSON.parse(text);
-  } catch {
-    throw new Error("Server 2 returned an unrecognized response format");
-  }
-  if (!data.success) throw new Error(data.message || "Gagal mendapatkan stream URL dari Server 2");
+  // Parse master M3U8 untuk daftar kualitas
+  const { url: autoUrl, qualities } = parseM3U8Playlist(text, playbackEndpoint);
 
-  const streams: any[] = data.streams || [];
-  const autoUrl = streams[0]?.url || "";
-
-  const qualities: QualityOption[] = streams.map((s: any, idx: number) => ({
-    index:           idx,
-    name:            s.NAME || `${s.RESOLUTION?.split("x")[1] || "?"}p`,
-    quality:         s.NAME || `q${idx}`,
-    bandwidth:       parseInt(s.BANDWIDTH) || 0,
-    bandwidth_label: s.BANDWIDTH
-      ? parseInt(s.BANDWIDTH) >= 1_000_000
-        ? (parseInt(s.BANDWIDTH) / 1_000_000).toFixed(1) + " Mbps"
-        : Math.round(parseInt(s.BANDWIDTH) / 1_000) + " Kbps"
-      : "",
-    resolution:  s.RESOLUTION || "",
-    fps:         s["FRAME-RATE"] || "",
-    manual_url:  s.url || "",
-    playlist_url: s.url || "",
-  }));
-
-  return { url: autoUrl, qualities };
+  return {
+    url: autoUrl,        // URL level playlist kualitas tertinggi
+    qualities,           // semua pilihan kualitas
+    masterUrl: playbackEndpoint, // endpoint untuk refresh (tidak dipakai set ke player)
+  };
 }
 
-// ── Parse raw M3U8 master playlist into QualityOption[] ──────────────────────
+// ── Parse master M3U8 ─────────────────────────────────────────────────────────
 function parseM3U8Playlist(
-  m3u8Text: string,
-  _baseUrl: string
+  m3u8Text: string, _baseUrl: string
 ): { url: string; qualities: QualityOption[] } {
   const lines = m3u8Text.split("\n").map((l) => l.trim()).filter(Boolean);
   const qualities: QualityOption[] = [];
@@ -177,17 +158,14 @@ function parseM3U8Playlist(
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i];
     if (!line.startsWith("#EXT-X-STREAM-INF:")) continue;
-
     const urlLine = lines[i + 1];
     if (!urlLine || urlLine.startsWith("#")) continue;
 
-    // Parse attributes from #EXT-X-STREAM-INF
     const bandwidth  = parseInt(line.match(/BANDWIDTH=(\d+)/)?.[1] || "0");
     const resolution = line.match(/RESOLUTION=([\dx]+)/)?.[1] || "";
     const fps        = line.match(/FRAME-RATE=([\d.]+)/)?.[1] || "";
-    // const codecs     = line.match(/CODECS="([^"]+)"/)?.[1] || "";
 
-    // Look for NAME from the preceding #EXT-X-MEDIA line
+    // Cari NAME dari #EXT-X-MEDIA sebelumnya
     let name = "";
     for (let j = i - 1; j >= 0 && j >= i - 5; j--) {
       const mediaLine = lines[j];
@@ -196,8 +174,6 @@ function parseM3U8Playlist(
         if (nameMatch) { name = nameMatch[1]; break; }
       }
     }
-
-    // Fallback name from resolution height
     if (!name && resolution) {
       const height = resolution.split("x")[1];
       name = height ? `${height}p` : `Quality ${index + 1}`;
@@ -209,33 +185,25 @@ function parseM3U8Playlist(
       : Math.round(bandwidth / 1_000) + " Kbps";
 
     qualities.push({
-      index,
-      name,
-      quality:         name.toLowerCase().replace(/\s+/g, "_"),
-      bandwidth,
-      bandwidth_label,
-      resolution,
-      fps,
-      manual_url:   urlLine,
+      index, name,
+      quality: name.toLowerCase().replace(/\s+/g, "_"),
+      bandwidth, bandwidth_label, resolution, fps,
+      manual_url: urlLine,
       playlist_url: urlLine,
     });
-
     index++;
   }
 
-  // Sort highest quality first
   qualities.sort((a, b) => b.bandwidth - a.bandwidth);
   qualities.forEach((q, i) => { q.index = i; });
 
-  const autoUrl = qualities[0]?.manual_url || "";
-  return { url: autoUrl, qualities };
+  return { url: qualities[0]?.manual_url || "", qualities };
 }
+
 const getSession = () => {
   try {
     const d = JSON.parse(
-      sessionStorage.getItem("userLogin") ||
-      localStorage.getItem("userLogin") ||
-      "null"
+      sessionStorage.getItem("userLogin") || localStorage.getItem("userLogin") || "null"
     );
     if (d && d.isLoggedIn && d.token) return d;
     return null;
@@ -248,38 +216,20 @@ const isIdnSlug = (param: string) => {
 };
 
 interface QualityOption {
-  index:           number;
-  name:            string;
-  quality:         string;
-  bandwidth:       number;
-  bandwidth_label: string;
-  resolution:      string;
-  fps:             string;
-  manual_url:      string;
-  playlist_url:    string;
+  index: number; name: string; quality: string; bandwidth: number;
+  bandwidth_label: string; resolution: string; fps: string;
+  manual_url: string; playlist_url: string;
 }
-
 interface ChatMessage {
-  user_id:      string;
-  username:     string;
-  avatar_url:   string;
-  bluetick:     boolean;
-  role:         string;
-  text_content: string;
-  timestamp:    string;
+  user_id: string; username: string; avatar_url: string;
+  bluetick: boolean; role: string; text_content: string; timestamp: string;
 }
-
 interface SRComment {
-  id: string;
-  name: string;
-  avatar_url: string;
-  comment: string;
-  created_at: number;
-  class_level: number;
-  user_id: number;
+  id: string; name: string; avatar_url: string; comment: string;
+  created_at: number; class_level: number; user_id: number;
 }
 
-// ── Showroom comment polling hook ─────────────────────────────────────────────
+// ── Showroom comment polling ──────────────────────────────────────────────────
 function useShowroomComments(roomId: number | null) {
   const [comments, setComments] = useState<SRComment[]>([]);
   const [loading, setLoading]   = useState(true);
@@ -300,23 +250,15 @@ function useShowroomComments(roomId: number | null) {
       const parsed: SRComment[] = (data?.comment_log ?? [])
         .map((c: any) => ({
           id: `${c.user_id}-${c.created_at}`,
-          name: c.name ?? "Unknown",
-          avatar_url: c.avatar_url ?? "",
-          comment: c.comment ?? "",
-          created_at: c.created_at ?? 0,
-          class_level: c.class_level ?? 1,
-          user_id: c.user_id ?? 0,
+          name: c.name ?? "Unknown", avatar_url: c.avatar_url ?? "",
+          comment: c.comment ?? "", created_at: c.created_at ?? 0,
+          class_level: c.class_level ?? 1, user_id: c.user_id ?? 0,
         }))
         .sort((a: SRComment, b: SRComment) => a.created_at - b.created_at);
       if (!mounted.current) return;
-      setComments(parsed);
-      setLastPoll(new Date());
-      setError(false);
-    } catch {
-      if (mounted.current) setError(true);
-    } finally {
-      if (mounted.current) setLoading(false);
-    }
+      setComments(parsed); setLastPoll(new Date()); setError(false);
+    } catch { if (mounted.current) setError(true); }
+    finally { if (mounted.current) setLoading(false); }
   }, [roomId]);
 
   useEffect(() => {
@@ -333,26 +275,15 @@ function useShowroomComments(roomId: number | null) {
   return { comments, loading, error, lastPoll, retry: fetchComments };
 }
 
-// ── HLS Player ────────────────────────────────────────────────────────────────
+// ── HLS Player — tanpa quality panel (dipindah ke detail section) ─────────────
 function HlsPlayer({
-  src, title, qualities, onQualityChange, currentQuality, qualityMode, onModeChange, isIdn, token,
+  src, title, isIdn, token,
 }: {
-  src: string;
-  title: string;
-  qualities: QualityOption[];
-  onQualityChange: (q: QualityOption | null) => void;
-  currentQuality: QualityOption | null;
-  qualityMode: "auto" | "manual";
-  onModeChange: (mode: "auto" | "manual") => void;
-  isIdn: boolean;
-  token?: string;
+  src: string; title: string; isIdn: boolean; token?: string;
 }) {
   const videoRef = useRef<HTMLVideoElement>(null);
   const hlsRef   = useRef<Hls | null>(null);
   const retryRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const [showQualityPanel, setShowQualityPanel] = useState(false);
-  const [currentLevel, setCurrentLevel]         = useState<string>("Auto");
-  const [bandwidth, setBandwidth]               = useState<string>("");
 
   const destroyHls = useCallback(() => {
     if (retryRef.current) { clearTimeout(retryRef.current); retryRef.current = null; }
@@ -362,107 +293,55 @@ function HlsPlayer({
   useEffect(() => {
     const video = videoRef.current;
     if (!video || !src) return;
-
     destroyHls();
 
     if (!Hls.isSupported()) {
       if (video.canPlayType("application/vnd.apple.mpegurl")) {
-        video.src = src;
-        video.load();
-        video.play().catch(() => {});
+        video.src = src; video.load(); video.play().catch(() => {});
       }
       return;
     }
 
-    const hls = new Hls({
-      enableWorker: true,
-      lowLatencyMode: false,
-      maxBufferLength:    30,
-      maxMaxBufferLength: 60,
-      maxBufferSize:      60 * 1000 * 1000,
-      backBufferLength: 30,
-      liveSyncDurationCount:       3,
-      liveMaxLatencyDurationCount: 10,
-      liveDurationInfinity:        true,
-      fragLoadingTimeOut:          10000,
-      fragLoadingMaxRetry:         6,
-      fragLoadingRetryDelay:       1000,
-      fragLoadingMaxRetryTimeout:  8000,
-      manifestLoadingTimeOut:      10000,
-      manifestLoadingMaxRetry:     4,
-      manifestLoadingRetryDelay:   1000,
-      levelLoadingTimeOut:         10000,
-      levelLoadingMaxRetry:        4,
-      levelLoadingRetryDelay:      1000,
-      startLevel:             qualityMode === "auto" ? -1 : undefined,
-      abrEwmaDefaultEstimate: 500_000,
-      abrBandWidthFactor:     0.8,
-      abrBandWidthUpFactor:   0.7,
-      abrEwmaFastLive:        3.0,
-      abrEwmaSlowLive:        9.0,
-      nudgeOffset:   0.3,
-      nudgeMaxRetry: 5,
+    const makeHlsConfig = () => ({
+      enableWorker: true, lowLatencyMode: false,
+      maxBufferLength: 30, maxMaxBufferLength: 60,
+      maxBufferSize: 60 * 1000 * 1000, backBufferLength: 30,
+      liveSyncDurationCount: 3, liveMaxLatencyDurationCount: 10,
+      liveDurationInfinity: true,
+      fragLoadingTimeOut: 10000, fragLoadingMaxRetry: 6,
+      fragLoadingRetryDelay: 1000, fragLoadingMaxRetryTimeout: 8000,
+      manifestLoadingTimeOut: 10000, manifestLoadingMaxRetry: 4,
+      manifestLoadingRetryDelay: 1000,
+      levelLoadingTimeOut: 10000, levelLoadingMaxRetry: 4,
+      levelLoadingRetryDelay: 1000,
+      startLevel: -1,
+      abrEwmaDefaultEstimate: 500_000, abrBandWidthFactor: 0.8,
+      abrBandWidthUpFactor: 0.7, abrEwmaFastLive: 3.0, abrEwmaSlowLive: 9.0,
+      nudgeOffset: 0.3, nudgeMaxRetry: 5,
       ...(token && {
-        xhrSetup: (xhr: XMLHttpRequest) => {
-          xhr.setRequestHeader("x-api-token", token);
-        },
+        xhrSetup: (xhr: XMLHttpRequest) => { xhr.setRequestHeader("x-api-token", token); },
         fetchSetup: (context: any, initParams: any) => {
-          initParams.headers = {
-            ...initParams.headers,
-            "x-api-token": token,
-          };
+          initParams.headers = { ...initParams.headers, "x-api-token": token };
           return new Request(context.url, initParams);
         },
       }),
     });
 
+    const hls = new Hls(makeHlsConfig());
     hlsRef.current = hls;
     hls.loadSource(src);
     hls.attachMedia(video);
-
-    hls.on(Hls.Events.MANIFEST_PARSED, () => {
-      video.play().catch(() => {});
-    });
-
-    hls.on(Hls.Events.LEVEL_SWITCHED, (_, data) => {
-      const lvl = hls.levels[data.level];
-      if (lvl) {
-        setCurrentLevel(lvl.name || `${lvl.height}p`);
-        const bw = hls.bandwidthEstimate;
-        if (bw > 0) setBandwidth(
-          bw >= 1_000_000
-            ? (bw / 1_000_000).toFixed(1) + " Mbps"
-            : Math.round(bw / 1_000) + " Kbps"
-        );
-      }
-    });
-
+    hls.on(Hls.Events.MANIFEST_PARSED, () => { video.play().catch(() => {}); });
     hls.on(Hls.Events.ERROR, (_, data) => {
       if (!data.fatal) return;
-      if (data.type === Hls.ErrorTypes.NETWORK_ERROR) {
-        hls.startLoad();
-      } else if (data.type === Hls.ErrorTypes.MEDIA_ERROR) {
-        hls.recoverMediaError();
-      } else {
+      if (data.type === Hls.ErrorTypes.NETWORK_ERROR) { hls.startLoad(); }
+      else if (data.type === Hls.ErrorTypes.MEDIA_ERROR) { hls.recoverMediaError(); }
+      else {
         destroyHls();
         retryRef.current = setTimeout(() => {
-          const v = videoRef.current;
-          if (!v) return;
-          const newHls = new Hls({
-            lowLatencyMode: false,
-            maxBufferLength: 30,
-            ...(token && {
-              xhrSetup: (xhr: XMLHttpRequest) => {
-                xhr.setRequestHeader("x-api-token", token);
-              },
-              fetchSetup: (context: any, initParams: any) => {
-                initParams.headers = { ...initParams.headers, "x-api-token": token };
-                return new Request(context.url, initParams);
-              },
-            }),
-          });
-          newHls.loadSource(src);
-          newHls.attachMedia(v);
+          const v = videoRef.current; if (!v) return;
+          const newHls = new Hls(makeHlsConfig());
+          newHls.loadSource(src); newHls.attachMedia(v);
           newHls.on(Hls.Events.MANIFEST_PARSED, () => v.play().catch(() => {}));
           hlsRef.current = newHls;
         }, 2000);
@@ -477,63 +356,111 @@ function HlsPlayer({
       <style>{`
         video.live-player::-webkit-media-controls-timeline,
         video.live-player::-webkit-media-controls-time-remaining-display,
-        video.live-player::-webkit-media-controls-current-time-display {
-          display: none !important;
-        }
+        video.live-player::-webkit-media-controls-current-time-display { display: none !important; }
       `}</style>
-
       <Backlight blur={50} className="w-full">
         <div className={isIdn ? "aspect-video" : ""}>
-          <video
-            ref={videoRef}
-            controls
-            autoPlay
-            playsInline
+          <video ref={videoRef} controls autoPlay playsInline
             className={`live-player w-full ${isIdn ? "h-full" : ""} block`}
             title={title}
           />
         </div>
       </Backlight>
+    </div>
+  );
+}
 
-      {qualities.length > 0 && (
-        <div className="absolute bottom-12 right-3 z-20">
-          <button
-            onClick={() => setShowQualityPanel((p) => !p)}
-            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-black/80 backdrop-blur-sm text-white text-[11px] font-bold cursor-pointer border border-white/10 hover:bg-black/90 transition-colors"
+// ── Quality Selector Panel ────────────────────────────────────────────────────
+function QualityPanel({
+  qualities, qualityMode, currentQuality, onModeChange, onQualityChange,
+}: {
+  qualities: QualityOption[];
+  qualityMode: "auto" | "manual";
+  currentQuality: QualityOption | null;
+  onModeChange: (mode: "auto" | "manual") => void;
+  onQualityChange: (q: QualityOption | null) => void;
+}) {
+  if (qualities.length === 0) return null;
+  return (
+    <div className="border-t border-gray-200 dark:border-gray-700 pt-4 mt-2">
+      <p className="text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-2.5">Kualitas Video</p>
+      <div className="flex flex-wrap gap-2">
+        <button
+          onClick={() => { onModeChange("auto"); onQualityChange(null); }}
+          className={`px-3 py-1.5 rounded-lg border text-xs font-bold transition-all cursor-pointer ${
+            qualityMode === "auto"
+              ? "bg-red-500 border-red-500 text-white shadow-sm shadow-red-500/25"
+              : "bg-transparent border-gray-200 dark:border-gray-700 text-gray-600 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-800/50"
+          }`}
+        >
+          ⚡ Auto
+        </button>
+        {qualities.map((q) => {
+          const isActive = qualityMode === "manual" && currentQuality?.quality === q.quality;
+          return (
+            <button
+              key={q.quality}
+              onClick={() => { onModeChange("manual"); onQualityChange(q); }}
+              className={`px-3 py-1.5 rounded-lg border text-xs font-bold transition-all cursor-pointer ${
+                isActive
+                  ? "bg-blue-500 border-blue-500 text-white shadow-sm shadow-blue-500/25"
+                  : "bg-transparent border-gray-200 dark:border-gray-700 text-gray-600 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-800/50"
+              }`}
+            >
+              {q.name}
+              {q.bandwidth_label && (
+                <span className="opacity-60 ml-1 font-normal text-[10px]">{q.bandwidth_label}</span>
+              )}
+            </button>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+// ── Server Switcher ───────────────────────────────────────────────────────────
+function ServerSwitcher({
+  activeServer, serverLoading, onSwitch,
+}: {
+  activeServer: "1" | "2";
+  serverLoading: boolean;
+  onSwitch: (s: "1" | "2") => void;
+}) {
+  return (
+    <div className="border-t border-gray-200 dark:border-gray-700 pt-4 mt-2">
+      <p className="text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-2.5">Pilih Server</p>
+      <div className="flex gap-2">
+        {(["1", "2"] as const).map((s) => (
+          <button key={s}
+            onClick={() => onSwitch(s)}
+            disabled={serverLoading}
+            className={`flex items-center gap-2 px-4 py-2.5 rounded-xl border text-xs font-bold transition-all cursor-pointer ${
+              activeServer === s
+                ? "bg-blue-500 border-blue-500 text-white shadow-md shadow-blue-500/25"
+                : "bg-transparent border-gray-200 dark:border-gray-700 text-gray-600 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-800/50"
+            } ${serverLoading ? "opacity-60 cursor-not-allowed" : ""}`}
           >
-            <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-              <circle cx="12" cy="12" r="3" /><path d="M19.07 4.93a10 10 0 0 1 0 14.14M4.93 4.93a10 10 0 0 0 0 14.14" />
-            </svg>
-            {qualityMode === "auto" ? `Auto (${currentLevel})` : currentQuality?.name || currentLevel}
-            {bandwidth && <span className="opacity-50 text-[10px]">· {bandwidth}</span>}
+            {serverLoading && activeServer === s ? (
+              <div className="w-3 h-3 border-2 border-white/30 border-t-white rounded-full animate-spin" />
+            ) : s === "1" ? (
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                <circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/>
+              </svg>
+            ) : (
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                <rect x="2" y="2" width="20" height="8" rx="2"/><rect x="2" y="14" width="20" height="8" rx="2"/>
+                <line x1="6" y1="6" x2="6.01" y2="6"/><line x1="6" y1="18" x2="6.01" y2="18"/>
+              </svg>
+            )}
+            Server {s}
+            {activeServer === s && <span className="text-[9px] opacity-75 font-medium">· Aktif</span>}
           </button>
-          {showQualityPanel && (
-            <div className="absolute bottom-[calc(100%+8px)] right-0 bg-gray-900/95 backdrop-blur-xl border border-white/10 rounded-2xl p-2 min-w-[190px] shadow-2xl">
-              <p className="text-[9px] font-bold text-white/30 px-2 pb-1.5 uppercase tracking-widest">Kualitas</p>
-              <button
-                onClick={() => { onModeChange("auto"); onQualityChange(null); setShowQualityPanel(false); }}
-                className={`w-full px-3 py-2 rounded-xl border-0 text-[12px] cursor-pointer text-left flex items-center justify-between mb-0.5 transition-colors ${qualityMode === "auto" ? "bg-red-500/20 text-red-400 font-bold" : "bg-transparent text-white/70 hover:bg-white/5"}`}
-              >
-                <span>⚡ Auto</span>
-                {qualityMode === "auto" && <span className="text-[10px] opacity-60">{currentLevel}</span>}
-              </button>
-              {qualities.map((q) => {
-                const isActive = qualityMode === "manual" && currentQuality?.quality === q.quality;
-                return (
-                  <button
-                    key={q.quality}
-                    onClick={() => { onModeChange("manual"); onQualityChange(q); setShowQualityPanel(false); }}
-                    className={`w-full px-3 py-2 rounded-xl border-0 text-[12px] cursor-pointer text-left flex items-center justify-between mb-0.5 transition-colors ${isActive ? "bg-red-500/20 text-red-400 font-bold" : "bg-transparent text-white/70 hover:bg-white/5"}`}
-                  >
-                    <span>{q.name}</span>
-                    <span className="text-[10px] opacity-50">{q.bandwidth_label}</span>
-                  </button>
-                );
-              })}
-            </div>
-          )}
-        </div>
-      )}
+        ))}
+      </div>
+      <p className="text-[10px] text-gray-400 dark:text-gray-500 mt-2">
+        Ganti server jika stream buffering atau tidak bisa diputar.
+      </p>
     </div>
   );
 }
@@ -615,16 +542,13 @@ function IdnChatPanel({
         ) : chatUser ? (
           <form onSubmit={onSend} className="flex gap-2">
             <input
-              type="text"
-              value={chatInput}
+              type="text" value={chatInput}
               onChange={(e) => setChatInput(e.target.value)}
               placeholder={`Komentar sebagai ${chatUser.username}...`}
               maxLength={200}
               className="flex-1 px-3.5 py-2.5 rounded-xl border border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-800/60 text-gray-900 dark:text-white text-xs outline-none focus:ring-2 focus:ring-red-500/30 focus:border-red-400 dark:focus:border-red-500 placeholder:text-gray-400 transition-all"
             />
-            <button
-              type="submit"
-              disabled={!chatInput.trim()}
+            <button type="submit" disabled={!chatInput.trim()}
               className={`w-10 h-10 rounded-xl border-0 flex-shrink-0 flex items-center justify-center transition-all duration-150 ${chatInput.trim() ? "bg-red-500 hover:bg-red-600 text-white cursor-pointer shadow-lg shadow-red-500/30" : "bg-gray-100 dark:bg-gray-800 text-gray-300 dark:text-gray-600 cursor-not-allowed"}`}
             >
               <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
@@ -648,11 +572,7 @@ function IdnChatPanel({
 function MemberChatPanel({
   comments, loading, error, lastPoll, retry,
 }: {
-  comments: SRComment[];
-  loading: boolean;
-  error: boolean;
-  lastPoll: Date | null;
-  retry: () => void;
+  comments: SRComment[]; loading: boolean; error: boolean; lastPoll: Date | null; retry: () => void;
 }) {
   const chatEndRef = useRef<HTMLDivElement>(null);
   useEffect(() => { chatEndRef.current?.scrollIntoView({ behavior: "smooth" }); }, [comments.length]);
@@ -761,10 +681,8 @@ function LiveStream2() {
   const isIdn    = isIdnSlug(playbackId || "");
   const isMember = !isIdn;
 
-  // ── Server selection: "1" = ctv (default), "2" = srv2 ─────────────────────
-  const [activeServer, setActiveServer] = useState<"1" | "2">("1");
-  const [serverLoading, setServerLoading] = useState(false);
-
+  const [activeServer,      setActiveServer]      = useState<"1" | "2">("1");
+  const [serverLoading,     setServerLoading]     = useState(false);
   const [idnShow,           setIdnShow]           = useState<any>(null);
   const [qualities,         setQualities]         = useState<QualityOption[]>([]);
   const [qualityMode,       setQualityMode]       = useState<"auto" | "manual">("auto");
@@ -790,12 +708,13 @@ function LiveStream2() {
   const [error,             setError]             = useState("");
   const [members,           setMembers]           = useState<any[]>([]);
 
-  const [chatMessages,      setChatMessages]      = useState<ChatMessage[]>([]);
-  const [chatInput,         setChatInput]         = useState("");
-  const [chatUser,          setChatUser]          = useState<any>(null);
-  const [isChatLoggingIn,   setIsChatLoggingIn]   = useState(true);
+  const [chatMessages,    setChatMessages]    = useState<ChatMessage[]>([]);
+  const [chatInput,       setChatInput]       = useState("");
+  const [chatUser,        setChatUser]        = useState<any>(null);
+  const [isChatLoggingIn, setIsChatLoggingIn] = useState(true);
   const chatEndRef = useRef<HTMLDivElement>(null);
   const channelRef = useRef<any>(null);
+  const srv2RefreshTimer = useRef<ReturnType<typeof setInterval> | null>(null);
 
   const { comments: srComments, loading: srLoading, error: srError, lastPoll: srLastPoll, retry: srRetry } =
     useShowroomComments(isMember ? memberRoomId : null);
@@ -804,8 +723,7 @@ function LiveStream2() {
     try {
       const res = await fetch("https://api.ipify.org?format=json");
       const data = await res.json();
-      setClientIP(data.ip);
-      return data.ip;
+      setClientIP(data.ip); return data.ip;
     } catch { return "unknown"; }
   };
 
@@ -815,19 +733,12 @@ function LiveStream2() {
     const uid = session.user?.user_id;
     if (!uid || !playbackId) return false;
     try {
-      const res = await fetch(
-        `${TICKETS_API}/user/${uid}/show/${encodeURIComponent(playbackId)}?apikey=${API_KEY}`
-      );
+      const res = await fetch(`${TICKETS_API}/user/${uid}/show/${encodeURIComponent(playbackId)}?apikey=${API_KEY}`);
       if (!res.ok) return false;
       const data = await res.json();
-      if (data.has_ticket === true) {
-        setAccessSource("ticket");
-        return true;
-      }
+      if (data.has_ticket === true) { setAccessSource("ticket"); return true; }
       return false;
-    } catch {
-      return false;
-    }
+    } catch { return false; }
   }, [playbackId]);
 
   const checkMembership = useCallback(async (): Promise<boolean> => {
@@ -842,8 +753,7 @@ function LiveStream2() {
       });
       const data = await res.json();
       if (data.status && data.data?.is_active && data.data?.membership_type !== "free") {
-        setAccessSource("membership");
-        return true;
+        setAccessSource("membership"); return true;
       }
     } catch {}
     return false;
@@ -859,11 +769,8 @@ function LiveStream2() {
       if (hoursDiff > 5) { localStorage.removeItem("stream_verification"); setShowVerification(true); return false; }
       const ip = await fetchClientIP();
       if (info.ip !== ip) { info.ip = ip; localStorage.setItem("stream_verification", JSON.stringify(info)); }
-      setIsVerified(true);
-      setShowVerification(false);
-      setAccessSource("code");
-      setVerifData({ email: info.email, code: info.code });
-      return true;
+      setIsVerified(true); setShowVerification(false); setAccessSource("code");
+      setVerifData({ email: info.email, code: info.code }); return true;
     } catch { localStorage.removeItem("stream_verification"); setShowVerification(true); return false; }
   };
 
@@ -877,9 +784,9 @@ function LiveStream2() {
         body: JSON.stringify({ email: verifData.email, code: verifData.code, apikey: "JKTCONNECT" }),
       });
       const verifyData = await verifyRes.json();
-      if (!verifyData.status) { setVerifyError(verifyData.message || "Code tidak valid atau sudah kedaluwarsa"); setVerifying(false); return; }
+      if (!verifyData.status) { setVerifyError(verifyData.message || "Code tidak valid"); setVerifying(false); return; }
       const codeData = verifyData.data;
-      if (!codeData.is_active) { setVerifyError("Code ini sudah tidak aktif"); setVerifying(false); return; }
+      if (!codeData.is_active) { setVerifyError("Code sudah tidak aktif"); setVerifying(false); return; }
       const usageCount = parseInt(codeData.usage_count) || 0;
       const usageLimit = parseInt(codeData.usage_limit) || 1;
       const hasUsageLeft = usageCount < usageLimit;
@@ -890,7 +797,7 @@ function LiveStream2() {
           const userCode = listData.data.wotatokens.find((c: any) => c.code === verifData.code);
           if (userCode) {
             if (userCode.ip_address && userCode.ip_address !== "" && userCode.ip_address !== ip) {
-              setVerifyError("Code ini sudah digunakan dari IP address yang berbeda"); setVerifying(false); return;
+              setVerifyError("Code sudah digunakan dari IP berbeda"); setVerifying(false); return;
             }
             localStorage.setItem("stream_verification", JSON.stringify({ email: verifData.email, code: verifData.code, ip, timestamp: Date.now(), verified: true }));
             setIsVerified(true); setShowVerification(false); setAccessSource("code"); setVerifying(false); return;
@@ -907,7 +814,7 @@ function LiveStream2() {
         localStorage.setItem("stream_verification", JSON.stringify({ email: verifData.email, code: verifData.code, ip, timestamp: Date.now(), verified: true }));
         setIsVerified(true); setShowVerification(false); setAccessSource("code"); setVerifying(false);
       } else { setVerifyError(useData.message || "Gagal menggunakan code"); setVerifying(false); }
-    } catch { setVerifyError("Terjadi kesalahan saat verifikasi. Silakan coba lagi."); setVerifying(false); }
+    } catch { setVerifyError("Terjadi kesalahan saat verifikasi."); setVerifying(false); }
   };
 
   // ── loadIdnStream ─────────────────────────────────────────────────────────
@@ -927,13 +834,11 @@ function LiveStream2() {
       setStreamToken(token);
 
       if (server === "2") {
-        const { url: streamUrl, qualities: streamQualities } = await getStreamURLSrv2(token, show.slug, true);
-        setQualities(streamQualities);
-        setHlsUrl(streamUrl);
+        const { url, qualities: q } = await getStreamURLSrv2(token, show.slug, true);
+        setQualities(q); setHlsUrl(url);
       } else {
-        const { url: streamUrl, qualities: streamQualities } = await getStreamURL(token, show.slug, true);
-        setQualities(streamQualities);
-        setHlsUrl(streamUrl);
+        const { url, qualities: q } = await getStreamURL(token, show.slug, true);
+        setQualities(q); setHlsUrl(url);
       }
 
       try {
@@ -969,12 +874,9 @@ function LiveStream2() {
       if (!Array.isArray(data)) { setError("Gagal mengambil data live member"); setLoading(false); return; }
 
       const show = data.find((s: any) =>
-        s.url_key === playbackId ||
-        s.slug === playbackId ||
-        s.identifier === playbackId ||
-        s.identifier?.endsWith(playbackId)
+        s.url_key === playbackId || s.slug === playbackId ||
+        s.identifier === playbackId || s.identifier?.endsWith(playbackId)
       );
-
       if (!show) { setError("Member tidak sedang live saat ini"); setLoading(false); return; }
       setMemberShow(show);
 
@@ -985,9 +887,8 @@ function LiveStream2() {
         try {
           const token = await generateStreamToken(identifier, true);
           setStreamToken(token);
-          const { url: streamUrl, qualities: streamQualities } = await getUrl(token, identifier, true);
-          setQualities(streamQualities);
-          setMemberHlsUrl(streamUrl);
+          const { url, qualities: q } = await getUrl(token, identifier, true);
+          setQualities(q); setMemberHlsUrl(url);
         } catch {
           const streamUrl = show.streaming_url_list?.[0]?.url || null;
           if (!streamUrl) { setError("URL stream tidak tersedia"); setLoading(false); return; }
@@ -999,9 +900,8 @@ function LiveStream2() {
           try {
             const token = await generateStreamToken(String(showId), false);
             setStreamToken(token);
-            const { url: streamUrl, qualities: streamQualities } = await getUrl(token, String(showId), false);
-            setQualities(streamQualities);
-            setMemberHlsUrl(streamUrl);
+            const { url, qualities: q } = await getUrl(token, String(showId), false);
+            setQualities(q); setMemberHlsUrl(url);
           } catch {
             const streamUrl = show.streaming_url_list?.[0]?.url || null;
             if (!streamUrl) { setError("URL stream tidak tersedia"); setLoading(false); return; }
@@ -1022,7 +922,7 @@ function LiveStream2() {
     }
   }, [playbackId]);
 
-  // ── Switch server handler ─────────────────────────────────────────────────
+  // ── Switch server ─────────────────────────────────────────────────────────
   const handleSwitchServer = async (server: "1" | "2") => {
     if (server === activeServer || serverLoading) return;
     setActiveServer(server);
@@ -1031,20 +931,13 @@ function LiveStream2() {
     setCurrentQuality(null);
     setQualityMode("auto");
     try {
-      if (isIdn) {
-        if (!idnShow) { setServerLoading(false); return; }
+      const getUrl = server === "2" ? getStreamURLSrv2 : getStreamURL;
+      if (isIdn && idnShow) {
         const token = await generateStreamToken(idnShow.slug, true);
         setStreamToken(token);
-        if (server === "2") {
-          const { url, qualities: q } = await getStreamURLSrv2(token, idnShow.slug, true);
-          setHlsUrl(url); setQualities(q);
-        } else {
-          const { url, qualities: q } = await getStreamURL(token, idnShow.slug, true);
-          setHlsUrl(url); setQualities(q);
-        }
-      } else {
-        if (!memberShow) { setServerLoading(false); return; }
-        const getUrl = server === "2" ? getStreamURLSrv2 : getStreamURL;
+        const { url, qualities: q } = await getUrl(token, idnShow.slug, true);
+        setHlsUrl(url); setQualities(q);
+      } else if (isMember && memberShow) {
         const identifier = memberShow.identifier || memberShow.slug || memberShow.url_key;
         const showId = memberShow.showid || memberShow.show_id || null;
         if (memberShow.is_group || memberShow.url_key === "jkt48-official") {
@@ -1066,6 +959,7 @@ function LiveStream2() {
     }
   };
 
+  // ── Quality change ────────────────────────────────────────────────────────
   const handleQualityChange = (q: QualityOption | null) => {
     setCurrentQuality(q);
     if (!q) return;
@@ -1076,34 +970,66 @@ function LiveStream2() {
   const handleModeChange = async (mode: "auto" | "manual") => {
     setQualityMode(mode);
     if (mode === "auto") {
+      setCurrentQuality(null);
       try {
+        const getUrl = activeServer === "2" ? getStreamURLSrv2 : getStreamURL;
         if (isIdn && idnShow?.slug) {
           const token = await generateStreamToken(idnShow.slug, true);
           setStreamToken(token);
-          const getUrl = activeServer === "2" ? getStreamURLSrv2 : getStreamURL;
-          const { url: streamUrl } = await getUrl(token, idnShow.slug, true);
-          setHlsUrl(streamUrl);
+          const { url, qualities: q } = await getUrl(token, idnShow.slug, true);
+          setHlsUrl(url); setQualities(q);
         } else if (isMember && memberShow) {
           const identifier = memberShow.identifier || memberShow.slug || memberShow.url_key;
           const showId = memberShow.showid || memberShow.show_id || null;
-          const getUrl = activeServer === "2" ? getStreamURLSrv2 : getStreamURL;
           if (memberShow.is_group || memberShow.url_key === "jkt48-official") {
             const token = await generateStreamToken(identifier, true);
             setStreamToken(token);
-            const { url: streamUrl } = await getUrl(token, identifier, true);
-            setMemberHlsUrl(streamUrl);
+            const { url, qualities: q } = await getUrl(token, identifier, true);
+            setMemberHlsUrl(url); setQualities(q);
           } else if (showId) {
             const token = await generateStreamToken(String(showId), false);
             setStreamToken(token);
-            const { url: streamUrl } = await getUrl(token, String(showId), false);
-            setMemberHlsUrl(streamUrl);
+            const { url, qualities: q } = await getUrl(token, String(showId), false);
+            setMemberHlsUrl(url); setQualities(q);
           }
         }
       } catch {}
-      setCurrentQuality(null);
     }
   };
 
+  // ── Server 2 token refresh — hanya update token, TIDAK set HLS URL ────────
+  useEffect(() => {
+    if (srv2RefreshTimer.current) { clearInterval(srv2RefreshTimer.current); srv2RefreshTimer.current = null; }
+    if (activeServer !== "2") return;
+
+    const refreshToken = async () => {
+      if (loading || error) return;
+      try {
+        if (isIdn && idnShow?.slug) {
+          const newToken = await generateStreamToken(idnShow.slug, true);
+          setStreamToken(newToken);
+          // Tidak set hlsUrl — player tetap berjalan dengan token baru di header
+        } else if (isMember && memberShow) {
+          const identifier = memberShow.identifier || memberShow.slug || memberShow.url_key;
+          const showId = memberShow.showid || memberShow.show_id || null;
+          const slugOrId = (memberShow.is_group || memberShow.url_key === "jkt48-official")
+            ? identifier : String(showId);
+          const isSlugMode = !!(memberShow.is_group || memberShow.url_key === "jkt48-official");
+          if (slugOrId) {
+            const newToken = await generateStreamToken(slugOrId, isSlugMode);
+            setStreamToken(newToken);
+          }
+        }
+      } catch { /* silent fail */ }
+    };
+
+    srv2RefreshTimer.current = setInterval(refreshToken, 90_000); // 90 detik
+    return () => {
+      if (srv2RefreshTimer.current) { clearInterval(srv2RefreshTimer.current); srv2RefreshTimer.current = null; }
+    };
+  }, [activeServer, isIdn, isMember, idnShow, memberShow]); // eslint-disable-line
+
+  // ── Chat init ─────────────────────────────────────────────────────────────
   const initChat = useCallback(async () => {
     setIsChatLoggingIn(true);
     let userData: any = null;
@@ -1134,10 +1060,8 @@ function LiveStream2() {
           body: JSON.stringify({ username: username.toLowerCase(), email, avatar_url }),
         });
         const { data: supabaseUser, error } = await supabase
-          .from("dashboard_v2_users")
-          .select("id, username, avatar_url, role, bluetick")
-          .eq("username", username.toLowerCase())
-          .single();
+          .from("dashboard_v2_users").select("id, username, avatar_url, role, bluetick")
+          .eq("username", username.toLowerCase()).single();
         if (!error && supabaseUser) { setChatUser({ ...supabaseUser, avatar_url }); }
         else { setChatUser({ id: userData.user_id || username, username: username.toLowerCase(), avatar_url, role: "member", bluetick: false }); }
       } catch {}
@@ -1177,114 +1101,33 @@ function LiveStream2() {
 
   useEffect(() => { chatEndRef.current?.scrollIntoView({ behavior: "smooth" }); }, [chatMessages]);
 
-  // ── Main init effect ──────────────────────────────────────────────────────
+  // ── Main init ─────────────────────────────────────────────────────────────
   useEffect(() => {
-    if (isMember) {
-      loadMemberStream("1");
-      return;
-    }
-
+    if (isMember) { loadMemberStream("1"); return; }
     const init = async () => {
       setMembershipLoading(true);
       await fetchClientIP();
-
       const session = getSession();
-
       if (session) {
         const ticketOk = await checkTicket();
-        if (ticketOk) {
-          setIsVerified(true);
-          setShowVerification(false);
-          setMembershipLoading(false);
-          await loadIdnStream("1");
-          return;
-        }
-
+        if (ticketOk) { setIsVerified(true); setShowVerification(false); setMembershipLoading(false); await loadIdnStream("1"); return; }
         const membershipOk = await checkMembership();
-        if (membershipOk) {
-          setIsVerified(true);
-          setShowVerification(false);
-          setMembershipLoading(false);
-          await loadIdnStream("1");
-          return;
-        }
+        if (membershipOk) { setIsVerified(true); setShowVerification(false); setMembershipLoading(false); await loadIdnStream("1"); return; }
       }
-
       const verified = await checkExistingVerification();
       setMembershipLoading(false);
-      if (verified) {
-        await loadIdnStream("1");
-      } else {
-        setLoading(false);
-      }
+      if (verified) { await loadIdnStream("1"); } else { setLoading(false); }
     };
-
     init();
   }, [isMember]); // eslint-disable-line
 
   useEffect(() => { if (isIdn && isVerified && !idnShow) loadIdnStream("1"); }, [isVerified]); // eslint-disable-line
 
-  // ── Server 2 auto-refresh every 30s ──────────────────────────────────────
-  const srv2RefreshTimer = useRef<ReturnType<typeof setInterval> | null>(null);
-
-  useEffect(() => {
-    if (srv2RefreshTimer.current) {
-      clearInterval(srv2RefreshTimer.current);
-      srv2RefreshTimer.current = null;
-    }
-
-    if (activeServer !== "2") return;
-
-    const refreshSrv2 = async () => {
-      if (loading || error) return;
-      try {
-        if (isIdn && idnShow?.slug) {
-          const newToken = await generateStreamToken(idnShow.slug, true);
-          setStreamToken(newToken);
-          const { url, qualities: q } = await getStreamURLSrv2(newToken, idnShow.slug, true);
-          setQualities(q);
-          setHlsUrl(url);
-        } else if (isMember && memberShow) {
-          const identifier = memberShow.identifier || memberShow.slug || memberShow.url_key;
-          const showId = memberShow.showid || memberShow.show_id || null;
-          if (memberShow.is_group || memberShow.url_key === "jkt48-official") {
-            const newToken = await generateStreamToken(identifier, true);
-            setStreamToken(newToken);
-            const { url, qualities: q } = await getStreamURLSrv2(newToken, identifier, true);
-            setQualities(q);
-            setMemberHlsUrl(url);
-          } else if (showId) {
-            const newToken = await generateStreamToken(String(showId), false);
-            setStreamToken(newToken);
-            const { url, qualities: q } = await getStreamURLSrv2(newToken, String(showId), false);
-            setQualities(q);
-            setMemberHlsUrl(url);
-          }
-        }
-      } catch {
-        // silent fail
-      }
-    };
-
-    srv2RefreshTimer.current = setInterval(refreshSrv2, 30_000);
-
-    return () => {
-      if (srv2RefreshTimer.current) {
-        clearInterval(srv2RefreshTimer.current);
-        srv2RefreshTimer.current = null;
-      }
-    };
-  }, [activeServer, loading, error, isIdn, isMember, idnShow, memberShow]); // eslint-disable-line
-
   const handleLogout = () => {
     localStorage.removeItem("stream_verification");
-    setIsVerified(false);
-    setShowVerification(true);
-    setIdnShow(null);
-    setHlsUrl("");
-    setQualities([]);
-    setStreamToken("");
-    setAccessSource(null);
+    setIsVerified(false); setShowVerification(true);
+    setIdnShow(null); setHlsUrl(""); setQualities([]);
+    setStreamToken(""); setAccessSource(null);
     setVerifData({ email: "", code: "" });
   };
 
@@ -1294,65 +1137,48 @@ function LiveStream2() {
     setLoginLoading(true); setLoginError("");
     try {
       const res = await fetch(`${API_BASE}/auth/login?apikey=${API_KEY}`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
+        method: "POST", headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ login: loginForm.login.toLowerCase().trim(), password: loginForm.password }),
       });
       const data = await res.json();
       if (!data.status) { setLoginError(data.message || "Login gagal"); setLoginLoading(false); return; }
-
       const loginData = {
-        isLoggedIn: true,
-        token: data.data.session?.access_token,
-        sessionId: data.data.session?.id,
-        expiresAt: data.data.session?.expires_at,
-        user: data.data.user,
-        loginAt: new Date().toISOString(),
+        isLoggedIn: true, token: data.data.session?.access_token,
+        sessionId: data.data.session?.id, expiresAt: data.data.session?.expires_at,
+        user: data.data.user, loginAt: new Date().toISOString(),
       };
       sessionStorage.setItem("userLogin", JSON.stringify(loginData));
-
       const uid = data.data.user?.user_id;
       const token = data.data.session?.access_token;
       const slug = playbackId || "";
-
       try {
-        const ticketRes = await fetch(
-          `${TICKETS_API}/user/${uid}/show/${encodeURIComponent(slug)}?apikey=${API_KEY}`
-        );
+        const ticketRes = await fetch(`${TICKETS_API}/user/${uid}/show/${encodeURIComponent(slug)}?apikey=${API_KEY}`);
         if (ticketRes.ok) {
           const ticketData = await ticketRes.json();
           if (ticketData.has_ticket === true) {
-            setAccessSource("ticket");
-            setIsVerified(true);
-            setShowVerification(false);
-            setLoginLoading(false);
-            await loadIdnStream("1");
-            return;
+            setAccessSource("ticket"); setIsVerified(true); setShowVerification(false);
+            setLoginLoading(false); await loadIdnStream("1"); return;
           }
         }
       } catch {}
-
       const profileRes = await fetch(`${API_BASE}/profile/${uid}?apikey=${API_KEY}`, {
         headers: { Authorization: `Bearer ${token}` },
       });
       const profileData = await profileRes.json();
       if (profileData.status && profileData.data?.is_active && profileData.data?.membership_type !== "free") {
-        setAccessSource("membership");
-        setIsVerified(true);
-        setShowVerification(false);
-        setLoginLoading(false);
-        await loadIdnStream("1");
+        setAccessSource("membership"); setIsVerified(true); setShowVerification(false);
+        setLoginLoading(false); await loadIdnStream("1");
       } else {
-        setLoginError("Akun ini tidak memiliki tiket atau membership aktif untuk show ini. Gunakan kode verifikasi.");
+        setLoginError("Akun ini tidak memiliki tiket atau membership aktif. Gunakan kode verifikasi.");
         setLoginLoading(false);
       }
     } catch { setLoginError("Gagal terhubung ke server. Coba lagi."); setLoginLoading(false); }
   };
 
-  const showTitle = isIdn
-    ? (idnShow?.title || "Live Stream JKT48")
-    : (memberShow?.name || "Live Member JKT48");
+  const showTitle = isIdn ? (idnShow?.title || "Live Stream JKT48") : (memberShow?.name || "Live Member JKT48");
+  const currentHlsUrl = isIdn ? hlsUrl : memberHlsUrl;
 
+  // ── Render states ─────────────────────────────────────────────────────────
   if (isIdn && membershipLoading) {
     return (
       <div className="min-h-screen rounded-2xl border border-gray-200 bg-white dark:border-gray-800 dark:bg-white/[0.03] flex items-center justify-center">
@@ -1377,22 +1203,16 @@ function LiveStream2() {
             <h3 className="text-2xl font-bold text-gray-800 dark:text-white/90 mb-1.5">Akses IDN Live+</h3>
             <p className="text-sm text-gray-500 dark:text-gray-400">Login untuk cek tiket/membership, atau gunakan kode verifikasi</p>
           </div>
-
           <div className="flex gap-1 p-1 rounded-xl bg-gray-100 dark:bg-gray-800 mb-5">
-            <button
-              onClick={() => { setAccessTab("login"); setLoginError(""); }}
-              className={`flex-1 py-2 rounded-lg text-xs font-bold transition-all cursor-pointer border-0 ${accessTab === "login" ? "bg-white dark:bg-gray-700 text-gray-900 dark:text-white shadow-sm" : "bg-transparent text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-300"}`}
-            >
-              🔑 Login Akun
-            </button>
-            <button
-              onClick={() => { setAccessTab("code"); setVerifyError(""); }}
-              className={`flex-1 py-2 rounded-lg text-xs font-bold transition-all cursor-pointer border-0 ${accessTab === "code" ? "bg-white dark:bg-gray-700 text-gray-900 dark:text-white shadow-sm" : "bg-transparent text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-300"}`}
-            >
-              🎟️ Kode Verifikasi
-            </button>
+            {(["login", "code"] as const).map((tab) => (
+              <button key={tab}
+                onClick={() => { setAccessTab(tab); setLoginError(""); setVerifyError(""); }}
+                className={`flex-1 py-2 rounded-lg text-xs font-bold transition-all cursor-pointer border-0 ${accessTab === tab ? "bg-white dark:bg-gray-700 text-gray-900 dark:text-white shadow-sm" : "bg-transparent text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-300"}`}
+              >
+                {tab === "login" ? "🔑 Login Akun" : "🎟️ Kode Verifikasi"}
+              </button>
+            ))}
           </div>
-
           {accessTab === "login" && (
             <div className="bg-gray-50 dark:bg-gray-800/50 rounded-2xl border border-gray-200 dark:border-gray-700 p-6 mb-4">
               <div className="flex items-start gap-2 px-3 py-2.5 rounded-xl bg-blue-50 dark:bg-blue-500/10 border border-blue-200 dark:border-blue-500/20 mb-4">
@@ -1414,7 +1234,7 @@ function LiveStream2() {
                 </div>
                 {loginError && (
                   <div className="flex items-center gap-2.5 px-4 py-3 rounded-xl bg-red-50 dark:bg-red-500/10 border border-red-200 dark:border-red-500/20 text-red-600 dark:text-red-400 text-xs font-medium">
-                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="flex-shrink-0"><circle cx="12" cy="12" r="10" /><line x1="12" y1="8" x2="12" y2="12" /><line x1="12" y1="16" x2="12.01" y2="16" /></svg>
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="flex-shrink-0"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>
                     {loginError}
                   </div>
                 )}
@@ -1422,10 +1242,8 @@ function LiveStream2() {
                   {loginLoading ? (<><div className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" />Memeriksa akses...</>) : (<><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><path d="M15 3h4a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2h-4"/><polyline points="10 17 15 12 10 7"/><line x1="15" y1="12" x2="3" y2="12"/></svg>Masuk & Cek Akses</>)}
                 </button>
               </form>
-              <p className="text-[11px] text-gray-400 dark:text-gray-500 text-center mt-3">Punya tiket show ini atau membership aktif? Login untuk akses otomatis.</p>
             </div>
           )}
-
           {accessTab === "code" && (
             <div className="bg-gray-50 dark:bg-gray-800/50 rounded-2xl border border-gray-200 dark:border-gray-700 p-6 mb-4">
               <form onSubmit={(e) => { e.preventDefault(); verifyAccess(); }} className="flex flex-col gap-4">
@@ -1439,27 +1257,28 @@ function LiveStream2() {
                 </div>
                 {verifyError && (
                   <div className="flex items-center gap-2.5 px-4 py-3 rounded-xl bg-red-50 dark:bg-red-500/10 border border-red-200 dark:border-red-500/20 text-red-600 dark:text-red-400 text-xs font-medium">
-                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="flex-shrink-0"><circle cx="12" cy="12" r="10" /><line x1="12" y1="8" x2="12" y2="12" /><line x1="12" y1="16" x2="12.01" y2="16" /></svg>
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="flex-shrink-0"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>
                     {verifyError}
                   </div>
                 )}
                 <button type="submit" disabled={verifying} className={`flex items-center justify-center gap-2 px-4 py-3.5 rounded-xl border-0 text-sm font-bold text-white transition-all duration-200 mt-1 ${verifying ? "bg-red-400 cursor-not-allowed" : "bg-red-500 hover:bg-red-600 cursor-pointer shadow-lg shadow-red-500/25 hover:shadow-red-500/40 hover:-translate-y-0.5"}`}>
-                  {verifying ? (<><div className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" />Memverifikasi...</>) : (<><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><polyline points="20 6 9 17 4 12" /></svg>Verifikasi Akses</>)}
+                  {verifying ? (<><div className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" />Memverifikasi...</>) : (<><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><polyline points="20 6 9 17 4 12"/></svg>Verifikasi Akses</>)}
                 </button>
               </form>
               <div className="mt-4 pt-4 border-t border-gray-200 dark:border-gray-700/50">
                 <p className="text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-2">Informasi</p>
                 <ul className="space-y-1">
                   {["Code verifikasi hanya dapat digunakan sekali", "IP address akan dicatat untuk keamanan", "Akses berlaku selama 5 jam", "Session tetap aktif saat refresh halaman"].map((info, i) => (
-                    <li key={i} className="flex items-start gap-2 text-xs text-gray-500 dark:text-gray-400"><span className="text-gray-300 dark:text-gray-600 mt-0.5">•</span>{info}</li>
+                    <li key={i} className="flex items-start gap-2 text-xs text-gray-500 dark:text-gray-400">
+                      <span className="text-gray-300 dark:text-gray-600 mt-0.5">•</span>{info}
+                    </li>
                   ))}
                 </ul>
               </div>
             </div>
           )}
-
           <button onClick={() => navigate(-1)} className="w-full py-3 rounded-xl border border-gray-200 dark:border-gray-700 bg-transparent text-gray-500 dark:text-gray-400 text-sm font-medium cursor-pointer hover:bg-gray-50 dark:hover:bg-gray-800/50 transition-colors flex items-center justify-center gap-1.5">
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="15 18 9 12 15 6" /></svg>
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="15 18 9 12 15 6"/></svg>
             Kembali
           </button>
         </div>
@@ -1485,13 +1304,15 @@ function LiveStream2() {
       <div className="min-h-screen rounded-2xl border border-gray-200 bg-white px-5 py-7 dark:border-gray-800 dark:bg-white/[0.03] xl:px-10 xl:py-12 flex items-center justify-center">
         <div className="text-center max-w-sm">
           <div className="w-14 h-14 rounded-2xl bg-red-50 dark:bg-red-500/10 border border-red-200 dark:border-red-500/20 flex items-center justify-center mx-auto mb-4">
-            <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round" className="text-red-500"><circle cx="12" cy="12" r="10" /><line x1="12" y1="8" x2="12" y2="12" /><line x1="12" y1="16" x2="12.01" y2="16" /></svg>
+            <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round" className="text-red-500"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>
           </div>
           <h3 className="text-lg font-bold text-gray-800 dark:text-white/90 mb-2">Terjadi Kesalahan</h3>
           <p className="text-sm text-gray-500 dark:text-gray-400 mb-6">{error}</p>
           <div className="flex gap-3 justify-center">
-            <button onClick={() => { setError(""); isIdn ? loadIdnStream(activeServer) : loadMemberStream(activeServer); }} className="px-5 py-2.5 rounded-xl border-0 bg-red-500 text-white text-sm font-bold cursor-pointer hover:bg-red-600 shadow-lg shadow-red-500/25 transition-all hover:-translate-y-0.5">Coba Lagi</button>
-            <button onClick={() => navigate(-1)} className="px-5 py-2.5 rounded-xl border border-gray-200 dark:border-gray-700 bg-transparent text-gray-600 dark:text-gray-400 text-sm font-semibold cursor-pointer hover:bg-gray-50 dark:hover:bg-gray-800/50 transition-colors">Kembali</button>
+            <button onClick={() => { setError(""); isIdn ? loadIdnStream(activeServer) : loadMemberStream(activeServer); }}
+              className="px-5 py-2.5 rounded-xl border-0 bg-red-500 text-white text-sm font-bold cursor-pointer hover:bg-red-600 shadow-lg shadow-red-500/25 transition-all hover:-translate-y-0.5">Coba Lagi</button>
+            <button onClick={() => navigate(-1)}
+              className="px-5 py-2.5 rounded-xl border border-gray-200 dark:border-gray-700 bg-transparent text-gray-600 dark:text-gray-400 text-sm font-semibold cursor-pointer hover:bg-gray-50 dark:hover:bg-gray-800/50 transition-colors">Kembali</button>
           </div>
         </div>
       </div>
@@ -1501,9 +1322,10 @@ function LiveStream2() {
   return (
     <div>
       <div className="rounded-2xl border border-gray-200 bg-white px-5 py-6 dark:border-gray-800 dark:bg-white/[0.03] xl:px-8 xl:py-7">
+        {/* Header badges */}
         <div className="flex items-center gap-2.5 mb-6 flex-wrap">
           <button onClick={() => navigate(-1)} className="flex items-center gap-1.5 px-3.5 py-2 rounded-xl border border-gray-200 dark:border-gray-700 bg-transparent text-gray-600 dark:text-gray-400 text-xs font-semibold cursor-pointer hover:bg-gray-50 dark:hover:bg-gray-800/50 transition-colors">
-            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="15 18 9 12 15 6" /></svg>
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="15 18 9 12 15 6"/></svg>
             Kembali
           </button>
           <div className="flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-red-500 text-white text-[11px] font-extrabold tracking-wide shadow-md shadow-red-500/30">
@@ -1514,7 +1336,7 @@ function LiveStream2() {
           {isMember && <span className="px-3 py-1.5 rounded-full bg-emerald-50 dark:bg-emerald-500/10 border border-emerald-200 dark:border-emerald-500/20 text-emerald-600 dark:text-emerald-400 text-[11px] font-bold">Member Live</span>}
           {isIdn && accessSource === "ticket" && (
             <span className="px-3 py-1.5 rounded-full bg-green-50 dark:bg-green-500/10 border border-green-200 dark:border-green-500/20 text-green-600 dark:text-green-400 text-[11px] font-bold flex items-center gap-1">
-              <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><polyline points="20 6 9 17 4 12" /></svg>
+              <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><polyline points="20 6 9 17 4 12"/></svg>
               Tiket Verified
             </span>
           )}
@@ -1533,28 +1355,13 @@ function LiveStream2() {
 
         <div className="grid grid-cols-1 xl:grid-cols-[1fr_360px] gap-6">
           <div className="flex flex-col gap-5">
-            {isIdn && hlsUrl ? (
+
+            {/* ── Player — tanpa quality panel ── */}
+            {currentHlsUrl ? (
               <HlsPlayer
-                src={hlsUrl}
+                src={currentHlsUrl}
                 title={showTitle}
-                qualities={qualities}
-                onQualityChange={handleQualityChange}
-                currentQuality={currentQuality}
-                qualityMode={qualityMode}
-                onModeChange={handleModeChange}
-                isIdn={true}
-                token={streamToken}
-              />
-            ) : isMember && memberHlsUrl ? (
-              <HlsPlayer
-                src={memberHlsUrl}
-                title={showTitle}
-                qualities={qualities}
-                onQualityChange={handleQualityChange}
-                currentQuality={currentQuality}
-                qualityMode={qualityMode}
-                onModeChange={handleModeChange}
-                isIdn={!!(memberShow?.is_group || memberShow?.url_key === "jkt48-official")}
+                isIdn={isIdn || !!(memberShow?.is_group || memberShow?.url_key === "jkt48-official")}
                 token={streamToken}
               />
             ) : (
@@ -1563,76 +1370,59 @@ function LiveStream2() {
               </div>
             )}
 
-            {/* ── Detail Show IDN ── */}
+            {/* ── Detail IDN Show + Quality + Server ── */}
             {isIdn && idnShow && (
               <div className="rounded-2xl border border-gray-200 dark:border-gray-800 bg-gray-50 dark:bg-gray-800/30 p-5">
                 <p className="text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-3">Detail Show</p>
-                <div className="flex gap-4 items-start mb-4">
-                  {idnShow.image_url && <img src={idnShow.image_url} alt={idnShow.title} className="w-16 h-16 rounded-xl object-cover flex-shrink-0 border border-gray-200 dark:border-gray-700" onError={(e) => { (e.target as HTMLImageElement).style.display = "none"; }} />}
+                <div className="flex gap-4 items-start">
+                  {idnShow.image_url && (
+                    <img src={idnShow.image_url} alt={idnShow.title}
+                      className="w-16 h-16 rounded-xl object-cover flex-shrink-0 border border-gray-200 dark:border-gray-700"
+                      onError={(e) => { (e.target as HTMLImageElement).style.display = "none"; }}
+                    />
+                  )}
                   <div className="flex-1 min-w-0">
                     <h3 className="text-base font-bold text-gray-800 dark:text-white/90 mb-2">{idnShow.title}</h3>
-                    <div className="flex flex-wrap gap-3 text-xs text-gray-500 dark:text-gray-400 mb-2">
-                      <span className="flex items-center gap-1"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>{idnShow.view_count?.toLocaleString() || 0}</span>
+                    <div className="flex flex-wrap gap-3 text-xs text-gray-500 dark:text-gray-400 mb-1">
+                      <span className="flex items-center gap-1">
+                        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>
+                        {idnShow.view_count?.toLocaleString() || 0}
+                      </span>
                       {idnShow.showId && <span>#{idnShow.showId}</span>}
                     </div>
-                    {idnShow.idnliveplus?.description && <p className="text-xs leading-relaxed text-gray-500 dark:text-gray-400 m-0 whitespace-pre-line">{idnShow.idnliveplus.description}</p>}
+                    {idnShow.idnliveplus?.description && (
+                      <p className="text-xs leading-relaxed text-gray-500 dark:text-gray-400 m-0 whitespace-pre-line">{idnShow.idnliveplus.description}</p>
+                    )}
                   </div>
                 </div>
 
-                {/* ── Server Switcher ── */}
-                <div className="border-t border-gray-200 dark:border-gray-700 pt-4">
-                  <p className="text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-2.5">Pilih Server</p>
-                  <div className="flex gap-2">
-                    <button
-                      onClick={() => handleSwitchServer("1")}
-                      disabled={serverLoading}
-                      className={`flex items-center gap-2 px-4 py-2.5 rounded-xl border text-xs font-bold transition-all cursor-pointer ${
-                        activeServer === "1"
-                          ? "bg-blue-500 border-blue-500 text-white shadow-md shadow-blue-500/25"
-                          : "bg-transparent border-gray-200 dark:border-gray-700 text-gray-600 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-800/50"
-                      } ${serverLoading ? "opacity-60 cursor-not-allowed" : ""}`}
-                    >
-                      {serverLoading && activeServer === "1" ? (
-                        <div className="w-3 h-3 border-2 border-white/30 border-t-white rounded-full animate-spin" />
-                      ) : (
-                        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
-                          <circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/>
-                        </svg>
-                      )}
-                      Server 1
-                      {activeServer === "1" && <span className="text-[9px] opacity-75 font-medium">· Aktif</span>}
-                    </button>
-                    <button
-                      onClick={() => handleSwitchServer("2")}
-                      disabled={serverLoading}
-                      className={`flex items-center gap-2 px-4 py-2.5 rounded-xl border text-xs font-bold transition-all cursor-pointer ${
-                        activeServer === "2"
-                          ? "bg-blue-500 border-blue-500 text-white shadow-md shadow-blue-500/25"
-                          : "bg-transparent border-gray-200 dark:border-gray-700 text-gray-600 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-800/50"
-                      } ${serverLoading ? "opacity-60 cursor-not-allowed" : ""}`}
-                    >
-                      {serverLoading && activeServer === "2" ? (
-                        <div className="w-3 h-3 border-2 border-white/30 border-t-white rounded-full animate-spin" />
-                      ) : (
-                        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
-                          <rect x="2" y="2" width="20" height="8" rx="2" ry="2"/><rect x="2" y="14" width="20" height="8" rx="2" ry="2"/><line x1="6" y1="6" x2="6.01" y2="6"/><line x1="6" y1="18" x2="6.01" y2="18"/>
-                        </svg>
-                      )}
-                      Server 2
-                      {activeServer === "2" && <span className="text-[9px] opacity-75 font-medium">· Aktif</span>}
-                    </button>
-                  </div>
-                  <p className="text-[10px] text-gray-400 dark:text-gray-500 mt-2">Ganti server jika stream buffering atau tidak bisa diputar.</p>
-                </div>
+                {/* Quality selector */}
+                <QualityPanel
+                  qualities={qualities}
+                  qualityMode={qualityMode}
+                  currentQuality={currentQuality}
+                  onModeChange={handleModeChange}
+                  onQualityChange={handleQualityChange}
+                />
+
+                {/* Server switcher */}
+                <ServerSwitcher
+                  activeServer={activeServer}
+                  serverLoading={serverLoading}
+                  onSwitch={handleSwitchServer}
+                />
               </div>
             )}
 
-            {/* ── Detail Member ── */}
+            {/* ── Detail Member + Quality + Server ── */}
             {isMember && memberShow && (
               <div className="rounded-2xl border border-gray-200 dark:border-gray-800 bg-gray-50 dark:bg-gray-800/30 p-5">
                 <p className="text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-3">Detail Member</p>
-                <div className="flex gap-4 items-center mb-4">
-                  <img src={memberShow.img_alt || memberShow.img} alt={memberShow.name} className="w-14 h-14 rounded-full object-cover flex-shrink-0 border-2 border-gray-200 dark:border-gray-700" onError={(e) => { (e.target as HTMLImageElement).style.display = "none"; }} />
+                <div className="flex gap-4 items-center">
+                  <img src={memberShow.img_alt || memberShow.img} alt={memberShow.name}
+                    className="w-14 h-14 rounded-full object-cover flex-shrink-0 border-2 border-gray-200 dark:border-gray-700"
+                    onError={(e) => { (e.target as HTMLImageElement).style.display = "none"; }}
+                  />
                   <div>
                     <h3 className="text-base font-bold text-gray-800 dark:text-white/90 mb-2">{memberShow.name}</h3>
                     <div className="flex gap-2 flex-wrap items-center">
@@ -1642,54 +1432,25 @@ function LiveStream2() {
                   </div>
                 </div>
 
-                {/* ── Server Switcher (Member) ── */}
-                <div className="border-t border-gray-200 dark:border-gray-700 pt-4">
-                  <p className="text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-2.5">Pilih Server</p>
-                  <div className="flex gap-2">
-                    <button
-                      onClick={() => handleSwitchServer("1")}
-                      disabled={serverLoading}
-                      className={`flex items-center gap-2 px-4 py-2.5 rounded-xl border text-xs font-bold transition-all cursor-pointer ${
-                        activeServer === "1"
-                          ? "bg-blue-500 border-blue-500 text-white shadow-md shadow-blue-500/25"
-                          : "bg-transparent border-gray-200 dark:border-gray-700 text-gray-600 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-800/50"
-                      } ${serverLoading ? "opacity-60 cursor-not-allowed" : ""}`}
-                    >
-                      {serverLoading && activeServer === "1" ? (
-                        <div className="w-3 h-3 border-2 border-white/30 border-t-white rounded-full animate-spin" />
-                      ) : (
-                        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
-                          <circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/>
-                        </svg>
-                      )}
-                      Server 1
-                      {activeServer === "1" && <span className="text-[9px] opacity-75 font-medium">· Aktif</span>}
-                    </button>
-                    <button
-                      onClick={() => handleSwitchServer("2")}
-                      disabled={serverLoading}
-                      className={`flex items-center gap-2 px-4 py-2.5 rounded-xl border text-xs font-bold transition-all cursor-pointer ${
-                        activeServer === "2"
-                          ? "bg-blue-500 border-blue-500 text-white shadow-md shadow-blue-500/25"
-                          : "bg-transparent border-gray-200 dark:border-gray-700 text-gray-600 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-800/50"
-                      } ${serverLoading ? "opacity-60 cursor-not-allowed" : ""}`}
-                    >
-                      {serverLoading && activeServer === "2" ? (
-                        <div className="w-3 h-3 border-2 border-white/30 border-t-white rounded-full animate-spin" />
-                      ) : (
-                        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
-                          <rect x="2" y="2" width="20" height="8" rx="2" ry="2"/><rect x="2" y="14" width="20" height="8" rx="2" ry="2"/><line x1="6" y1="6" x2="6.01" y2="6"/><line x1="6" y1="18" x2="6.01" y2="18"/>
-                        </svg>
-                      )}
-                      Server 2
-                      {activeServer === "2" && <span className="text-[9px] opacity-75 font-medium">· Aktif</span>}
-                    </button>
-                  </div>
-                  <p className="text-[10px] text-gray-400 dark:text-gray-500 mt-2">Ganti server jika stream buffering atau tidak bisa diputar.</p>
-                </div>
+                {/* Quality selector */}
+                <QualityPanel
+                  qualities={qualities}
+                  qualityMode={qualityMode}
+                  currentQuality={currentQuality}
+                  onModeChange={handleModeChange}
+                  onQualityChange={handleQualityChange}
+                />
+
+                {/* Server switcher */}
+                <ServerSwitcher
+                  activeServer={activeServer}
+                  serverLoading={serverLoading}
+                  onSwitch={handleSwitchServer}
+                />
               </div>
             )}
 
+            {/* ── Lineup ── */}
             {isIdn && members.length > 0 && (
               <div className="rounded-2xl border border-gray-200 dark:border-gray-800 bg-gray-50 dark:bg-gray-800/30 p-5">
                 <p className="text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-4">Lineup Show · {members.length} Member</p>
@@ -1697,7 +1458,10 @@ function LiveStream2() {
                   {members.map((m: any) => (
                     <div key={m.id} className="text-center group">
                       <div className="relative mx-auto w-12 h-12 mb-1.5">
-                        <img src={m.img} alt={m.name} className="w-12 h-12 rounded-full object-cover border-2 border-gray-200 dark:border-gray-700 group-hover:border-red-400 transition-colors" onError={(e) => { (e.target as HTMLImageElement).style.display = "none"; }} />
+                        <img src={m.img} alt={m.name}
+                          className="w-12 h-12 rounded-full object-cover border-2 border-gray-200 dark:border-gray-700 group-hover:border-red-400 transition-colors"
+                          onError={(e) => { (e.target as HTMLImageElement).style.display = "none"; }}
+                        />
                       </div>
                       <p className="m-0 text-[10px] font-medium text-gray-500 dark:text-gray-400 overflow-hidden text-ellipsis whitespace-nowrap leading-tight">{m.name}</p>
                     </div>
@@ -1709,13 +1473,21 @@ function LiveStream2() {
             <p className="text-center text-[10px] font-semibold text-gray-300 dark:text-gray-700 uppercase tracking-widest pb-1">Powered by JKT48Connect</p>
           </div>
 
+          {/* ── Chat sidebar ── */}
           <div className="xl:sticky xl:top-4 xl:self-start">
             <div className="rounded-2xl border border-gray-200 dark:border-gray-800 bg-white dark:bg-white/[0.02] overflow-hidden" style={{ height: "580px" }}>
               <div className="h-full flex flex-col">
                 {isIdn ? (
-                  <IdnChatPanel messages={chatMessages} chatInput={chatInput} setChatInput={setChatInput} chatUser={chatUser} isChatLoggingIn={isChatLoggingIn} onSend={handleSendMessage} chatEndRef={chatEndRef} navigate={navigate} />
+                  <IdnChatPanel
+                    messages={chatMessages} chatInput={chatInput} setChatInput={setChatInput}
+                    chatUser={chatUser} isChatLoggingIn={isChatLoggingIn}
+                    onSend={handleSendMessage} chatEndRef={chatEndRef} navigate={navigate}
+                  />
                 ) : (
-                  <MemberChatPanel comments={srComments} loading={srLoading} error={srError} lastPoll={srLastPoll} retry={srRetry} />
+                  <MemberChatPanel
+                    comments={srComments} loading={srLoading} error={srError}
+                    lastPoll={srLastPoll} retry={srRetry}
+                  />
                 )}
               </div>
             </div>
