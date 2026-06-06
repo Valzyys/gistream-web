@@ -367,7 +367,8 @@ function HlsPlayer({
       nudgeOffset: 0.3,
       nudgeMaxRetry: 5,
       // Inject custom loader jika tokenRef tersedia (Server 2)
-      ...(tokenRef ? { loader: createAuthLoader(tokenRef) } : {}),
+      // Cast ke any karena TypeScript tidak bisa verify class yang di-extend secara dinamis
+      ...(tokenRef ? { loader: createAuthLoader(tokenRef) as any } : {}),
     });
 
     const attach = (hlsSrc: string) => {
