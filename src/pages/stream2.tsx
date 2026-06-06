@@ -1,4 +1,3 @@
-
 import { useEffect, useState, useRef, useCallback } from "react";
 import { useParams, useNavigate } from "react-router";
 import Hls from "hls.js";
@@ -274,22 +273,48 @@ function useShowroomComments(roomId: number | null) {
   return { comments, loading, error, lastPoll, retry: fetchComments };
 }
 
+// ── Custom HLS Loader yang inject x-api-token ke semua request srv2 ───────────
+// Menggunakan tokenRef (MutableRefObject) agar selalu baca token terbaru
+// tanpa perlu re-mount player saat token di-refresh background.
+function createAuthLoader(tokenRef: React.MutableRefObject<string>) {
+  const DefaultLoader = Hls.DefaultConfig.loader as any;
+
+  return class AuthLoader extends DefaultLoader {
+    constructor(config: any) {
+      super(config);
+      const originalLoad = this.load.bind(this);
+      this.load = (context: any, loaderConfig: any, callbacks: any) => {
+        if (
+          context?.url &&
+          (context.url.includes("srv2.jkt48connect.com") ||
+            context.url.includes("srv2."))
+        ) {
+          const currentToken = tokenRef.current;
+          if (currentToken) {
+            context.headers = {
+              ...(context.headers || {}),
+              "x-api-token": currentToken,
+            };
+          }
+        }
+        originalLoad(context, loaderConfig, callbacks);
+      };
+    }
+  };
+}
+
 // ── HLS Player ────────────────────────────────────────────────────────────────
-// Strategi srv2:
-//   - `src` prop hanya berubah saat: initial load, server switch, quality change manual
-//   - Background refresh TIDAK mengubah `src` prop → komponen TIDAK re-mount
-//   - Saat HLS error fatal (404 segment), player otomatis pakai `pendingUrlRef`
-//     yang sudah di-pre-fetch oleh parent di background
 function HlsPlayer({
-  src, title, isIdn, pendingUrlRef, onFatalError,
+  src, title, isIdn, pendingUrlRef, onFatalError, tokenRef,
 }: {
   src: string;
   title: string;
   isIdn: boolean;
-  // Ref berisi URL baru yang sudah di-fetch background; dipakai saat fatal error
   pendingUrlRef?: React.MutableRefObject<string>;
-  // Dipanggil saat fatal error dan tidak ada pendingUrl — parent perlu fetch ulang
   onFatalError?: () => void;
+  // Ref ke token aktif — dipakai oleh AuthLoader untuk inject header
+  // Menggunakan ref agar token terbaru selalu dipakai tanpa re-mount player
+  tokenRef?: React.MutableRefObject<string>;
 }) {
   const videoRef   = useRef<HTMLVideoElement>(null);
   const hlsRef     = useRef<Hls | null>(null);
@@ -341,6 +366,8 @@ function HlsPlayer({
       abrEwmaSlowLive: 9.0,
       nudgeOffset: 0.3,
       nudgeMaxRetry: 5,
+      // Inject custom loader jika tokenRef tersedia (Server 2)
+      ...(tokenRef ? { loader: createAuthLoader(tokenRef) } : {}),
     });
 
     const attach = (hlsSrc: string) => {
@@ -353,11 +380,8 @@ function HlsPlayer({
         if (!data.fatal) return;
 
         if (data.type === Hls.ErrorTypes.NETWORK_ERROR) {
-          // Cek apakah ada URL baru yang sudah di-prefetch di background
           const pending = pendingUrlRef?.current;
           if (pending && pending !== hlsSrc) {
-            // Swap seamless: destroy instance lama, attach ke URL baru
-            // URL baru sudah fresh dari background fetch — tidak akan 404
             destroyHls();
             retryRef.current = setTimeout(() => {
               if (!videoRef.current) return;
@@ -365,14 +389,12 @@ function HlsPlayer({
               attach(pending);
             }, 300);
           } else {
-            // Tidak ada URL baru — minta parent fetch ulang, lalu retry biasa
             onFatalError?.();
             hls.startLoad();
           }
         } else if (data.type === Hls.ErrorTypes.MEDIA_ERROR) {
           hls.recoverMediaError();
         } else {
-          // Fatal non-network: pakai pending jika ada, otherwise callback
           const pending = pendingUrlRef?.current;
           destroyHls();
           retryRef.current = setTimeout(() => {
@@ -387,8 +409,6 @@ function HlsPlayer({
 
     attach(src);
     return destroyHls;
-  // src berubah hanya saat: initial, server switch, quality change
-  // pendingUrlRef adalah ref — tidak trigger effect ini
   }, [src, destroyHls]); // eslint-disable-line
 
   return (
@@ -732,7 +752,7 @@ function LiveStream2() {
   const [qualityMode,       setQualityMode]       = useState<"auto" | "manual">("auto");
   const [currentQuality,    setCurrentQuality]    = useState<QualityOption | null>(null);
   const [hlsUrl,            setHlsUrl]            = useState("");
-  const [, setStreamToken] = useState("");
+  const [streamToken,       setStreamToken]       = useState("");
   const [memberShow,        setMemberShow]        = useState<any>(null);
   const [memberHlsUrl,      setMemberHlsUrl]      = useState("");
   const [memberRoomId,      setMemberRoomId]      = useState<number | null>(null);
@@ -769,9 +789,12 @@ function LiveStream2() {
   const isRefreshingRef   = useRef(false);
 
   // ── pendingUrlRef: URL baru hasil background fetch ─────────────────────────
-  // HlsPlayer membaca ini saat terjadi fatal error, lalu swap seamless.
-  // Tidak trigger re-render / re-mount HlsPlayer.
   const pendingUrlRef = useRef<string>("");
+
+  // ── tokenRef: selalu berisi token terbaru untuk dipakai AuthLoader ─────────
+  // Ref ini di-update setiap kali streamToken state berubah.
+  // HlsPlayer/AuthLoader membaca ref ini langsung — tidak perlu re-mount player.
+  const tokenRef = useRef<string>("");
 
   // Keep refs in sync
   useEffect(() => { activeServerRef.current = activeServer; }, [activeServer]);
@@ -779,6 +802,8 @@ function LiveStream2() {
   useEffect(() => { memberShowRef.current = memberShow; }, [memberShow]);
   useEffect(() => { qualityModeRef.current = qualityMode; }, [qualityMode]);
   useEffect(() => { currentQualityRef.current = currentQuality; }, [currentQuality]);
+  // Sync tokenRef setiap kali streamToken state berubah
+  useEffect(() => { tokenRef.current = streamToken; }, [streamToken]);
 
   const { comments: srComments, loading: srLoading, error: srError, lastPoll: srLastPoll, retry: srRetry } =
     useShowroomComments(isMember ? memberRoomId : null);
@@ -901,9 +926,6 @@ function LiveStream2() {
   }, [isIdn]);
 
   // ── Srv2 silent background pre-fetch ─────────────────────────────────────
-  // Hanya fetch + simpan ke pendingUrlRef. TIDAK menyentuh state apapun.
-  // TIDAK memanggil hls.loadSource(). TIDAK menyebabkan re-render.
-  // HlsPlayer akan otomatis pakai pendingUrlRef saat segment 404/fatal error.
   const doSrv2Prefetch = useCallback(async () => {
     if (activeServerRef.current !== "2") return;
     if (isRefreshingRef.current) return;
@@ -914,13 +936,10 @@ function LiveStream2() {
       if (!params) return;
       const { slugOrId, isSlug } = params;
 
-      // 1. Generate fresh token
       const newToken = await generateStreamToken(slugOrId, isSlug);
 
-      // 2. Fetch fresh M3U8 playlist
       const { url: autoUrl, qualities: newQualities } = await getStreamURLSrv2(newToken, slugOrId, isSlug);
 
-      // 3. Tentukan URL target sesuai quality mode saat ini
       const mode = qualityModeRef.current;
       const selectedQuality = currentQualityRef.current;
       let targetUrl = autoUrl;
@@ -929,7 +948,6 @@ function LiveStream2() {
         const matched = newQualities.find(q => q.quality === selectedQuality.quality);
         targetUrl = matched ? matched.manual_url : autoUrl;
         if (!matched) {
-          // Quality tidak tersedia lagi — update UI saja, jangan ganggu player
           setQualityMode("auto");
           setCurrentQuality(null);
           qualityModeRef.current = "auto";
@@ -937,23 +955,21 @@ function LiveStream2() {
         }
       }
 
-      // 4. Simpan URL baru ke ref — HlsPlayer baca ini saat terjadi error/404
-      //    TIDAK update hlsUrl/memberHlsUrl state → player TIDAK re-mount
       pendingUrlRef.current = targetUrl;
 
-      // 5. Update qualities UI saja (tidak menyentuh player)
-      setQualities(newQualities);
+      // Update token state → otomatis sync ke tokenRef via useEffect
+      // AuthLoader akan membaca tokenRef terbaru pada request berikutnya
       setStreamToken(newToken);
+      setQualities(newQualities);
 
     } catch {
-      // Silent fail — tick berikutnya retry
+      // Silent fail
     } finally {
       isRefreshingRef.current = false;
     }
   }, [isIdn, resolveSrv2Params]);
 
   // ── Callback: dipanggil HlsPlayer saat fatal error tanpa pending URL ──────
-  // Langsung fetch URL baru dan simpan ke pendingUrlRef
   const handleSrv2FatalError = useCallback(async () => {
     if (activeServerRef.current !== "2") return;
     try {
@@ -985,8 +1001,6 @@ function LiveStream2() {
 
   const startSrv2Timer = useCallback(() => {
     stopSrv2Timer();
-    // Prefetch pertama setelah 15 detik (bukan langsung — biarkan player warm up dulu)
-    // lalu setiap 20 detik berikutnya
     srv2TimerRef.current = setInterval(doSrv2Prefetch, 20_000);
   }, [doSrv2Prefetch, stopSrv2Timer]);
 
@@ -1015,6 +1029,7 @@ function LiveStream2() {
 
       const token = await generateStreamToken(show.slug, true);
       setStreamToken(token);
+      tokenRef.current = token;
 
       if (server === "2") {
         const { url, qualities: q } = await getStreamURLSrv2(token, show.slug, true);
@@ -1072,6 +1087,7 @@ function LiveStream2() {
         try {
           const token = await generateStreamToken(identifier, true);
           setStreamToken(token);
+          tokenRef.current = token;
           const { url, qualities: q } = await getUrl(token, identifier, true);
           setQualities(q); setMemberHlsUrl(url);
           if (server === "2") pendingUrlRef.current = "";
@@ -1086,6 +1102,7 @@ function LiveStream2() {
           try {
             const token = await generateStreamToken(String(showId), false);
             setStreamToken(token);
+            tokenRef.current = token;
             const { url, qualities: q } = await getUrl(token, String(showId), false);
             setQualities(q); setMemberHlsUrl(url);
             if (server === "2") pendingUrlRef.current = "";
@@ -1131,6 +1148,7 @@ function LiveStream2() {
         const show = idnShowRef.current;
         const token = await generateStreamToken(show.slug, true);
         setStreamToken(token);
+        tokenRef.current = token;
         const { url, qualities: q } = await getUrl(token, show.slug, true);
         setHlsUrl(url); setQualities(q);
       } else if (isMember && memberShowRef.current) {
@@ -1140,11 +1158,13 @@ function LiveStream2() {
         if (show.is_group || show.url_key === "jkt48-official") {
           const token = await generateStreamToken(identifier, true);
           setStreamToken(token);
+          tokenRef.current = token;
           const { url, qualities: q } = await getUrl(token, identifier, true);
           setMemberHlsUrl(url); setQualities(q);
         } else if (showId) {
           const token = await generateStreamToken(String(showId), false);
           setStreamToken(token);
+          tokenRef.current = token;
           const { url, qualities: q } = await getUrl(token, String(showId), false);
           setMemberHlsUrl(url); setQualities(q);
         }
@@ -1181,6 +1201,7 @@ function LiveStream2() {
           if (isIdn && idnShowRef.current?.slug) {
             const token = await generateStreamToken(idnShowRef.current.slug, true);
             setStreamToken(token);
+            tokenRef.current = token;
             const { url, qualities: q } = await getStreamURL(token, idnShowRef.current.slug, true);
             setHlsUrl(url); setQualities(q);
           } else if (isMember && memberShowRef.current) {
@@ -1190,11 +1211,13 @@ function LiveStream2() {
             if (show.is_group || show.url_key === "jkt48-official") {
               const token = await generateStreamToken(identifier, true);
               setStreamToken(token);
+              tokenRef.current = token;
               const { url, qualities: q } = await getStreamURL(token, identifier, true);
               setMemberHlsUrl(url); setQualities(q);
             } else if (showId) {
               const token = await generateStreamToken(String(showId), false);
               setStreamToken(token);
+              tokenRef.current = token;
               const { url, qualities: q } = await getStreamURL(token, String(showId), false);
               setMemberHlsUrl(url); setQualities(q);
             }
@@ -1305,7 +1328,8 @@ function LiveStream2() {
     localStorage.removeItem("stream_verification");
     setIsVerified(false); setShowVerification(true);
     setIdnShow(null); setHlsUrl(""); setQualities([]);
-    setStreamToken(""); setAccessSource(null);
+    setStreamToken(""); tokenRef.current = "";
+    setAccessSource(null);
     pendingUrlRef.current = "";
     setVerifData({ email: "", code: "" });
   };
@@ -1549,6 +1573,7 @@ function LiveStream2() {
                 isIdn={isIdn || !!(memberShow?.is_group || memberShow?.url_key === "jkt48-official")}
                 pendingUrlRef={activeServer === "2" ? pendingUrlRef : undefined}
                 onFatalError={activeServer === "2" ? handleSrv2FatalError : undefined}
+                tokenRef={activeServer === "2" ? tokenRef : undefined}
               />
             ) : (
               <div className="aspect-video bg-gray-100 dark:bg-gray-800/50 rounded-2xl flex items-center justify-center border border-gray-200 dark:border-gray-700">
