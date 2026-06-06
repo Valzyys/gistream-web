@@ -284,18 +284,12 @@ function createAuthLoader(tokenRef: React.MutableRefObject<string>) {
       super(config);
       const originalLoad = this.load.bind(this);
       this.load = (context: any, loaderConfig: any, callbacks: any) => {
-        if (
-          context?.url &&
-          (context.url.includes("srv2.jkt48connect.com") ||
-            context.url.includes("srv2."))
-        ) {
-          const currentToken = tokenRef.current;
-          if (currentToken) {
-            context.headers = {
-              ...(context.headers || {}),
-              "x-api-token": currentToken,
-            };
-          }
+        const currentToken = tokenRef.current;
+        if (currentToken && context?.url) {
+          context.headers = {
+            ...(context.headers || {}),
+            "x-api-token": currentToken,
+          };
         }
         originalLoad(context, loaderConfig, callbacks);
       };
@@ -312,8 +306,8 @@ function HlsPlayer({
   isIdn: boolean;
   pendingUrlRef?: React.MutableRefObject<string>;
   onFatalError?: () => void;
-  // Ref ke token aktif — dipakai oleh AuthLoader untuk inject header
-  // Menggunakan ref agar token terbaru selalu dipakai tanpa re-mount player
+  // Ref ke token aktif — dipakai AuthLoader untuk inject x-api-token ke SEMUA
+  // segment & playlist request (baik Server 1 maupun Server 2 butuh header ini)
   tokenRef?: React.MutableRefObject<string>;
 }) {
   const videoRef   = useRef<HTMLVideoElement>(null);
@@ -1574,7 +1568,7 @@ function LiveStream2() {
                 isIdn={isIdn || !!(memberShow?.is_group || memberShow?.url_key === "jkt48-official")}
                 pendingUrlRef={activeServer === "2" ? pendingUrlRef : undefined}
                 onFatalError={activeServer === "2" ? handleSrv2FatalError : undefined}
-                tokenRef={activeServer === "2" ? tokenRef : undefined}
+                tokenRef={tokenRef}
               />
             ) : (
               <div className="aspect-video bg-gray-100 dark:bg-gray-800/50 rounded-2xl flex items-center justify-center border border-gray-200 dark:border-gray-700">
