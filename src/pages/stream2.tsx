@@ -319,20 +319,28 @@ const HlsPlayer = React.forwardRef<HlsPlayerHandle, {
     if (hlsRef.current)   { hlsRef.current.destroy(); hlsRef.current = null; }
   }, []);
 
-  // ── Hot-swap URL tanpa destroy HLS instance ───────────────────────────────
-  // stopLoad() → loadSource() → startLoad(-1) = live edge
-  // Token terbaru sudah di-update di tokenRef sebelum dipanggil,
-  // jadi AuthLoader otomatis pakai token baru pada request manifest/segment.
+  // ── Hot-swap URL tanpa destroy HLS instance & tanpa canceled requests ────
+  // JANGAN pakai stopLoad() — itu yang menyebabkan request in-flight jadi
+  // "canceled" di DevTools. Cukup loadSource() langsung; HLS.js akan
+  // menyelesaikan request yang sedang jalan lalu beralih ke manifest baru.
+  // startLoad(-1) memastikan playback lanjut dari live edge.
+  // isSwappingRef mencegah 2 swap berjalan bersamaan (debounce manual).
+  const isSwappingRef = useRef(false);
   useImperativeHandle(ref, () => ({
     hotSwapUrl(newUrl: string) {
       const hls = hlsRef.current;
       if (!hls || !newUrl) return;
+      if (isSwappingRef.current) return; // sudah ada swap in-progress, skip
+      isSwappingRef.current = true;
       try {
-        hls.stopLoad();
+        // Langsung loadSource tanpa stopLoad — tidak ada request yang di-cancel
         hls.loadSource(newUrl);
-        hls.startLoad(-1); // -1 = mulai dari live edge, tidak flush buffer
+        hls.startLoad(-1); // -1 = live edge
       } catch {
-        // silent fail — cycle berikutnya (15s) akan coba lagi
+        // silent fail
+      } finally {
+        // Beri jeda 2 detik sebelum swap berikutnya boleh masuk
+        setTimeout(() => { isSwappingRef.current = false; }, 2000);
       }
     },
   }));
@@ -1015,8 +1023,16 @@ function LiveStream2() {
 
   const startSrv2Timer = useCallback(() => {
     stopSrv2Timer();
-    // 15 detik — agresif tapi jauh sebelum token/segment expire (~60 detik)
-    srv2TimerRef.current = setInterval(doSrv2Prefetch, 15_000);
+    // Tunda 5 detik dulu baru mulai swap pertama — stream perlu stabilize.
+    // Setelah itu setiap 15 detik. Pakai setTimeout untuk kickoff pertama,
+    // baru setInterval untuk selanjutnya.
+    const kickoff = setTimeout(() => {
+      doSrv2Prefetch();
+      srv2TimerRef.current = setInterval(doSrv2Prefetch, 15_000);
+    }, 5_000);
+    // Cast ke setInterval type supaya stopSrv2Timer (clearInterval) bisa
+    // membersihkan timeout ini juga — clearInterval(timeout) aman di browser.
+    srv2TimerRef.current = kickoff as unknown as ReturnType<typeof setInterval>;
   }, [doSrv2Prefetch, stopSrv2Timer]);
 
   useEffect(() => {
