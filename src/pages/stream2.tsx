@@ -21,6 +21,9 @@ const CTV_BASE       = "https://ctv.jkt48connect.com";
 const SRV2_BASE      = "https://srv2.jkt48connect.com";
 const SIGNING_PATH   = "/api/token/generate?apikey=JKTCONNECT";
 
+// Srv2 refresh interval — 15 detik agar URL segment tidak expired
+const SRV2_REFRESH_INTERVAL = 15_000;
+
 // ── HMAC helpers ──────────────────────────────────────────────────────────────
 async function sha256Hex(str: string): Promise<string> {
   const buf = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(str));
@@ -227,6 +230,15 @@ interface SRComment {
   created_at: number; class_level: number; user_id: number;
 }
 
+// ── Srv2 refresh context — shared between HlsPlayer and parent ────────────────
+interface Srv2RefreshState {
+  token: string;
+  url: string;         // current level URL (auto or manual quality)
+  slugOrId: string;
+  isSlug: boolean;
+  qualityIndex: number | null; // null = auto (highest), number = sorted index
+}
+
 // ── Showroom comment polling ──────────────────────────────────────────────────
 function useShowroomComments(roomId: number | null) {
   const [comments, setComments] = useState<SRComment[]>([]);
@@ -274,18 +286,19 @@ function useShowroomComments(roomId: number | null) {
 }
 
 // ── HLS Player ────────────────────────────────────────────────────────────────
-// Accepts a `refreshSrc` callback ref — when srv2 has a new URL ready,
-// parent updates `src` prop which re-triggers the effect and loads the new source
-// without flickering thanks to `startPosition` preservation.
+// Untuk Server 2: src berubah setiap refresh (URL baru dari /playback).
+// Player destroy+reinit setiap src berubah agar segment baru di-load.
 function HlsPlayer({
   src, title, isIdn, token,
+  onSrv2FragError,   // callback saat fragment 404 — trigger immediate refresh
 }: {
   src: string; title: string; isIdn: boolean; token?: string;
+  onSrv2FragError?: () => void;
 }) {
-  const videoRef   = useRef<HTMLVideoElement>(null);
-  const hlsRef     = useRef<Hls | null>(null);
-  const retryRef   = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const prevSrcRef = useRef<string>("");
+  const videoRef    = useRef<HTMLVideoElement>(null);
+  const hlsRef      = useRef<Hls | null>(null);
+  const retryRef    = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const currentSrc  = useRef<string>("");
 
   const destroyHls = useCallback(() => {
     if (retryRef.current) { clearTimeout(retryRef.current); retryRef.current = null; }
@@ -295,12 +308,9 @@ function HlsPlayer({
   useEffect(() => {
     const video = videoRef.current;
     if (!video || !src) return;
-
-    // If only the token changed but src is the same URL, don't reload — the
-    // xhrSetup/fetchSetup closure already references the latest `token` prop
-    // because we re-create the effect when token changes.
-    const srcChanged = src !== prevSrcRef.current;
-    prevSrcRef.current = src;
+    // Kalau src sama persis, skip reinit (hindari restart tidak perlu)
+    if (currentSrc.current === src) return;
+    currentSrc.current = src;
 
     destroyHls();
 
@@ -312,37 +322,24 @@ function HlsPlayer({
     }
 
     const makeHlsConfig = () => ({
-      enableWorker: true,
-      lowLatencyMode: false,
-      maxBufferLength: 30,
-      maxMaxBufferLength: 60,
-      maxBufferSize: 60 * 1000 * 1000,
-      backBufferLength: 30,
-      liveSyncDurationCount: 3,
-      liveMaxLatencyDurationCount: 10,
+      enableWorker: true, lowLatencyMode: false,
+      maxBufferLength: 20, maxMaxBufferLength: 40,
+      maxBufferSize: 40 * 1000 * 1000, backBufferLength: 10,
+      liveSyncDurationCount: 3, liveMaxLatencyDurationCount: 8,
       liveDurationInfinity: true,
-      fragLoadingTimeOut: 10000,
-      fragLoadingMaxRetry: 6,
-      fragLoadingRetryDelay: 1000,
-      fragLoadingMaxRetryTimeout: 8000,
-      manifestLoadingTimeOut: 10000,
-      manifestLoadingMaxRetry: 4,
-      manifestLoadingRetryDelay: 1000,
-      levelLoadingTimeOut: 10000,
-      levelLoadingMaxRetry: 4,
-      levelLoadingRetryDelay: 1000,
+      // Timeout lebih agresif agar cepat detect 404
+      fragLoadingTimeOut: 8000, fragLoadingMaxRetry: 2,
+      fragLoadingRetryDelay: 500, fragLoadingMaxRetryTimeout: 4000,
+      manifestLoadingTimeOut: 8000, manifestLoadingMaxRetry: 2,
+      manifestLoadingRetryDelay: 500,
+      levelLoadingTimeOut: 8000, levelLoadingMaxRetry: 2,
+      levelLoadingRetryDelay: 500,
       startLevel: -1,
-      abrEwmaDefaultEstimate: 500_000,
-      abrBandWidthFactor: 0.8,
-      abrBandWidthUpFactor: 0.7,
-      abrEwmaFastLive: 3.0,
-      abrEwmaSlowLive: 9.0,
-      nudgeOffset: 0.3,
-      nudgeMaxRetry: 5,
+      abrEwmaDefaultEstimate: 500_000, abrBandWidthFactor: 0.8,
+      abrBandWidthUpFactor: 0.7, abrEwmaFastLive: 3.0, abrEwmaSlowLive: 9.0,
+      nudgeOffset: 0.3, nudgeMaxRetry: 3,
       ...(token && {
-        xhrSetup: (xhr: XMLHttpRequest) => {
-          xhr.setRequestHeader("x-api-token", token);
-        },
+        xhrSetup: (xhr: XMLHttpRequest) => { xhr.setRequestHeader("x-api-token", token); },
         fetchSetup: (context: any, initParams: any) => {
           initParams.headers = { ...initParams.headers, "x-api-token": token };
           return new Request(context.url, initParams);
@@ -350,32 +347,41 @@ function HlsPlayer({
       }),
     });
 
-    const attach = (hlsSrc: string) => {
-      const hls = new Hls(makeHlsConfig());
-      hlsRef.current = hls;
-      hls.loadSource(hlsSrc);
-      hls.attachMedia(video);
-      hls.on(Hls.Events.MANIFEST_PARSED, () => { video.play().catch(() => {}); });
-      hls.on(Hls.Events.ERROR, (_, data) => {
-        if (!data.fatal) return;
-        if (data.type === Hls.ErrorTypes.NETWORK_ERROR) {
-          hls.startLoad();
-        } else if (data.type === Hls.ErrorTypes.MEDIA_ERROR) {
-          hls.recoverMediaError();
-        } else {
-          destroyHls();
-          retryRef.current = setTimeout(() => {
-            const v = videoRef.current;
-            if (!v) return;
-            attach(hlsSrc);
-          }, 2000);
-        }
-      });
-    };
+    const hls = new Hls(makeHlsConfig());
+    hlsRef.current = hls;
+    hls.loadSource(src);
+    hls.attachMedia(video);
+    hls.on(Hls.Events.MANIFEST_PARSED, () => { video.play().catch(() => {}); });
+    hls.on(Hls.Events.ERROR, (_, data) => {
+      // Deteksi 404 pada fragment/level — trigger refresh segera ke parent
+      const is404 = data.response?.code === 404 ||
+        (data.type === Hls.ErrorTypes.NETWORK_ERROR &&
+          (data.details === Hls.ErrorDetails.FRAG_LOAD_ERROR ||
+           data.details === Hls.ErrorDetails.LEVEL_LOAD_ERROR ||
+           data.details === Hls.ErrorDetails.MANIFEST_LOAD_ERROR));
 
-    attach(src);
+      if (is404 && onSrv2FragError) {
+        onSrv2FragError();
+        return;
+      }
+
+      if (!data.fatal) return;
+      if (data.type === Hls.ErrorTypes.NETWORK_ERROR) { hls.startLoad(); }
+      else if (data.type === Hls.ErrorTypes.MEDIA_ERROR) { hls.recoverMediaError(); }
+      else {
+        destroyHls();
+        retryRef.current = setTimeout(() => {
+          const v = videoRef.current; if (!v) return;
+          const newHls = new Hls(makeHlsConfig());
+          newHls.loadSource(src); newHls.attachMedia(v);
+          newHls.on(Hls.Events.MANIFEST_PARSED, () => v.play().catch(() => {}));
+          hlsRef.current = newHls;
+        }, 2000);
+      }
+    });
+
     return destroyHls;
-  }, [src, token, destroyHls]); // re-run when src OR token changes
+  }, [src, token, destroyHls, onSrv2FragError]);
 
   return (
     <div className="relative w-full rounded-2xl overflow-hidden bg-black shadow-2xl">
@@ -386,11 +392,7 @@ function HlsPlayer({
       `}</style>
       <Backlight blur={50} className="w-full">
         <div className={isIdn ? "aspect-video" : ""}>
-          <video
-            ref={videoRef}
-            controls
-            autoPlay
-            playsInline
+          <video ref={videoRef} controls autoPlay playsInline
             className={`live-player w-full ${isIdn ? "h-full" : ""} block`}
             title={title}
           />
@@ -745,23 +747,11 @@ function LiveStream2() {
   const chatEndRef = useRef<HTMLDivElement>(null);
   const channelRef = useRef<any>(null);
 
-  // ── srv2 aggressive refresh refs ──────────────────────────────────────────
-  // We keep refs for the current show info so the interval always has fresh data
-  // without needing to be torn down/re-created on every state change.
-  const srv2TimerRef       = useRef<ReturnType<typeof setInterval> | null>(null);
-  const activeServerRef    = useRef<"1" | "2">("1");
-  const idnShowRef         = useRef<any>(null);
-  const memberShowRef      = useRef<any>(null);
-  const qualityModeRef     = useRef<"auto" | "manual">("auto");
-  const currentQualityRef  = useRef<QualityOption | null>(null);
-  const isRefreshingRef    = useRef(false); // prevent overlapping refreshes
-
-  // Keep refs in sync with state
-  useEffect(() => { activeServerRef.current = activeServer; }, [activeServer]);
-  useEffect(() => { idnShowRef.current = idnShow; }, [idnShow]);
-  useEffect(() => { memberShowRef.current = memberShow; }, [memberShow]);
-  useEffect(() => { qualityModeRef.current = qualityMode; }, [qualityMode]);
-  useEffect(() => { currentQualityRef.current = currentQuality; }, [currentQuality]);
+  // ── Srv2 aggressive refresh refs ──────────────────────────────────────────
+  // Menyimpan state terkini untuk dipakai di dalam timer closure
+  const srv2StateRef   = useRef<Srv2RefreshState | null>(null);
+  const srv2TimerRef   = useRef<ReturnType<typeof setInterval> | null>(null);
+  const srv2RefreshingRef = useRef(false); // guard agar tidak double-refresh
 
   const { comments: srComments, loading: srLoading, error: srError, lastPoll: srLastPoll, retry: srRetry } =
     useShowroomComments(isMember ? memberRoomId : null);
@@ -864,107 +854,66 @@ function LiveStream2() {
     } catch { setVerifyError("Terjadi kesalahan saat verifikasi."); setVerifying(false); }
   };
 
-  // ── Helper: resolve slugOrId + isSlug for current show ───────────────────
-  const resolveSrv2Params = useCallback((): { slugOrId: string; isSlug: boolean } | null => {
-    if (isIdn) {
-      const show = idnShowRef.current;
-      if (!show?.slug) return null;
-      return { slugOrId: show.slug, isSlug: true };
-    } else {
-      const show = memberShowRef.current;
-      if (!show) return null;
-      if (show.is_group || show.url_key === "jkt48-official") {
-        const identifier = show.identifier || show.slug || show.url_key;
-        return { slugOrId: identifier, isSlug: true };
+  // ── Srv2 core refresh — fetch playback + token baru, update URL ───────────
+  // qualityIndex: null = pakai url kualitas tertinggi (auto), number = pakai index sorted
+  const doSrv2Refresh = useCallback(async (state: Srv2RefreshState): Promise<void> => {
+    if (srv2RefreshingRef.current) return; // skip jika sedang refresh
+    srv2RefreshingRef.current = true;
+    try {
+      const newToken = await generateStreamToken(state.slugOrId, state.isSlug);
+      const { url: autoUrl, qualities: newQualities } = await getStreamURLSrv2(newToken, state.slugOrId, state.isSlug);
+
+      let targetUrl = autoUrl; // default: kualitas tertinggi
+      if (state.qualityIndex !== null && newQualities[state.qualityIndex]) {
+        targetUrl = newQualities[state.qualityIndex].manual_url;
       }
-      const showId = show.showid || show.show_id;
-      if (showId) return { slugOrId: String(showId), isSlug: false };
-      return null;
+
+      // Update ref dengan state terbaru
+      srv2StateRef.current = { ...state, token: newToken, url: targetUrl };
+
+      // Update React state — ini yang memicu HlsPlayer reinit dengan URL+token baru
+      setStreamToken(newToken);
+      setQualities(newQualities);
+      if (isIdn) {
+        setHlsUrl(targetUrl);
+      } else {
+        setMemberHlsUrl(targetUrl);
+      }
+    } catch (e) {
+      console.warn("[Srv2Refresh] gagal:", e);
+    } finally {
+      srv2RefreshingRef.current = false;
     }
   }, [isIdn]);
 
-  // ── Aggressive srv2 refresh: token + full playback URL every 20s ──────────
-  const doSrv2Refresh = useCallback(async () => {
-    if (activeServerRef.current !== "2") return;
-    if (isRefreshingRef.current) return;
-    isRefreshingRef.current = true;
+  // ── Mulai / stop srv2 refresh loop ────────────────────────────────────────
+  const startSrv2RefreshLoop = useCallback((initialState: Srv2RefreshState) => {
+    // Stop timer lama kalau ada
+    if (srv2TimerRef.current) { clearInterval(srv2TimerRef.current); srv2TimerRef.current = null; }
+    srv2StateRef.current = initialState;
 
-    try {
-      const params = resolveSrv2Params();
-      if (!params) return;
-      const { slugOrId, isSlug } = params;
-
-      // 1. Generate fresh token
-      const newToken = await generateStreamToken(slugOrId, isSlug);
-
-      // 2. Fetch fresh playback M3U8 with new token
-      const { url: autoUrl, qualities: newQualities } = await getStreamURLSrv2(newToken, slugOrId, isSlug);
-
-      // 3. Update token first (HLS player uses it for segment requests)
-      setStreamToken(newToken);
-
-      // 4. Update qualities list (URLs inside have fresh signed segments)
-      setQualities(newQualities);
-
-      // 5. Decide which URL to set based on current quality mode
-      const mode = qualityModeRef.current;
-      const selectedQuality = currentQualityRef.current;
-
-      if (mode === "manual" && selectedQuality) {
-        // Find matching quality in fresh list by name (quality key)
-        const matched = newQualities.find(q => q.quality === selectedQuality.quality);
-        if (matched) {
-          // Update currentQuality ref & state so panel reflects fresh URLs
-          setCurrentQuality(matched);
-          if (isIdn) setHlsUrl(matched.manual_url);
-          else setMemberHlsUrl(matched.manual_url);
-        } else {
-          // Quality no longer available — fallback to auto (highest)
-          setQualityMode("auto");
-          setCurrentQuality(null);
-          if (isIdn) setHlsUrl(autoUrl);
-          else setMemberHlsUrl(autoUrl);
-        }
-      } else {
-        // Auto mode — use highest quality URL
-        if (isIdn) setHlsUrl(autoUrl);
-        else setMemberHlsUrl(autoUrl);
+    srv2TimerRef.current = setInterval(() => {
+      if (srv2StateRef.current) {
+        doSrv2Refresh(srv2StateRef.current);
       }
-    } catch {
-      // Silent fail — next tick will retry
-    } finally {
-      isRefreshingRef.current = false;
-    }
-  }, [isIdn, resolveSrv2Params]);
+    }, SRV2_REFRESH_INTERVAL);
+  }, [doSrv2Refresh]);
 
-  // ── Start / stop srv2 refresh timer ──────────────────────────────────────
-  const stopSrv2Timer = useCallback(() => {
-    if (srv2TimerRef.current) {
-      clearInterval(srv2TimerRef.current);
-      srv2TimerRef.current = null;
-    }
+  const stopSrv2RefreshLoop = useCallback(() => {
+    if (srv2TimerRef.current) { clearInterval(srv2TimerRef.current); srv2TimerRef.current = null; }
+    srv2StateRef.current = null;
   }, []);
 
-  const startSrv2Timer = useCallback(() => {
-    stopSrv2Timer();
-    // Fire immediately, then every 20 seconds
-    doSrv2Refresh();
-    srv2TimerRef.current = setInterval(doSrv2Refresh, 20_000);
-  }, [doSrv2Refresh, stopSrv2Timer]);
-
-  // Whenever activeServer changes, start or stop the timer
-  useEffect(() => {
-    if (activeServer === "2" && !loading && !error) {
-      startSrv2Timer();
-    } else {
-      stopSrv2Timer();
+  // Callback dari HlsPlayer saat detect 404 fragment di server 2
+  const handleSrv2FragError = useCallback(() => {
+    if (srv2StateRef.current && activeServer === "2") {
+      doSrv2Refresh(srv2StateRef.current);
     }
-    return stopSrv2Timer;
-  }, [activeServer, loading, error, startSrv2Timer, stopSrv2Timer]);
+  }, [activeServer, doSrv2Refresh]);
 
   // ── loadIdnStream ─────────────────────────────────────────────────────────
   const loadIdnStream = useCallback(async (server: "1" | "2" = "1") => {
-    setLoading(true); setError("");
+    setLoading(true); setError(""); stopSrv2RefreshLoop();
     try {
       const idnRes = await fetch(IDN_API);
       const idnData = await idnRes.json();
@@ -974,7 +923,6 @@ function LiveStream2() {
       const show = idnData.data.find((s: any) => s.slug === playbackId && s.status === "live");
       if (!show) { setError("Show tidak ditemukan atau sudah berakhir"); setLoading(false); return; }
       setIdnShow(show);
-      idnShowRef.current = show;
 
       const token = await generateStreamToken(show.slug, true);
       setStreamToken(token);
@@ -982,6 +930,7 @@ function LiveStream2() {
       if (server === "2") {
         const { url, qualities: q } = await getStreamURLSrv2(token, show.slug, true);
         setQualities(q); setHlsUrl(url);
+        startSrv2RefreshLoop({ token, url, slugOrId: show.slug, isSlug: true, qualityIndex: null });
       } else {
         const { url, qualities: q } = await getStreamURL(token, show.slug, true);
         setQualities(q); setHlsUrl(url);
@@ -1009,11 +958,11 @@ function LiveStream2() {
       setError(err?.message || "Terjadi kesalahan saat memuat stream.");
       setLoading(false);
     }
-  }, [playbackId]);
+  }, [playbackId, startSrv2RefreshLoop, stopSrv2RefreshLoop]);
 
   // ── loadMemberStream ──────────────────────────────────────────────────────
   const loadMemberStream = useCallback(async (server: "1" | "2" = "1") => {
-    setLoading(true); setError("");
+    setLoading(true); setError(""); stopSrv2RefreshLoop();
     try {
       const res = await fetch(LIVE_API);
       const data = await res.json();
@@ -1025,30 +974,35 @@ function LiveStream2() {
       );
       if (!show) { setError("Member tidak sedang live saat ini"); setLoading(false); return; }
       setMemberShow(show);
-      memberShowRef.current = show;
+
+      const isGroup = show.is_group || show.url_key === "jkt48-official";
+      const identifier = show.identifier || show.slug || show.url_key;
+      const showId = show.showid || show.show_id || null;
+      const slugOrId = isGroup ? identifier : String(showId);
+      const isSlugMode = isGroup;
 
       const getUrl = server === "2" ? getStreamURLSrv2 : getStreamURL;
 
-      if (show.is_group || show.url_key === "jkt48-official") {
-        const identifier = show.identifier || show.slug || show.url_key;
+      if (isGroup) {
         try {
           const token = await generateStreamToken(identifier, true);
           setStreamToken(token);
           const { url, qualities: q } = await getUrl(token, identifier, true);
           setQualities(q); setMemberHlsUrl(url);
+          if (server === "2") startSrv2RefreshLoop({ token, url, slugOrId: identifier, isSlug: true, qualityIndex: null });
         } catch {
           const streamUrl = show.streaming_url_list?.[0]?.url || null;
           if (!streamUrl) { setError("URL stream tidak tersedia"); setLoading(false); return; }
           setMemberHlsUrl(streamUrl);
         }
       } else {
-        const showId = show.showid || show.show_id || null;
         if (showId) {
           try {
             const token = await generateStreamToken(String(showId), false);
             setStreamToken(token);
             const { url, qualities: q } = await getUrl(token, String(showId), false);
             setQualities(q); setMemberHlsUrl(url);
+            if (server === "2") startSrv2RefreshLoop({ token, url, slugOrId: String(showId), isSlug: false, qualityIndex: null });
           } catch {
             const streamUrl = show.streaming_url_list?.[0]?.url || null;
             if (!streamUrl) { setError("URL stream tidak tersedia"); setLoading(false); return; }
@@ -1067,103 +1021,109 @@ function LiveStream2() {
       setError(err?.message || "Terjadi kesalahan saat memuat stream member.");
       setLoading(false);
     }
-  }, [playbackId]);
+  }, [playbackId, startSrv2RefreshLoop, stopSrv2RefreshLoop]);
 
   // ── Switch server ─────────────────────────────────────────────────────────
   const handleSwitchServer = async (server: "1" | "2") => {
     if (server === activeServer || serverLoading) return;
-
-    // Stop any running srv2 timer before switching
-    stopSrv2Timer();
-
     setActiveServer(server);
-    activeServerRef.current = server;
     setServerLoading(true);
     setQualities([]);
     setCurrentQuality(null);
     setQualityMode("auto");
-    qualityModeRef.current = "auto";
-    currentQualityRef.current = null;
+    stopSrv2RefreshLoop();
 
     try {
       const getUrl = server === "2" ? getStreamURLSrv2 : getStreamURL;
-      if (isIdn && idnShowRef.current) {
-        const show = idnShowRef.current;
-        const token = await generateStreamToken(show.slug, true);
+
+      if (isIdn && idnShow) {
+        const token = await generateStreamToken(idnShow.slug, true);
         setStreamToken(token);
-        const { url, qualities: q } = await getUrl(token, show.slug, true);
+        const { url, qualities: q } = await getUrl(token, idnShow.slug, true);
         setHlsUrl(url); setQualities(q);
-      } else if (isMember && memberShowRef.current) {
-        const show = memberShowRef.current;
-        const identifier = show.identifier || show.slug || show.url_key;
-        const showId = show.showid || show.show_id || null;
-        if (show.is_group || show.url_key === "jkt48-official") {
+        if (server === "2") startSrv2RefreshLoop({ token, url, slugOrId: idnShow.slug, isSlug: true, qualityIndex: null });
+      } else if (isMember && memberShow) {
+        const isGroup = memberShow.is_group || memberShow.url_key === "jkt48-official";
+        const identifier = memberShow.identifier || memberShow.slug || memberShow.url_key;
+        const showId = memberShow.showid || memberShow.show_id || null;
+
+        if (isGroup) {
           const token = await generateStreamToken(identifier, true);
           setStreamToken(token);
           const { url, qualities: q } = await getUrl(token, identifier, true);
           setMemberHlsUrl(url); setQualities(q);
+          if (server === "2") startSrv2RefreshLoop({ token, url, slugOrId: identifier, isSlug: true, qualityIndex: null });
         } else if (showId) {
           const token = await generateStreamToken(String(showId), false);
           setStreamToken(token);
           const { url, qualities: q } = await getUrl(token, String(showId), false);
           setMemberHlsUrl(url); setQualities(q);
+          if (server === "2") startSrv2RefreshLoop({ token, url, slugOrId: String(showId), isSlug: false, qualityIndex: null });
         }
       }
     } catch (err: any) {
       setError(err?.message || "Gagal mengganti server.");
     } finally {
       setServerLoading(false);
-      // Start aggressive refresh if switched to srv2
-      if (server === "2") {
-        startSrv2Timer();
-      }
     }
   };
 
   // ── Quality change ────────────────────────────────────────────────────────
   const handleQualityChange = (q: QualityOption | null) => {
     setCurrentQuality(q);
-    currentQualityRef.current = q;
     if (!q) return;
+
+    // Update qualityIndex di srv2StateRef agar refresh loop pakai kualitas yang sama
+    if (activeServer === "2" && srv2StateRef.current) {
+      srv2StateRef.current = { ...srv2StateRef.current, qualityIndex: q.index, url: q.manual_url };
+    }
+
     if (isIdn) setHlsUrl(q.manual_url);
     else setMemberHlsUrl(q.manual_url);
   };
 
   const handleModeChange = async (mode: "auto" | "manual") => {
     setQualityMode(mode);
-    qualityModeRef.current = mode;
     if (mode === "auto") {
       setCurrentQuality(null);
-      currentQualityRef.current = null;
-      // For srv2, the timer will pick up the auto URL on next tick
-      // For srv1, we need to re-fetch explicitly
-      if (activeServerRef.current !== "2") {
-        try {
-          if (isIdn && idnShowRef.current?.slug) {
-            const token = await generateStreamToken(idnShowRef.current.slug, true);
-            setStreamToken(token);
-            const { url, qualities: q } = await getStreamURL(token, idnShowRef.current.slug, true);
-            setHlsUrl(url); setQualities(q);
-          } else if (isMember && memberShowRef.current) {
-            const show = memberShowRef.current;
-            const identifier = show.identifier || show.slug || show.url_key;
-            const showId = show.showid || show.show_id || null;
-            if (show.is_group || show.url_key === "jkt48-official") {
-              const token = await generateStreamToken(identifier, true);
-              setStreamToken(token);
-              const { url, qualities: q } = await getStreamURL(token, identifier, true);
-              setMemberHlsUrl(url); setQualities(q);
-            } else if (showId) {
-              const token = await generateStreamToken(String(showId), false);
-              setStreamToken(token);
-              const { url, qualities: q } = await getStreamURL(token, String(showId), false);
-              setMemberHlsUrl(url); setQualities(q);
-            }
-          }
-        } catch {}
+      // Reset qualityIndex ke null (auto = tertinggi)
+      if (activeServer === "2" && srv2StateRef.current) {
+        srv2StateRef.current = { ...srv2StateRef.current, qualityIndex: null };
+        // Trigger refresh segera agar URL auto diperbarui
+        doSrv2Refresh(srv2StateRef.current);
+        return;
       }
+      try {
+        const getUrl = activeServer === "2" ? getStreamURLSrv2 : getStreamURL;
+        if (isIdn && idnShow?.slug) {
+          const token = await generateStreamToken(idnShow.slug, true);
+          setStreamToken(token);
+          const { url, qualities: q } = await getUrl(token, idnShow.slug, true);
+          setHlsUrl(url); setQualities(q);
+        } else if (isMember && memberShow) {
+          const isGroup = memberShow.is_group || memberShow.url_key === "jkt48-official";
+          const identifier = memberShow.identifier || memberShow.slug || memberShow.url_key;
+          const showId = memberShow.showid || memberShow.show_id || null;
+          if (isGroup) {
+            const token = await generateStreamToken(identifier, true);
+            setStreamToken(token);
+            const { url, qualities: q } = await getUrl(token, identifier, true);
+            setMemberHlsUrl(url); setQualities(q);
+          } else if (showId) {
+            const token = await generateStreamToken(String(showId), false);
+            setStreamToken(token);
+            const { url, qualities: q } = await getUrl(token, String(showId), false);
+            setMemberHlsUrl(url); setQualities(q);
+          }
+        }
+      } catch {}
     }
   };
+
+  // ── Stop refresh loop saat unmount atau ganti server ke 1 ─────────────────
+  useEffect(() => {
+    return () => { stopSrv2RefreshLoop(); };
+  }, [stopSrv2RefreshLoop]);
 
   // ── Chat init ─────────────────────────────────────────────────────────────
   const initChat = useCallback(async () => {
@@ -1259,12 +1219,9 @@ function LiveStream2() {
 
   useEffect(() => { if (isIdn && isVerified && !idnShow) loadIdnStream("1"); }, [isVerified]); // eslint-disable-line
 
-  // Cleanup srv2 timer on unmount
-  useEffect(() => () => stopSrv2Timer(), []); // eslint-disable-line
-
   const handleLogout = () => {
-    stopSrv2Timer();
     localStorage.removeItem("stream_verification");
+    stopSrv2RefreshLoop();
     setIsVerified(false); setShowVerification(true);
     setIdnShow(null); setHlsUrl(""); setQualities([]);
     setStreamToken(""); setAccessSource(null);
@@ -1488,13 +1445,6 @@ function LiveStream2() {
           )}
           {isIdn && idnShow && <span className="text-xs text-gray-500 dark:text-gray-400 font-medium">{idnShow.view_count?.toLocaleString() || 0} penonton</span>}
           {isMember && memberShow && <span className="text-xs text-gray-500 dark:text-gray-400">{memberShow.type?.toUpperCase()} · Mulai {new Date(memberShow.started_at).toLocaleTimeString("id-ID", { hour: "2-digit", minute: "2-digit" })} WIB</span>}
-          {/* srv2 refresh indicator */}
-          {activeServer === "2" && (
-            <span className="flex items-center gap-1 px-2.5 py-1 rounded-full bg-blue-50 dark:bg-blue-500/10 border border-blue-200 dark:border-blue-500/20 text-blue-500 dark:text-blue-400 text-[10px] font-semibold">
-              <span className="w-1.5 h-1.5 rounded-full bg-blue-400 animate-pulse" />
-              Auto-refresh aktif
-            </span>
-          )}
           {isIdn && accessSource === "code" && isVerified && (
             <button onClick={handleLogout} className="ml-auto px-3 py-1.5 rounded-xl border border-gray-200 dark:border-gray-700 bg-transparent text-gray-500 dark:text-gray-400 text-[11px] font-semibold cursor-pointer hover:bg-gray-50 dark:hover:bg-gray-800/50 transition-colors">Logout</button>
           )}
@@ -1510,6 +1460,7 @@ function LiveStream2() {
                 title={showTitle}
                 isIdn={isIdn || !!(memberShow?.is_group || memberShow?.url_key === "jkt48-official")}
                 token={streamToken}
+                onSrv2FragError={activeServer === "2" ? handleSrv2FragError : undefined}
               />
             ) : (
               <div className="aspect-video bg-gray-100 dark:bg-gray-800/50 rounded-2xl flex items-center justify-center border border-gray-200 dark:border-gray-700">
@@ -1542,6 +1493,7 @@ function LiveStream2() {
                     )}
                   </div>
                 </div>
+
                 <QualityPanel
                   qualities={qualities}
                   qualityMode={qualityMode}
@@ -1549,6 +1501,7 @@ function LiveStream2() {
                   onModeChange={handleModeChange}
                   onQualityChange={handleQualityChange}
                 />
+
                 <ServerSwitcher
                   activeServer={activeServer}
                   serverLoading={serverLoading}
@@ -1574,6 +1527,7 @@ function LiveStream2() {
                     </div>
                   </div>
                 </div>
+
                 <QualityPanel
                   qualities={qualities}
                   qualityMode={qualityMode}
@@ -1581,6 +1535,7 @@ function LiveStream2() {
                   onModeChange={handleModeChange}
                   onQualityChange={handleQualityChange}
                 />
+
                 <ServerSwitcher
                   activeServer={activeServer}
                   serverLoading={serverLoading}
