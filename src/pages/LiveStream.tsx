@@ -813,7 +813,7 @@ function LiveStream() {
       setHlsUrl(streamUrl);
 
       try {
-        const theaterRes = await fetch(`https://v6.jkt48connect.com/api/jkt48/theater?apikey=${API_KEY}`);
+        const theaterRes = await fetch(`https://v5.jkt48connect.com/api/jkt48/theater?apikey=${API_KEY}`);
         const theaterData = await theaterRes.json();
         if (theaterData.theater?.length > 0) {
           const now = Date.now();
