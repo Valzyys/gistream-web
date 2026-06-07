@@ -24,6 +24,7 @@ interface NormalizedShow {
   birthdayMembers: any[];
   source: "idn" | "theater";
   price?: number;
+  priceRupiah: number;
   showId?: string;
 }
 
@@ -49,7 +50,6 @@ interface UserTicketStatus {
 }
 
 type FilterType = "all" | "live" | "scheduled";
-// V2: tidak perlu step "method" dan "confirm" — langsung payment
 type ModalStep = "loading" | "payment" | "success" | "already_paid" | "error";
 
 // ── Auth helper ──────────────────────────────────────────────────────────────
@@ -130,6 +130,20 @@ const IconQris = ({ size = 20 }: { size?: number }) => (
   </svg>
 );
 
+// ── Price helper ─────────────────────────────────────────────────────────────
+const REQUEST_HOUR_SLUGS = [
+  "request-hour-2026-setlist-best-40-show-1-260607180635",
+  "request-hour-2026-setlist-best-40-show-2-260607180921",
+];
+
+function resolvePrice(show: any, src: "idn" | "theater"): number {
+  if (src === "theater") return 7000;
+  const slug = (show.slug || "").toLowerCase();
+  if (REQUEST_HOUR_SLUGS.includes(slug)) return 15000;
+  // fallback: gold-based shows pakai harga default 7000
+  return 7000;
+}
+
 // ── Normalize ────────────────────────────────────────────────────────────────
 function normalizeShow(show: any, src: "idn" | "theater"): NormalizedShow {
   if (src === "idn") {
@@ -145,6 +159,7 @@ function normalizeShow(show: any, src: "idn" | "theater"): NormalizedShow {
       isBirthday: false, birthdayMembers: [],
       source: "idn",
       price: show.idnliveplus?.liveroom_price,
+      priceRupiah: resolvePrice(show, "idn"),
       showId: show.showId,
     };
   }
@@ -167,6 +182,7 @@ function normalizeShow(show: any, src: "idn" | "theater"): NormalizedShow {
     isBirthday: show.is_birthday_show || false,
     birthdayMembers: show.birthday_members || [],
     source: "theater",
+    priceRupiah: 7000,
   };
 }
 
@@ -210,10 +226,8 @@ function PaymentModal({ show, onClose, onSuccess, onCancelled, loginData, pendin
   const [paymentTimer, setPaymentTimer] = useState(0);
   const [error, setError] = useState("");
 
-  // ── Init: create new order or restore pending ──────────────────────────────
   useEffect(() => {
     const init = async () => {
-      // Restore pending order
       if (pendingOrder) {
         try {
           const res = await fetch(`${TICKETS_API}/check/${pendingOrder.ref_id}?apikey=JKTCONNECT`);
@@ -225,7 +239,6 @@ function PaymentModal({ show, onClose, onSuccess, onCancelled, loginData, pendin
             return;
           }
           if (data.ticket_status === "expired") {
-            // Expired — buat order baru langsung
             await createNewOrder();
             return;
           }
@@ -235,7 +248,7 @@ function PaymentModal({ show, onClose, onSuccess, onCancelled, loginData, pendin
             ybp_trx_id: "",
             show_id: show.id,
             show_title: show.title,
-            amount: data.data?.amount || 7000,
+            amount: data.data?.amount || show.priceRupiah,
             qris_content: data.data?.qris_content || null,
             qr_image: data.data?.qr_image || null,
             payment_url: data.data?.payment_url || null,
@@ -247,7 +260,6 @@ function PaymentModal({ show, onClose, onSuccess, onCancelled, loginData, pendin
         }
         return;
       }
-      // Buat order baru
       await createNewOrder();
     };
     init();
@@ -267,6 +279,7 @@ function PaymentModal({ show, onClose, onSuccess, onCancelled, loginData, pendin
           show_source: show.source,
           show_image:  show.image,
           show_date:   show.scheduledAt ? new Date(show.scheduledAt).toISOString() : null,
+          amount:      show.priceRupiah,
         }),
       });
       const data = await res.json();
@@ -295,7 +308,6 @@ function PaymentModal({ show, onClose, onSuccess, onCancelled, loginData, pendin
     }
   };
 
-  // ── Payment countdown timer ────────────────────────────────────────────────
   useEffect(() => {
     if (step !== "payment" || !order) return;
     const expiry = new Date(order.expired_at).getTime();
@@ -305,7 +317,6 @@ function PaymentModal({ show, onClose, onSuccess, onCancelled, loginData, pendin
     return () => clearInterval(iv);
   }, [step, order]);
 
-  // ── Auto-poll status ───────────────────────────────────────────────────────
   useEffect(() => {
     if (step !== "payment" || !order) return;
     let stopped = false;
@@ -410,7 +421,6 @@ function PaymentModal({ show, onClose, onSuccess, onCancelled, loginData, pendin
         {/* Content */}
         <div className="overflow-y-auto flex-1 p-5 space-y-4">
 
-          {/* LOADING — membuat order ke YoBasePay V2 */}
           {step === "loading" && (
             <div className="flex flex-col items-center justify-center gap-4 py-12">
               <div className="w-12 h-12 rounded-full bg-brand-50 dark:bg-brand-500/10 flex items-center justify-center">
@@ -423,7 +433,6 @@ function PaymentModal({ show, onClose, onSuccess, onCancelled, loginData, pendin
             </div>
           )}
 
-          {/* ERROR */}
           {step === "error" && (
             <div className="flex flex-col items-center text-center py-6 gap-4">
               <div className="w-16 h-16 rounded-full bg-red-100 dark:bg-red-500/10 flex items-center justify-center">
@@ -443,10 +452,8 @@ function PaymentModal({ show, onClose, onSuccess, onCancelled, loginData, pendin
             </div>
           )}
 
-          {/* PAYMENT — tampilkan QRIS native */}
           {step === "payment" && order && (
             <div className="space-y-4">
-              {/* Timer */}
               <div className={`flex items-center justify-between p-3 rounded-xl border ${
                 timerDanger
                   ? "bg-red-50 dark:bg-red-500/10 border-red-200 dark:border-red-500/20"
@@ -463,7 +470,6 @@ function PaymentModal({ show, onClose, onSuccess, onCancelled, loginData, pendin
                 </span>
               </div>
 
-              {/* Summary */}
               <div className="p-3 rounded-xl bg-gray-50 dark:bg-white/[0.04] border border-gray-200 dark:border-gray-700 space-y-2">
                 <div className="flex justify-between items-center">
                   <span className="text-xs text-gray-500 dark:text-gray-400">Ref ID</span>
@@ -483,7 +489,6 @@ function PaymentModal({ show, onClose, onSuccess, onCancelled, loginData, pendin
                 </div>
               </div>
 
-              {/* QR Image (render dari YoBasePay V2) */}
               {order.qr_image && (
                 <div className="flex flex-col items-center p-4 rounded-xl border border-gray-200 dark:border-gray-700 bg-white dark:bg-white/[0.03]">
                   <div className="flex items-center gap-2 mb-3">
@@ -499,7 +504,6 @@ function PaymentModal({ show, onClose, onSuccess, onCancelled, loginData, pendin
                 </div>
               )}
 
-              {/* qris_content — untuk copy atau debug; tampilkan hanya jika tidak ada qr_image */}
               {!order.qr_image && order.qris_content && (
                 <div className="p-4 rounded-xl border border-gray-200 dark:border-gray-700 bg-white dark:bg-white/[0.03]">
                   <p className="text-xs font-semibold text-gray-500 dark:text-gray-400 mb-2">QRIS Content</p>
@@ -507,7 +511,6 @@ function PaymentModal({ show, onClose, onSuccess, onCancelled, loginData, pendin
                 </div>
               )}
 
-              {/* Fallback: tombol buka halaman bayar (jika tidak ada QR sama sekali) */}
               {!order.qr_image && !order.qris_content && order.payment_url && (
                 <a
                   href={order.payment_url}
@@ -520,7 +523,6 @@ function PaymentModal({ show, onClose, onSuccess, onCancelled, loginData, pendin
                 </a>
               )}
 
-              {/* Link alternatif (selalu tampil jika ada payment_url) */}
               {order.payment_url && (order.qr_image || order.qris_content) && (
                 <a
                   href={order.payment_url}
@@ -578,7 +580,6 @@ function PaymentModal({ show, onClose, onSuccess, onCancelled, loginData, pendin
             </div>
           )}
 
-          {/* SUCCESS */}
           {step === "success" && (
             <div className="flex flex-col items-center text-center py-6 gap-4">
               <div className="w-16 h-16 rounded-full bg-green-100 dark:bg-green-500/10 border border-green-200 dark:border-green-500/20 flex items-center justify-center">
@@ -602,7 +603,6 @@ function PaymentModal({ show, onClose, onSuccess, onCancelled, loginData, pendin
             </div>
           )}
 
-          {/* ALREADY PAID */}
           {step === "already_paid" && (
             <div className="flex flex-col items-center text-center py-6 gap-4">
               <div className="w-16 h-16 rounded-full bg-blue-100 dark:bg-blue-500/10 flex items-center justify-center">
@@ -640,6 +640,8 @@ function ShowCard({ show, ticketStatus, isLoggedIn, membershipType, onBuy, onOpe
   const isPaid = ticketStatus?.has_ticket;
   const isPending = ticketStatus?.has_pending && !isPaid;
   const hasMembership = !!membershipType && membershipType !== "free";
+
+  const priceDisplay = `Rp ${show.priceRupiah.toLocaleString("id-ID")}`;
 
   const formatDate = (ts: number) =>
     new Date(ts).toLocaleDateString("id-ID", { weekday: "long", day: "numeric", month: "long", year: "numeric" });
@@ -693,7 +695,7 @@ function ShowCard({ show, ticketStatus, isLoggedIn, membershipType, onBuy, onOpe
             </span>
           )}
           <span style={{ fontSize: 10, fontWeight: 700, padding: "3px 9px", borderRadius: 999, background: "rgba(70,95,255,0.08)", color: "#465FFF", border: "1px solid rgba(70,95,255,0.2)", display: "inline-flex", alignItems: "center", gap: 4 }}>
-            <IconTicket size={10} color="#465FFF" /> Rp 7.000
+            <IconTicket size={10} color="#465FFF" /> {priceDisplay}
           </span>
         </div>
 
@@ -728,32 +730,15 @@ function ShowCard({ show, ticketStatus, isLoggedIn, membershipType, onBuy, onOpe
 
         {/* Action Buttons */}
         <div style={{ display: "flex", flexDirection: "column", gap: 6, marginTop: 6 }}>
-
-          {/* Detail Button */}
           <a
             href={`/jadwal/${show.source === "idn" ? (show.showId ?? show.id) : show.id}`}
-            style={{
-              display: "flex",
-              alignItems: "center",
-              justifyContent: "center",
-              gap: 6,
-              padding: "8px 16px",
-              borderRadius: 10,
-              background: "transparent",
-              border: "1px solid #e5e7eb",
-              color: "#6b7280",
-              fontSize: 12,
-              fontWeight: 600,
-              textDecoration: "none",
-              transition: "all 0.15s",
-            }}
+            style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: 6, padding: "8px 16px", borderRadius: 10, background: "transparent", border: "1px solid #e5e7eb", color: "#6b7280", fontSize: 12, fontWeight: 600, textDecoration: "none", transition: "all 0.15s" }}
             className="dark:border-gray-700 dark:text-gray-400 hover:border-brand-300 hover:text-brand-500 dark:hover:border-brand-600 dark:hover:text-brand-400"
           >
             <IconChevronRight size={14} color="currentColor" />
             Lihat Detail
           </a>
 
-          {/* Primary Action Button */}
           {isPaid ? (
             <div
               style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: 7, padding: "9px 16px", borderRadius: 10, background: "rgba(34,197,94,0.1)", border: "1px solid rgba(34,197,94,0.2)", color: "#16a34a", fontSize: 13, fontWeight: 700 }}
@@ -790,7 +775,7 @@ function ShowCard({ show, ticketStatus, isLoggedIn, membershipType, onBuy, onOpe
               className="w-full flex items-center justify-center gap-1.5 text-[13px] font-bold py-[9px]"
             >
               <IconTicket size={14} color="white" />
-              Beli Tiket — Rp 7.000
+              Beli Tiket — {priceDisplay}
             </RainbowButton>
           )}
         </div>
@@ -995,7 +980,6 @@ const ShowSchedulePage: React.FC = () => {
         `}</style>
       </div>
 
-      {/* Modal beli baru */}
       {buyingShow && loginData && (
         <PaymentModal
           show={buyingShow}
@@ -1006,7 +990,6 @@ const ShowSchedulePage: React.FC = () => {
         />
       )}
 
-      {/* Modal lanjutkan pending */}
       {pendingShow && loginData && ticketStatuses[pendingShow.id]?.pending_ticket && (
         <PaymentModal
           show={pendingShow}
