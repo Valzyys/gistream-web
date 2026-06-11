@@ -1,458 +1,786 @@
-╔══════════════════════════════════════════════════════════════════╗
-║     GISTREAM PARTNER API v2.0 — AI PROMPT PACK                  ║
-║     Versi: Modular (Existing Server + Lovable)                   ║
-╚══════════════════════════════════════════════════════════════════╝
+╔══════════════════════════════════════════════════════════════════════╗
+║   GISTREAM PARTNER API v2.0 — AI PROMPT PACK (v4)                   ║
+║   Skenario: Tambah GiStream sebagai server stream tambahan           ║
+║   Security-first · No Proxy · Direct Call                           ║
+╚══════════════════════════════════════════════════════════════════════╝
 
-Ada 3 prompt di file ini. Pilih sesuai kebutuhanmu:
+Pilih prompt sesuai kebutuhanmu:
 
-  [PROMPT A] — Untuk AI umum (ChatGPT, Claude, dll)
-               Kamu punya EXISTING SERVER dan ingin tambah endpoint
-               baru khusus GiStream token generation.
+  [PROMPT A] — AI Umum (Claude, ChatGPT, dll)
+               Kamu sudah punya Server A dan B untuk stream lain.
+               Tambahkan GiStream sebagai Server C.
 
-  [PROMPT B] — Untuk AI umum (ChatGPT, Claude, dll)
-               Kamu mulai dari nol / standalone backend khusus
-               GiStream saja.
+  [PROMPT B] — Khusus LOVABLE
+               Lovable generate backend security alias + frontend.
+               Backend alias wajib dibuat agar PARTNER_SECRET
+               tidak pernah ada di kode frontend.
 
-  [PROMPT C] — Khusus untuk LOVABLE
-               Lovable tidak bisa menyimpan secret di frontend,
-               prompt ini menjelaskan arsitektur yang benar dan
-               meminta Lovable hanya membangun UI-nya saja.
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+▌PROMPT A — AI UMUM · TAMBAH GISTREAM SEBAGAI SERVER C
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-Cara pakai: copy isi prompt yang kamu butuhkan, paste sebagai
-pesan pertama / system prompt ke AI yang kamu gunakan.
+Saya punya aplikasi streaming yang sudah berjalan dengan beberapa
+server stream (misalnya Server A = Showroom, Server B = YouTube Live).
+Saya ingin menambahkan GiStream sebagai Server C untuk JKT48 IDN Live+
+dan theater show, menggunakan pola yang sama dengan server-server
+yang sudah ada.
 
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-▌PROMPT A — EXISTING SERVER (tambah endpoint GiStream)
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+Tolong bantu saya mengintegrasikan GiStream sebagai server stream
+tambahan di kode yang sudah ada. JANGAN tulis ulang seluruh kode —
+cukup tambahkan bagian GiStream saja.
 
-Saya ingin menambahkan integrasi GiStream streaming API ke server
-yang sudah ada. Tolong buatkan HANYA bagian yang perlu ditambahkan —
-jangan tulis ulang seluruh server saya.
+═══════════════════════════════════════════════════════════════════
+  APA ITU GISTREAM
+═══════════════════════════════════════════════════════════════════
 
-=== KONTEKS GISTREAM API ===
-
-GiStream adalah platform streaming JKT48. Untuk memutar stream,
-flow-nya adalah:
-
-  1. Backend generate JWT token dari Token API (HMAC proof-of-knowledge)
-  2. Backend / frontend ambil stream URL dari Stream Worker
-  3. Frontend/player pakai token di header untuk HLS proxy
-
-BASE URLs:
-  Token API    : https://v5.jkt48connect.com
-  Stream Worker: https://ctv.jkt48connect.com
-  HLS Proxy    : https://stp33.jkt48connect.com
-
-=== CREDENTIAL ===
-
-Saya punya dua credential dari GiStream:
-  PARTNER_KID    = "jkt48connect-v1"   ← non-rahasia, boleh di kode
-  PARTNER_SECRET = <dari env var>       ← HANYA di server, tidak pernah dikirim
-
-=== CARA KERJA AUTH (HMAC Proof-of-Knowledge) ===
-
-Tidak ada header x-partner-secret. Secret dibuktikan lewat HMAC:
-
-  signingPath  = "/api/token/generate?apikey=JKTCONNECT"
-  bodyForHash  = "{}"   ← selalu string ini
-
-  signingString = timestamp + ":" + nonce + ":" + "POST" + ":" + signingPath + ":" + SHA256(bodyForHash)
-  signature     = HMAC-SHA256(signingString, PARTNER_SECRET)  → hex string
-
-  timestamp = Date.now() dalam MILLISECONDS
-  nonce     = random UUID tanpa strip, sekali pakai
-
-Request headers ke Token API:
-  x-kid        : PARTNER_KID
-  x-timestamp  : timestamp (ms)
-  x-nonce      : nonce unik
-  x-signature  : HMAC hex
-  x-showid     : show ID (atau x-slug jika pakai slug)
-  Content-Type : application/json
-  Body         : {}
-
-TIDAK ADA x-partner-secret di header.
-
-=== ATURAN WAJIB ===
-
-1. PARTNER_SECRET hanya di server (env var), tidak pernah ke client
-2. x-kid boleh ada di kode (non-rahasia)
-3. Generate token HANYA di backend — tidak boleh di browser/RN
-4. Token bersifat one-time-use saat hit /stream — jangan panggil dua kali
-5. Frontend inject token via header x-api-token ke HLS proxy (stp33)
-6. Lindungi endpoint generate token dengan autentikasi user kamu
-
-=== YANG PERLU DITAMBAHKAN KE SERVER SAYA ===
-
-Tolong buatkan kode untuk ditambahkan ke server yang sudah ada:
-
-1. Helper function: buildHMACHeaders() — generate x-kid, x-timestamp,
-   x-nonce, x-signature dari PARTNER_SECRET
-
-2. Helper function: generateStreamToken(showId, isSlug) — panggil
-   POST https://v5.jkt48connect.com/api/token/generate?apikey=JKTCONNECT
-
-3. Helper function: getStreamURL(token, showId, isSlug) — panggil
-   GET https://ctv.jkt48connect.com/stream
-
-4. Route/endpoint baru: GET/POST /api/stream-token
-   - Validasi user sudah login (gunakan sistem auth yang sudah ada)
-   - Terima showId atau slug dari query/body
-   - Panggil generateStreamToken + getStreamURL
-   - Return token dan stream qualities ke client
-
-Sesuaikan dengan stack saya: [GANTI DENGAN STACK KAMU,
-contoh: "Node.js Express", "Hono Cloudflare Workers",
-"Next.js App Router Route Handler", "Python FastAPI", dll]
-
-=== RESPONSE FORMAT STREAM ===
-
-Response dari ctv.jkt48connect.com/stream berisi array streams:
-  url      : URL internal (jangan dipakai)
-  url-2    : URL spt33 HLS proxy ← GUNAKAN INI untuk player
-  NAME     : label kualitas (1080p60, 720p60, 480p, 360p, 160p)
-  BANDWIDTH: bitrate bps
-
-=== TOKEN REFRESH ===
-
-Setelah /stream dipanggil, token habis (one-time-use). Untuk
-livestream panjang, pantau header X-Token-Need-Refresh: true
-dari response /stream — kalau true, generate token baru sebelum
-request /stream berikutnya.
-
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-▌PROMPT B — STANDALONE BACKEND (mulai dari nol)
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
-Tolong buatkan backend server lengkap untuk integrasi GiStream
-Partner API v2.0. Backend ini akan menjadi middleware antara
-frontend/mobile saya dan GiStream.
-
-=== APA ITU GISTREAM ===
-
-GiStream adalah platform streaming JKT48. Partner perlu generate
-JWT token dari GiStream API sebelum bisa memutar stream HLS.
-
-=== BASE URLs GISTREAM ===
+GiStream adalah platform streaming JKT48 milik JKT48Connect.
+Partner perlu generate JWT token menggunakan HMAC proof-of-knowledge
+sebelum bisa memutar stream HLS.
 
   Token API    : https://v5.jkt48connect.com
   Stream Worker: https://ctv.jkt48connect.com
-  HLS Proxy    : https://stp33.jkt48connect.com
 
-=== CREDENTIAL ===
+TIDAK ADA proxy layer. Panggil langsung ke dua domain di atas.
 
-  PARTNER_KID    = "jkt48connect-v1"   ← non-rahasia
-  PARTNER_SECRET = dari env var         ← server only, TIDAK PERNAH dikirim
+═══════════════════════════════════════════════════════════════════
+  CREDENTIAL
+═══════════════════════════════════════════════════════════════════
 
-=== AUTH MECHANISM — HMAC PROOF-OF-KNOWLEDGE ===
+  PARTNER_KID    = "jkt48connect-v1"
+                   → non-rahasia, boleh hardcode di kode
 
-Setiap request ke Token API menggunakan HMAC signature sebagai
-bukti bahwa server tahu PARTNER_SECRET — secret tidak pernah
-dikirim di header.
+  PARTNER_SECRET = [nilai dari tim GiStream]
+                   → SANGAT RAHASIA
+                   → HANYA boleh ada di: environment variable server,
+                     secrets manager (Vault, AWS Secrets Manager,
+                     Cloudflare Workers secret, Railway secret)
+                   → TIDAK BOLEH ada di: source code, .env yang
+                     di-commit ke git, frontend bundle, APK/IPA,
+                     variable dengan prefix NEXT_PUBLIC_ / VITE_ /
+                     REACT_APP_ / EXPO_PUBLIC_
 
-Formula:
-  body_hash    = SHA256("{}")  ← selalu hash dari string "{}"
-  signing_str  = timestamp + ":" + nonce + ":" + "POST" +
-                 ":" + "/api/token/generate?apikey=JKTCONNECT" +
-                 ":" + body_hash
-  signature    = HMAC-SHA256(signing_str, PARTNER_SECRET) → hex
+═══════════════════════════════════════════════════════════════════
+  CARA KERJA AUTH — HMAC PROOF-OF-KNOWLEDGE
+═══════════════════════════════════════════════════════════════════
 
-Headers yang dikirim ke Token API:
-  x-kid        : "jkt48connect-v1"
-  x-timestamp  : Date.now() dalam ms (string)
-  x-nonce      : UUID tanpa strip, sekali pakai per 60 detik
-  x-signature  : signature hex
-  x-showid     : show ID yang ingin diputar (atau x-slug)
-  Content-Type : application/json
-  Body         : {}
+Secret TIDAK dikirim. Server GiStream membuktikan kamu tahu
+secret-nya dari signature yang valid — mirip AWS Signature V4.
 
-TIDAK ADA header x-partner-secret.
+  Formula:
+    body_hash   = SHA256("{}")     ← SELALU hash dari string literal "{}"
+    signing_str = timestamp + ":" + nonce + ":" + "POST" + ":"
+                  + "/api/token/generate?apikey=JKTCONNECT" + ":"
+                  + body_hash
+    signature   = HMAC-SHA256(signing_str, PARTNER_SECRET) → hex
 
-=== ENDPOINT YANG PERLU DIBUAT ===
+  Aturan nilai:
+    timestamp → Date.now() dalam MILLISECONDS (bukan detik)
+    nonce     → crypto.randomUUID() tanpa strip, SEKALI PAKAI,
+                tidak boleh dipakai ulang dalam window 60 detik
+    body_hash → selalu dari string "{}", bukan object kosong
 
-Backend harus mengekspos endpoint ini ke client:
+  Headers yang dikirim ke Token API (POST):
+    x-kid        : PARTNER_KID       ← non-rahasia
+    x-timestamp  : timestamp ms
+    x-nonce      : nonce unik
+    x-signature  : HMAC hex          ← BUKAN secret-nya
+    x-showid     : show ID           ← atau x-slug jika pakai slug
+    Content-Type : application/json
+    Body         : {}
 
-  GET /api/stream-token?showId=SHDA13
-    - Opsional: lindungi dengan Bearer token / session milik kamu
-    - Panggil Token API → dapat JWT GiStream
-    - Panggil Stream Worker → dapat stream URLs
-    - Return ke client: { token, streams: [{name, url, "url-2", bandwidth}] }
+  TIDAK ADA header x-partner-secret — header ini sudah dihapus
+  di v2.0 dan akan diabaikan server jika dikirim.
 
-  GET /api/stream-check?showId=SHDA13  (opsional)
-    - Non-consuming token check
-    - Proxy ke https://ctv.jkt48connect.com/verify/check
+═══════════════════════════════════════════════════════════════════
+  FLOW LENGKAP
+═══════════════════════════════════════════════════════════════════
 
-=== ATURAN KEAMANAN ===
+  1. Generate JWT token:
+     POST https://v5.jkt48connect.com/api/token/generate?apikey=JKTCONNECT
+     → dapat JWT string
 
-- PARTNER_SECRET hanya dari process.env / os.environ
-- JANGAN expose PARTNER_SECRET ke response manapun
-- x-kid boleh ada di kode
-- Token one-time-use: jangan panggil /stream dua kali dengan token sama
-- Frontend hanya menerima token jadi, tidak melakukan signing
-- Tambahkan rate limiting pada endpoint /api/stream-token
+  2. Ambil stream URL:
+     GET https://ctv.jkt48connect.com/stream?showId={showId}
+     Header: x-api-token: {JWT}
+     → dapat array streams[]
 
-=== STACK ===
+  3. Ambil URL stream dari field "url":
+     streams[0].url  ← ini yang dipakai untuk HLS player
 
-[GANTI DENGAN STACK KAMU:
-contoh: "Node.js + Express + TypeScript",
-"Cloudflare Workers + Hono",
-"Next.js 14 App Router",
-"Python FastAPI",
-"Go Gin", dll]
+  4. HLS player load URL tersebut.
+     Field "url" TETAP membutuhkan header x-api-token di setiap
+     HLS request (manifest dan segment) — sama seperti "url-2".
+     Inject via xhrSetup dan fetchSetup di konfigurasi hls.js.
 
-=== TAMBAHAN (opsional, sebutkan yang kamu mau) ===
+  PENTING — Token bersifat ONE-TIME-USE:
+  Setelah endpoint /stream dipanggil, JTI token di-blacklist
+  di KV storage. JANGAN panggil /stream dua kali dengan token
+  yang sama. Generate token baru untuk setiap sesi baru.
 
-- [ ] CORS config untuk domain frontend saya: [domain kamu]
-- [ ] Rate limiting
-- [ ] Logging request token (tanpa expose secret)
-- [ ] Error handling dengan format JSON konsisten
-- [ ] TypeScript types untuk response GiStream
+═══════════════════════════════════════════════════════════════════
+  SKENARIO MULTI-SERVER (SERVER A + B + C)
+═══════════════════════════════════════════════════════════════════
 
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-▌PROMPT C — LOVABLE
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+Kode saya sudah punya pola seperti ini (contoh):
 
-PENTING SEBELUM PAKAI:
-Lovable hanya bisa generate frontend (React/TypeScript).
-Lovable TIDAK BISA menyimpan secret key dengan aman karena
-semua kode frontend bisa dibaca user.
-Gunakan prompt ini untuk membangun UI streaming-nya saja.
-Token harus datang dari backend kamu sendiri (Express, Hono, dll).
-
----
-
-Saya ingin membangun halaman streaming video untuk JKT48 show
-menggunakan GiStream. Tolong bantu saya dengan bagian FRONTEND-nya.
-
-=== ARSITEKTUR YANG SUDAH ADA ===
-
-Saya sudah punya backend server di [URL_BACKEND_KAMU] yang
-mengekspos endpoint:
-
-  GET [URL_BACKEND_KAMU]/api/stream-token?showId={showId}
-  Response:
-  {
-    "token": "eyJhbGci...",
-    "streams": [
-      {
-        "name": "1080p60",
-        "url-2": "https://stp33.jkt48connect.com/hls/?u=...",
-        "bandwidth": 5000000
-      },
-      {
-        "name": "720p60",
-        "url-2": "https://stp33.jkt48connect.com/hls/?u=...",
-        "bandwidth": 3000000
-      }
-    ]
+  if (serverType === "showroom") {
+    // Server A: load dari Showroom API
+  } else if (serverType === "youtube") {
+    // Server B: load dari YouTube Live API
   }
 
-Jika belum punya backend, gunakan Prompt A atau B dulu untuk
-membangun backend-nya, lalu kembali ke sini.
+Yang perlu ditambahkan adalah cabang Server C:
 
-=== APA YANG PERLU DIBANGUN LOVABLE ===
+  } else if (serverType === "gistream") {
+    // Server C: GiStream — IDN Live+ dan JKT48 theater
+    // 1. Tentukan apakah pakai slug (IDN) atau showId (theater)
+    // 2. Generate token via HMAC
+    // 3. Ambil stream URL dari ctv.jkt48connect.com/stream
+    // 4. Gunakan field "url" dari response
+    // 5. Load ke HLS player dengan inject x-api-token di xhrSetup/fetchSetup
+  }
 
-Buatkan komponen React + TypeScript untuk halaman streaming:
+Tambahkan cabang ini tanpa mengubah Server A dan B.
 
-1. FETCH TOKEN dari backend saya saat halaman dibuka:
-   - Call GET [URL_BACKEND_KAMU]/api/stream-token?showId={showId}
-   - Simpan token di React state (useState), BUKAN localStorage
-   - Tampilkan loading spinner saat fetch
+═══════════════════════════════════════════════════════════════════
+  HELPER FUNCTIONS YANG PERLU DIBUAT
+═══════════════════════════════════════════════════════════════════
 
-2. HLS VIDEO PLAYER menggunakan hls.js:
-   Install: npm install hls.js
-   - Load URL dari field "url-2" di response streams[0]
-   - Inject header x-api-token ke setiap request HLS:
-     xhrSetup: (xhr) => xhr.setRequestHeader("x-api-token", token)
-     fetchSetup: (ctx, init) => {
-       init.headers = { ...init.headers, "x-api-token": token };
-       return new Request(ctx.url, init);
-     }
-   - Auto-play saat manifest parsed
-   - Handle fatal error dengan retry
+1. sha256Hex(str) → hash SHA-256 dari string, return hex
+2. hmacSHA256Hex(secret, message) → HMAC-SHA256, return hex
+3. buildHMACHeaders() → return object headers:
+   { "x-kid", "x-timestamp", "x-nonce", "x-signature" }
+4. generateGiStreamToken(showId, isSlug) → string JWT
+5. getGiStreamURL(token, showId, isSlug) → { url, qualities[] }
+   ↳ ambil field "url" dari streams[0]
 
-3. QUALITY SELECTOR:
-   - Tampilkan dropdown dari data streams[]
-   - Label dari field "name" (1080p60, 720p60, dst)
-   - "Auto" sebagai pilihan default (hls.js ABR)
-   - Saat user pilih manual: load URL dari "url-2" kualitas tersebut
-     dan fetch token baru dari backend (token bersifat one-time-use)
+═══════════════════════════════════════════════════════════════════
+  TOKEN REFRESH UNTUK LIVESTREAM PANJANG
+═══════════════════════════════════════════════════════════════════
 
-4. TOKEN REFRESH:
-   - Decode JWT payload (base64 bagian tengah) untuk baca field exp
-   - Jika sisa waktu ≤ 5 menit: fetch token baru dari backend
-   - Jalankan check setiap 5 menit dengan setInterval
-   - Cleanup interval saat komponen unmount
+Token berlaku 2 jam (7200 detik). Untuk livestream theater yang
+bisa berlangsung >2 jam, implementasikan refresh:
 
-5. UI/UX:
-   - Video player full-width dengan aspect ratio 16:9 untuk IDN show
-   - Badge "LIVE" merah beranimasi pulse
-   - Indikator kualitas aktif di pojok kanan bawah player
-   - Tampilkan nama show dan info dari props
-   - Error state yang jelas dengan tombol retry
-   - Loading skeleton saat token sedang di-fetch
+  - Decode JWT payload (base64 bagian tengah) untuk baca field exp
+  - Jika exp - now <= 300 detik (5 menit), generate token baru
+  - Jalankan pengecekan setiap 5 menit dengan setInterval
+  - Cleanup interval saat komponen/session selesai
+  - Setelah dapat token baru, panggil ulang /stream untuk dapat
+    URL baru, lalu re-init hls.js dengan token baru di xhrSetup
 
-=== INTERFACE PROPS ===
+═══════════════════════════════════════════════════════════════════
+  🔐 SECURITY — WAJIB DIIKUTI (JANGAN SKIP)
+═══════════════════════════════════════════════════════════════════
 
-interface StreamPlayerProps {
-  showId:    string;   // contoh: "SHDA13"
-  showTitle: string;   // judul show
-  showImage?: string;  // thumbnail show (opsional)
-  backendUrl: string;  // URL backend saya
-}
+Ini yang PALING PENTING. Pastikan semua poin ini ada di kode:
 
-=== CATATAN KEAMANAN (WAJIB DIIKUTI) ===
+  CRITICAL — jika dilanggar, secret bisa bocor:
 
-- JANGAN taruh PARTNER_SECRET atau PARTNER_KID di kode Lovable
-- JANGAN call https://v5.jkt48connect.com langsung dari frontend
-- Token hanya dari backend endpoint saya
-- Simpan token di React state, BUKAN localStorage/sessionStorage
-- JANGAN log atau print token ke console
+  ✦ PARTNER_SECRET hanya dari environment variable di sisi server.
+    Jangan pernah taruh nilainya langsung di kode.
+    Benar : process.env.PARTNER_SECRET
+    Salah : const SECRET = "gstream@..."  ← BAHAYA, akan bocor
 
-=== STACK PREFERENSI ===
+  ✦ Jangan pernah expose PARTNER_SECRET ke response API manapun.
+    Jangan log, jangan print, jangan masukkan ke error message.
 
-- React + TypeScript
-- Tailwind CSS untuk styling
-- hls.js untuk HLS playback
-- lucide-react untuk icons
+  ✦ Jika stack kamu adalah React/Next.js, pastikan HMAC signing
+    dilakukan HANYA di server-side (API Route, Server Action,
+    getServerSideProps). JANGAN di client component.
 
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-▌REFERENSI CEPAT — untuk semua prompt di atas
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  ✦ Jika stack adalah Cloudflare Workers / Hono, simpan secret
+    via: wrangler secret put PARTNER_SECRET
+    JANGAN masukkan ke wrangler.toml atau file yang di-commit.
 
-DOMAIN:
-  ✅ Token API    : https://v5.jkt48connect.com   ← v5, bukan v2!
-  ✅ Stream Worker: https://ctv.jkt48connect.com
-  ✅ HLS Proxy    : https://stp33.jkt48connect.com
+  ✦ Jika stack adalah Vite/CRA/Lovable (pure frontend), WAJIB
+    buat backend security alias terlebih dahulu (lihat Prompt B).
+    PARTNER_SECRET tidak boleh ada di file yang di-bundle ke browser.
 
-CREDENTIAL:
-  PARTNER_KID    : jkt48connect-v1  (non-rahasia, boleh di kode)
-  PARTNER_SECRET : [dari tim GiStream] (rahasia, server only)
+  ✦ JWT token GiStream mengandung x-api-token yang dipakai untuk
+    mengakses HLS stream. Jaga token ini sama ketatnya dengan
+    menjaga PARTNER_SECRET — token yang bocor bisa dipakai orang
+    lain untuk menonton stream hingga expired (2 jam).
 
-HEADERS GENERATE TOKEN:
-  ✅ x-kid, x-timestamp, x-nonce, x-signature, x-showid
-  ❌ x-partner-secret (dihapus di v2.0, jangan kirim)
+  IMPORTANT — mitigasi risiko tambahan:
 
-SIGNING FORMULA (copy-paste ke AI jika perlu):
-  timestamp    = Date.now().toString()          ← MILLISECONDS
-  nonce        = crypto.randomUUID().replace(/-/g, "")
-  body_hash    = SHA256("{}")                   ← hash dari string "{}"
-  signing_str  = `${timestamp}:${nonce}:POST:/api/token/generate?apikey=JKTCONNECT:${body_hash}`
-  signature    = HMAC-SHA256(signing_str, PARTNER_SECRET) → hex
+  ✦ Tambahkan autentikasi user sebelum memanggil generate token.
+    Endpoint yang memanggil GiStream Token API harus dilindungi —
+    hanya user yang punya akses (tiket/membership) yang boleh
+    mendapatkan token.
 
-TOKEN BEHAVIOR:
-  - Berlaku 2 jam (7200 detik)
-  - ONE-TIME-USE saat hit /stream (JTI di-blacklist)
-  - spt33 NON-consuming (bisa dipanggil berkali-kali)
-  - Refresh saat X-Token-Need-Refresh: true (≤5 menit tersisa)
+  ✦ Tambahkan rate limiting pada endpoint generate token.
+    Batasi misalnya 5 request/menit per user_id atau per IP.
+    Tanpa ini, kuota token partner bisa dihabiskan oleh abuse.
 
-ERROR UMUM:
-  401 Signature tidak valid → cek formula signing, pastikan path
-      menyertakan ?apikey=JKTCONNECT dan body hash dari string "{}"
-  401 Timestamp kadaluarsa  → gunakan ms bukan detik (Date.now())
-  403 Nonce dipakai ulang   → generate nonce baru setiap request
-  403 JTI_USED              → jangan call /stream dua kali dgn token sama
-  400 Missing x-slug/showid → wajib kirim salah satunya
+  ✦ Jangan simpan JWT GiStream di localStorage atau sessionStorage.
+    Simpan di React state (memory) atau httpOnly cookie.
+    JWT di localStorage rentan dicuri via XSS.
 
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-▌CONTOH POTONGAN KODE REFERENSI
-▌(untuk dilampirkan ke prompt jika AI butuh contoh konkret)
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  ✦ Jangan log JWT token ke console atau server log di production.
+    Token bisa di-replay sampai expired jika bocor dari log.
 
---- Node.js / TypeScript (untuk Prompt A & B) ---
+  ✦ Jika menggunakan mobile app (React Native/Flutter):
+    - PARTNER_SECRET tidak boleh ada di APK/IPA
+    - APK bisa di-decompile dengan jadx/apktool
+    - Signing harus dilakukan di backend, app hanya terima JWT jadi
+    - Gunakan certificate pinning untuk channel app <-> backend
 
-const PARTNER_KID    = "jkt48connect-v1";
-const PARTNER_SECRET = process.env.PARTNER_SECRET!;
+  ✦ Lakukan rotasi PARTNER_SECRET secara berkala (setiap 90 hari)
+    atau segera jika ada indikasi kebocoran. Koordinasikan dengan
+    tim GiStream untuk mendapatkan kid baru via zero-downtime
+    rotation (kid lama dan baru aktif bersamaan selama transisi).
+
+  ✦ Scan repository dengan gitleaks atau truffleHog sebelum push
+    untuk mendeteksi secret yang tidak sengaja ter-commit.
+
+  ✦ Gunakan .gitignore yang benar — pastikan .env, .dev.vars,
+    dan file secrets lokal tidak pernah masuk ke repository.
+
+═══════════════════════════════════════════════════════════════════
+  ERROR CODES YANG MUNGKIN MUNCUL
+═══════════════════════════════════════════════════════════════════
+
+  Generate Token (v5.jkt48connect.com):
+    401 → Header tidak lengkap / timestamp expired (>60 detik) /
+          HMAC signature tidak cocok / x-kid tidak ditemukan
+          (semua error ini disatukan pesannya untuk mencegah
+           attacker enumerate kid yang valid)
+    403 → Nonce sudah pernah dipakai (replay attack detected)
+    400 → Tidak ada x-slug atau x-showid / apikey tidak disertakan
+    429 → Rate limit exceeded (30 req/menit per IP)
+
+  Stream Worker (ctv.jkt48connect.com):
+    401 TOKEN_EXPIRED     → Generate token baru
+    403 INVALID_SIGNATURE → Token dimanipulasi
+    403 JTI_USED          → Token sudah dikonsumsi sebelumnya
+    403 IP_MISMATCH       → IP berubah setelah token dibuat
+    403 SLUG/SHOWID_MISMATCH → Identifier tidak cocok dengan token
+    403 INVALID_SECRET    → Partner secret hash tidak cocok
+    502                   → Stream tidak ditemukan / CDN error
+
+  Debugging 401 signature:
+    1. Pastikan timestamp dalam MILLISECONDS (Date.now(), bukan /1000)
+    2. Pastikan body yang di-hash adalah string "{}" (bukan object)
+    3. Pastikan signing path menyertakan ?apikey=JKTCONNECT
+    4. Pastikan PARTNER_SECRET sama persis (tidak ada trailing space)
+
+═══════════════════════════════════════════════════════════════════
+  STACK SAYA
+═══════════════════════════════════════════════════════════════════
+
+[GANTI DENGAN STACK KAMU]
+Contoh:
+  "React + TypeScript + Vite, backend Cloudflare Workers + Hono"
+  "Next.js 14 App Router, deploy di Vercel"
+  "React Native Expo, backend Express di Railway"
+  "Lovable (pure frontend)" → gunakan Prompt B
+
+═══════════════════════════════════════════════════════════════════
+  CONTOH REFERENSI KODE (TypeScript/JavaScript)
+═══════════════════════════════════════════════════════════════════
+
+Ini contoh implementasi lengkap yang bisa dijadikan referensi.
+Sesuaikan dengan pola kode yang sudah ada di server kamu.
+
+--- Helpers (jalankan di sisi server/backend SAJA) ---
+
+const PARTNER_KID    = "jkt48connect-v1";           // non-rahasia
+const PARTNER_SECRET = process.env.PARTNER_SECRET!; // HANYA env var
+const TOKEN_API      = "https://v5.jkt48connect.com";
+const CTV_BASE       = "https://ctv.jkt48connect.com";
 const SIGNING_PATH   = "/api/token/generate?apikey=JKTCONNECT";
 
-async function sha256Hex(str: string) {
-  const buf = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(str));
-  return Array.from(new Uint8Array(buf)).map(b => b.toString(16).padStart(2,"0")).join("");
+async function sha256Hex(str: string): Promise<string> {
+  const buf = await crypto.subtle.digest(
+    "SHA-256", new TextEncoder().encode(str)
+  );
+  return Array.from(new Uint8Array(buf))
+    .map(b => b.toString(16).padStart(2, "0")).join("");
 }
 
-async function hmacHex(secret: string, msg: string) {
+async function hmacSHA256Hex(secret: string, msg: string): Promise<string> {
   const key = await crypto.subtle.importKey(
     "raw", new TextEncoder().encode(secret),
     { name: "HMAC", hash: "SHA-256" }, false, ["sign"]
   );
-  const buf = await crypto.subtle.sign("HMAC", key, new TextEncoder().encode(msg));
-  return Array.from(new Uint8Array(buf)).map(b => b.toString(16).padStart(2,"0")).join("");
+  const buf = await crypto.subtle.sign(
+    "HMAC", key, new TextEncoder().encode(msg)
+  );
+  return Array.from(new Uint8Array(buf))
+    .map(b => b.toString(16).padStart(2, "0")).join("");
 }
 
-async function buildHMACHeaders() {
-  const ts   = Date.now().toString();
-  const nc   = crypto.randomUUID().replace(/-/g,"");
-  const bh   = await sha256Hex("{}");
-  const sig  = await hmacHex(PARTNER_SECRET,
-    `${ts}:${nc}:POST:${SIGNING_PATH}:${bh}`);
-  return { "x-kid": PARTNER_KID, "x-timestamp": ts,
-           "x-nonce": nc, "x-signature": sig };
+async function buildHMACHeaders(): Promise<Record<string, string>> {
+  const timestamp  = Date.now().toString();  // MILLISECONDS
+  const nonce      = crypto.randomUUID().replace(/-/g, "");
+  const bodyHash   = await sha256Hex("{}");  // hash dari string "{}"
+  const signingStr = `${timestamp}:${nonce}:POST:${SIGNING_PATH}:${bodyHash}`;
+  const signature  = await hmacSHA256Hex(PARTNER_SECRET, signingStr);
+  return {
+    "x-kid":       PARTNER_KID,  // non-rahasia
+    "x-timestamp": timestamp,
+    "x-nonce":     nonce,
+    "x-signature": signature,
+    // TIDAK ADA "x-partner-secret" — dihapus di v2.0
+  };
 }
 
-async function generateStreamToken(showId: string, isSlug = false) {
-  const h = await buildHMACHeaders();
-  const res = await fetch(`https://v5.jkt48connect.com${SIGNING_PATH}`, {
+--- Generate Token ---
+
+async function generateGiStreamToken(
+  showId: string,
+  isSlug: boolean
+): Promise<string> {
+  const hmacHeaders = await buildHMACHeaders();
+  const res = await fetch(`${TOKEN_API}${SIGNING_PATH}`, {
     method: "POST",
-    headers: { ...h,
-      ...(isSlug ? {"x-slug": showId} : {"x-showid": showId}),
-      "Content-Type": "application/json" },
+    headers: {
+      ...hmacHeaders,
+      ...(isSlug ? { "x-slug": showId } : { "x-showid": showId }),
+      "Content-Type": "application/json",
+    },
     body: "{}",
   });
-  const data = await res.json();
-  if (!data.status) throw new Error(data.message);
+  const text = await res.text();
+  let data: any;
+  try { data = JSON.parse(text); }
+  catch { throw new Error("Token API non-JSON response"); }
+  if (!data.status) throw new Error("Generate token gagal: " + data.message);
   return data.data.token as string;
 }
 
-async function getStreamURL(token: string, showId: string, isSlug = false) {
-  const p = isSlug ? `slug=${showId}` : `showId=${showId}`;
-  const res = await fetch(`https://ctv.jkt48connect.com/stream?${p}`, {
-    headers: { "x-api-token": token,
-      ...(isSlug ? {"x-slug": showId} : {"x-showid": showId}) },
+--- Get Stream URL (gunakan field "url") ---
+
+interface GiStreamQuality {
+  index:     number;
+  name:      string;
+  bandwidth: number;
+  url:       string;   // ← field "url", ini yang dipakai untuk player
+}
+
+async function getGiStreamURL(
+  token: string,
+  showId: string,
+  isSlug: boolean
+): Promise<{ url: string; qualities: GiStreamQuality[] }> {
+  const param = isSlug ? `slug=${showId}` : `showId=${showId}`;
+  const res = await fetch(`${CTV_BASE}/stream?${param}`, {
+    headers: {
+      "x-api-token": token,
+      ...(isSlug ? { "x-slug": showId } : { "x-showid": showId }),
+    },
   });
   const data = await res.json();
-  if (!data.success) throw new Error(data.message);
-  return data.streams as any[];
+  if (!data.success) throw new Error(data.message || "Gagal ambil stream URL");
+
+  const streams: any[] = data.streams || [];
+  const qualities: GiStreamQuality[] = streams.map((s, idx) => ({
+    index:     idx,
+    name:      s.NAME || `q${idx}`,
+    bandwidth: parseInt(s.BANDWIDTH) || 0,
+    url:       s.url || "",   // ← field "url"
+  }));
+
+  return {
+    url: streams[0]?.url || "",  // ← field "url" dari stream[0]
+    qualities,
+  };
 }
 
---- React Hook (untuk Prompt C / Lovable) ---
+--- Contoh integrasi ke pola multi-server yang sudah ada ---
 
-// Hook ini dipanggil oleh komponen frontend.
-// Ia fetch token dari BACKEND KAMU — bukan langsung ke GiStream.
-function useStreamToken(backendUrl: string, showId: string) {
-  const [token,   setToken]   = React.useState<string | null>(null);
-  const [streams, setStreams] = React.useState<any[]>([]);
-  const [loading, setLoading] = React.useState(true);
-  const [error,   setError]   = React.useState<string | null>(null);
+async function loadStream(serverType: string, identifier: string) {
+  // Server A — sudah ada sebelumnya
+  if (serverType === "showroom") {
+    // ... kode showroom yang sudah ada ...
 
-  const fetchToken = React.useCallback(async () => {
-    setLoading(true); setError(null);
+  // Server B — sudah ada sebelumnya
+  } else if (serverType === "youtube") {
+    // ... kode youtube yang sudah ada ...
+
+  // Server C — GiStream (BARU ditambahkan)
+  } else if (serverType === "gistream") {
+    const isSlug = isIdnSlug(identifier);
+    const token  = await generateGiStreamToken(identifier, isSlug);
+    const { url, qualities } = await getGiStreamURL(token, identifier, isSlug);
+
+    // Simpan token di state — dibutuhkan untuk inject ke HLS requests
+    setStreamToken(token);
+    setHlsUrl(url);
+    setQualities(qualities);
+  }
+}
+
+--- HLS Player untuk GiStream ---
+--- WAJIB inject x-api-token via xhrSetup DAN fetchSetup ---
+
+// Field "url" (sama seperti "url-2") membutuhkan header x-api-token
+// di setiap request HLS — manifest maupun segment.
+// Tanpa ini, stream akan gagal dengan 401/403.
+
+const hls = new Hls({
+  enableWorker:                true,
+  lowLatencyMode:              false,
+  maxBufferLength:             30,
+  maxMaxBufferLength:          60,
+  liveDurationInfinity:        true,
+  liveSyncDurationCount:       3,
+  liveMaxLatencyDurationCount: 10,
+  fragLoadingMaxRetry:         6,
+  manifestLoadingMaxRetry:     4,
+
+  // WAJIB — inject token ke setiap request HLS
+  xhrSetup: (xhr: XMLHttpRequest) => {
+    xhr.setRequestHeader("x-api-token", token);
+  },
+  fetchSetup: (context: any, initParams: any) => {
+    initParams.headers = {
+      ...initParams.headers,
+      "x-api-token": token,
+    };
+    return new Request(context.url, initParams);
+  },
+});
+
+hls.loadSource(giStreamUrl);  // field "url" dari response streams[0]
+hls.attachMedia(videoElement);
+hls.on(Hls.Events.MANIFEST_PARSED, () => videoElement.play().catch(() => {}));
+
+hls.on(Hls.Events.ERROR, (_, data) => {
+  if (!data.fatal) return;
+  if (data.type === Hls.ErrorTypes.NETWORK_ERROR) hls.startLoad();
+  else if (data.type === Hls.ErrorTypes.MEDIA_ERROR) hls.recoverMediaError();
+  else hls.destroy();
+});
+
+--- Token Refresh Manager ---
+
+class GiStreamTokenManager {
+  private token: string | null = null;
+  private timer: ReturnType<typeof setInterval> | null = null;
+
+  constructor(
+    private readonly showId: string,
+    private readonly isSlug: boolean,
+    private readonly onRefresh: (url: string, token: string) => void
+    // callback untuk re-init hls.js dengan token + url baru
+  ) {}
+
+  async start(): Promise<{ url: string; token: string }> {
+    await this._refresh();
+    this.timer = setInterval(() => this._checkExpiry(), 5 * 60 * 1000);
+    const { url } = await getGiStreamURL(this.token!, this.showId, this.isSlug);
+    return { url, token: this.token! };
+  }
+
+  private async _refresh() {
+    this.token = await generateGiStreamToken(this.showId, this.isSlug);
+    // Ambil URL baru dengan token baru, karena URL terikat token
+    const { url } = await getGiStreamURL(this.token, this.showId, this.isSlug);
+    // Re-init hls.js dengan token baru agar xhrSetup pakai token terbaru
+    this.onRefresh(url, this.token);
+  }
+
+  private async _checkExpiry() {
+    if (!this.token) return;
     try {
-      const res = await fetch(`${backendUrl}/api/stream-token?showId=${showId}`);
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      const data = await res.json();
-      setToken(data.token);          // simpan di state, BUKAN localStorage
-      setStreams(data.streams || []);
-    } catch (e: any) {
-      setError(e.message);
-    } finally {
-      setLoading(false);
-    }
-  }, [backendUrl, showId]);
+      const payload = JSON.parse(
+        atob(this.token.split(".")[1].replace(/-/g, "+").replace(/_/g, "/"))
+      );
+      const timeLeft = payload.exp - Math.floor(Date.now() / 1000);
+      if (timeLeft <= 300) await this._refresh();
+    } catch { /* ignore */ }
+  }
 
-  React.useEffect(() => { fetchToken(); }, [fetchToken]);
-
-  // Auto-refresh 5 menit sebelum expired
-  React.useEffect(() => {
-    if (!token) return;
-    const timer = setInterval(() => {
-      try {
-        const exp = JSON.parse(atob(token.split(".")[1]
-          .replace(/-/g,"+").replace(/_/g,"/"))).exp;
-        if (exp - Date.now()/1000 <= 300) fetchToken();
-      } catch {}
-    }, 5 * 60 * 1000);
-    return () => clearInterval(timer);
-  }, [token, fetchToken]);
-
-  return { token, streams, loading, error, refresh: fetchToken };
+  stop() {
+    if (this.timer) clearInterval(this.timer);
+    this.token = null;
+  }
 }
+
+// Contoh penggunaan di React component:
+// const manager = new GiStreamTokenManager(showId, isSlug, (newUrl, newToken) => {
+//   setStreamToken(newToken);  // update state → HLS component re-init otomatis
+//   setHlsUrl(newUrl);
+// });
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+▌PROMPT B — LOVABLE · BACKEND SECURITY ALIAS + FRONTEND
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+⚠️ BACA INI DULU SEBELUM PAKAI PROMPT B:
+
+Lovable adalah tools yang generate React frontend. Karena semua
+kode React di-bundle ke browser dan bisa dilihat siapa saja,
+PARTNER_SECRET tidak boleh ada di kode yang Lovable generate.
+
+Solusi: Lovable akan membuat DUA bagian:
+  1. Backend security alias (Node.js/Express kecil) yang menyimpan
+     PARTNER_SECRET dan melakukan HMAC signing. Deploy ini terpisah
+     di Railway, Render, atau platform sejenis.
+  2. React frontend yang hanya tahu URL backend alias tersebut —
+     tidak tahu PARTNER_SECRET sama sekali.
+
+Arsitektur yang benar:
+  Browser (React) → Backend Alias (Node.js) → GiStream API
+                  token + url dikembalikan ke React
+                  React inject token ke HLS requests
+
+---
+
+Saya menggunakan Lovable untuk membangun aplikasi streaming JKT48.
+Tolong buatkan dua bagian terpisah:
+
+BAGIAN 1: BACKEND SECURITY ALIAS (Node.js + Express)
+BAGIAN 2: REACT FRONTEND (streaming player)
+
+═══════════════════════════════════════════════════════════════════
+  BAGIAN 1 — BACKEND SECURITY ALIAS
+═══════════════════════════════════════════════════════════════════
+
+Buat file backend/server.js (atau backend/index.ts) yang bisa
+di-deploy ke Railway/Render/Fly.io sebagai service terpisah.
+
+Fungsi backend ini:
+  - Menyimpan PARTNER_SECRET di environment variable
+  - Melakukan HMAC signing ke GiStream Token API
+  - Mengekspos satu endpoint ke frontend React saya
+  - Bukan proxy stream — hanya generate token + ambil URL,
+    lalu return keduanya ke frontend untuk dipakai langsung
+
+Endpoint yang perlu dibuat:
+
+  GET /api/gistream/token?showId={showId}&isSlug={true|false}
+
+  Response sukses:
+  {
+    "success":   true,
+    "token":     "eyJhbGci...",     ← JWT, frontend inject ini ke HLS requests
+    "url":       "https://...m3u8", ← field "url" dari GiStream streams[0]
+    "qualities": [
+      { "index": 0, "name": "1080p60", "bandwidth": 5000000, "url": "..." },
+      { "index": 1, "name": "720p60",  "bandwidth": 3000000, "url": "..." }
+    ],
+    "expiresAt": "2025-05-15T10:00:00.000Z"
+  }
+
+  Response error:
+  { "success": false, "error": "pesan error yang aman" }
+    ← JANGAN expose detail internal atau nilai PARTNER_SECRET
+      di error message
+
+Cara backend memanggil GiStream:
+
+  Step 1 — Generate JWT token:
+    POST https://v5.jkt48connect.com/api/token/generate?apikey=JKTCONNECT
+    Headers:
+      x-kid        : "jkt48connect-v1"
+      x-timestamp  : Date.now().toString()    ← MILLISECONDS
+      x-nonce      : crypto.randomUUID() tanpa strip
+      x-signature  : HMAC-SHA256 hex (lihat formula di bawah)
+      x-showid     : showId  (atau x-slug jika isSlug=true)
+      Content-Type : application/json
+    Body: {}
+
+  Formula HMAC signature:
+    body_hash   = SHA256("{}")
+    signing_str = timestamp + ":" + nonce + ":" + "POST" + ":"
+                  + "/api/token/generate?apikey=JKTCONNECT" + ":"
+                  + body_hash
+    signature   = HMAC-SHA256(signing_str, process.env.PARTNER_SECRET)
+                  → return sebagai hex string
+
+  Step 2 — Ambil stream URL:
+    GET https://ctv.jkt48connect.com/stream?showId={showId}
+    Header: x-api-token: {JWT dari step 1}
+    → dari response, ambil streams[0].url (field "url")
+    → return token + url + qualities ke frontend
+
+  PENTING: backend TIDAK melakukan proxy stream.
+  Backend hanya return token dan URL ke frontend.
+  Frontend yang akan langsung hit URL tersebut dengan
+  menginject x-api-token ke setiap HLS request.
+
+Konfigurasi keamanan backend yang WAJIB:
+
+  - CORS: hanya izinkan origin dari domain frontend Lovable kamu
+    Contoh: origin: ["https://your-app.lovable.app"]
+    JANGAN pakai origin: "*" — ini membuka akses dari mana saja
+
+  - Rate limiting: maksimal 10 request/menit per IP
+    Gunakan express-rate-limit
+
+  - Helmet.js: tambahkan security headers standar
+
+  - Environment variables yang perlu di-set di Railway/Render:
+    PARTNER_SECRET = [nilai dari tim GiStream]   ← RAHASIA
+    PARTNER_KID    = jkt48connect-v1             ← non-rahasia
+    ALLOWED_ORIGIN = https://your-app.lovable.app
+
+  - JANGAN commit .env ke git. Tambahkan ke .gitignore.
+
+  - JANGAN pernah log atau print PARTNER_SECRET, bahkan di dev mode.
+
+  - Validasi input showId sebelum dipakai — jangan langsung
+    forward nilai mentah dari request ke GiStream API.
+
+  - JANGAN log nilai token JWT di server log production.
+
+  Dependencies yang dibutuhkan (package.json):
+    express, cors, helmet, express-rate-limit, dotenv
+
+═══════════════════════════════════════════════════════════════════
+  BAGIAN 2 — REACT FRONTEND (Lovable generate ini)
+═══════════════════════════════════════════════════════════════════
+
+Buat komponen React + TypeScript untuk streaming player.
+Frontend HANYA berkomunikasi dengan Backend Alias di atas untuk
+mendapatkan token dan URL — setelah itu frontend langsung hit
+URL stream dengan token di header HLS requests.
+
+Interface props komponen:
+
+  interface GiStreamPlayerProps {
+    showId:     string;   // contoh: "SHDA13" atau slug IDN
+    isSlug:     boolean;  // true untuk IDN Live, false untuk theater show
+    showTitle:  string;
+    showImage?: string;
+    backendUrl: string;   // URL Backend Alias, dari env VITE_BACKEND_URL
+  }
+
+Fungsi komponen:
+
+  1. FETCH TOKEN + URL dari Backend Alias:
+     GET {backendUrl}/api/gistream/token?showId={showId}&isSlug={isSlug}
+     - Simpan token dan url di React state (useState)
+     - BUKAN di localStorage atau sessionStorage
+     - Tampilkan loading state saat fetch berlangsung
+
+  2. HLS PLAYER menggunakan hls.js:
+     - Load dari field "url" yang didapat dari backend alias
+     - WAJIB inject x-api-token ke setiap HLS request:
+       xhrSetup: (xhr) => xhr.setRequestHeader("x-api-token", token)
+       fetchSetup: (ctx, init) => {
+         init.headers = { ...init.headers, "x-api-token": token };
+         return new Request(ctx.url, init);
+       }
+     - Auto-play setelah manifest parsed
+     - Handle error dengan retry otomatis
+     - Saat token refresh: destroy hls instance lama, buat baru
+       dengan token baru di xhrSetup/fetchSetup
+
+  3. QUALITY SELECTOR:
+     - Tampilkan pilihan dari array qualities[] yang dikembalikan
+       backend alias
+     - "Auto" sebagai default (HLS.js ABR)
+     - Saat ganti kualitas manual: gunakan url dari quality yang
+       dipilih, buat hls instance baru dengan token yang sama
+
+  4. TOKEN REFRESH:
+     - Simpan expiresAt dari response backend alias
+     - 5 menit sebelum expired, fetch ulang ke backend alias
+     - Update token dan url di state
+     - Re-init hls.js dengan token baru di xhrSetup/fetchSetup
+     - Jalankan pengecekan dengan setInterval, cleanup saat unmount
+
+  5. UI:
+     - Video 16:9 untuk IDN, flexible untuk theater
+     - Badge LIVE merah dengan animasi pulse
+     - Quality indicator di pojok kanan bawah player
+     - Loading skeleton saat fetch token
+     - Error state dengan tombol retry
+     - JANGAN tampilkan nilai token di UI manapun
+
+  Keamanan frontend yang WAJIB diikuti:
+
+  - VITE_BACKEND_URL boleh ada di .env (ini URL backend alias,
+    bukan secret)
+  - JANGAN ada VITE_PARTNER_SECRET atau variabel apapun yang
+    menyimpan secret GiStream di file frontend
+  - Jangan console.log token di production
+  - Token hanya di React state, bukan di storage browser
+
+  Stack:
+  - React + TypeScript
+  - Tailwind CSS
+  - hls.js untuk HLS playback
+  - lucide-react untuk icons
+
+═══════════════════════════════════════════════════════════════════
+  STRUKTUR FILE YANG DIHARAPKAN
+═══════════════════════════════════════════════════════════════════
+
+  backend/
+    server.js (atau index.ts)   ← deploy terpisah di Railway/Render
+    package.json
+    .env.example                ← template, TANPA nilai asli
+    .gitignore                  ← pastikan .env masuk di sini
+
+  src/ (Lovable frontend)
+    components/
+      GiStreamPlayer.tsx
+    hooks/
+      useGiStreamToken.ts
+
+  .env (JANGAN di-commit)
+    VITE_BACKEND_URL=https://your-backend.railway.app
+
+═══════════════════════════════════════════════════════════════════
+  DEPLOYMENT CHECKLIST
+═══════════════════════════════════════════════════════════════════
+
+  Backend Alias (Railway/Render):
+  ✅ Set PARTNER_SECRET via platform secrets manager (bukan .env file)
+  ✅ Set ALLOWED_ORIGIN ke domain Lovable app yang benar
+  ✅ Pastikan .env tidak ter-commit ke repo
+  ✅ Test endpoint /api/gistream/token sebelum connect ke frontend
+
+  Frontend (Lovable):
+  ✅ Set VITE_BACKEND_URL ke URL backend alias yang sudah deploy
+  ✅ Tidak ada referensi ke PARTNER_SECRET di seluruh kode frontend
+  ✅ Token hanya disimpan di useState, tidak di storage browser
+  ✅ hls.js inject x-api-token via xhrSetup dan fetchSetup
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+▌REFERENSI CEPAT — ringkasan untuk kedua prompt
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  DOMAIN:
+    Token API    : https://v5.jkt48connect.com   ← v5, bukan v2!
+    Stream Worker: https://ctv.jkt48connect.com
+    Tidak ada proxy — panggil langsung ke dua domain di atas
+
+  FIELD URL:
+    Gunakan  : streams[0].url  ← field "url"
+    Keduanya SAMA: "url" dan "url-2" keduanya membutuhkan
+    header x-api-token di setiap HLS request via xhrSetup/fetchSetup
+
+  CREDENTIAL:
+    PARTNER_KID    : jkt48connect-v1  (non-rahasia, boleh di kode)
+    PARTNER_SECRET : [dari GiStream]  (rahasia, env var saja)
+
+  SIGNING (copy-paste ke AI jika butuh):
+    timestamp    = Date.now().toString()               // ms!
+    nonce        = crypto.randomUUID().replace(/-/g,"")
+    body_hash    = SHA256("{}")                        // dari string "{}"
+    signing_str  = `${timestamp}:${nonce}:POST:/api/token/generate?apikey=JKTCONNECT:${body_hash}`
+    signature    = HMAC-SHA256(signing_str, PARTNER_SECRET) → hex
+
+  TOKEN RULES:
+    Masa berlaku  : 2 jam (7200 detik)
+    One-time-use  : JTI di-blacklist setelah hit /stream
+    Refresh       : generate baru jika exp - now <= 300 detik
+    Setelah refresh: re-init hls.js dengan token baru di xhrSetup
+
+  TOP SECURITY RISKS:
+    🔴 Secret hardcode di source code
+    🔴 Secret di VITE_* / REACT_APP_* / NEXT_PUBLIC_* env var
+    🔴 HMAC signing dilakukan di browser/frontend langsung
+    🔴 Token disimpan di localStorage (rentan XSS)
+    🔴 Token di-log ke console atau server log di production
+    🔴 Endpoint generate token tanpa autentikasi user
+    🔴 .env file ter-commit ke git repository
+    🔴 CORS dibuka ke semua origin (origin: "*")
+    🔴 Tidak ada rate limiting di endpoint generate token
+    🔴 Lupa inject x-api-token ke HLS requests (stream jadi 401)
