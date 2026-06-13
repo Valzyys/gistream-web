@@ -129,7 +129,12 @@ async function getStreamURL(slugOrId: string): Promise<{ url: string; qualities:
   const text = await res.text();
 
   if (!text.includes("#EXTM3U")) {
-    throw new Error("Stream tidak tersedia atau format tidak dikenali");
+    try {
+      const errJson = JSON.parse(text);
+      throw new Error(errJson?.message || errJson?.error || "Stream tidak tersedia");
+    } catch {
+      throw new Error("Stream tidak tersedia atau format tidak dikenali");
+    }
   }
 
   return parseMasterManifest(text, fetchUrl);
@@ -799,19 +804,10 @@ function LiveStream() {
       if (!show) { setError("Member tidak sedang live saat ini"); setLoading(false); return; }
       setMemberShow(show);
 
-      if (show.is_group || show.url_key === "jkt48-official") {
-        const identifier = show.identifier || show.slug || show.url_key;
-        try {
-          const { url: streamUrl, qualities: streamQualities } = await getStreamURL(identifier);
-          setQualities(streamQualities);
-          setMemberHlsUrl(streamUrl);
-        } catch {
-          const streamUrl = show.streaming_url_list?.[0]?.url || null;
-          if (!streamUrl) { setError("URL stream tidak tersedia"); setLoading(false); return; }
-          setMemberHlsUrl(streamUrl);
-        }
-      } else {
-        const identifier = show.identifier || show.slug || show.url_key || String(show.showid || show.show_id || "");
+      {
+        // streamtest worker expects the raw IDN slug (without the
+        // "jkt48-official-" / member prefix that "identifier" has).
+        const identifier = show.slug || show.identifier || show.url_key || String(show.showid || show.show_id || "");
         if (identifier) {
           try {
             const { url: streamUrl, qualities: streamQualities } = await getStreamURL(identifier);
@@ -852,7 +848,7 @@ function LiveStream() {
           const { url: streamUrl } = await getStreamURL(idnShow.slug);
           setHlsUrl(streamUrl);
         } else if (isMember && memberShow) {
-          const identifier = memberShow.identifier || memberShow.slug || memberShow.url_key || String(memberShow.showid || memberShow.show_id || "");
+          const identifier = memberShow.slug || memberShow.identifier || memberShow.url_key || String(memberShow.showid || memberShow.show_id || "");
           if (identifier) {
             const { url: streamUrl } = await getStreamURL(identifier);
             setMemberHlsUrl(streamUrl);
