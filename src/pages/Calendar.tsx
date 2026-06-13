@@ -139,7 +139,7 @@ const REQUEST_HOUR_SLUGS = [
 function resolvePrice(show: any, src: "idn" | "theater"): number {
   if (src === "theater") return 7000;
   const slug = (show.slug || "").toLowerCase();
-  if (REQUEST_HOUR_SLUGS.includes(slug)) return 5000;
+  if (REQUEST_HOUR_SLUGS.includes(slug)) return 1000;
   // fallback: gold-based shows pakai harga default 7000
   return 7000;
 }
