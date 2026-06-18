@@ -14,8 +14,103 @@ const IDN_API   = "https://v5.jkt48connect.com/api/jkt48/idnplus?apikey=JKTCONNE
 const LIVE_API  = "https://v5.jkt48connect.com/api/jkt48/live?apikey=JKTCONNECT";
 const TICKETS_API = "https://v5.jkt48connect.com/api/tickets";
 
-// ── StreamTest worker (replacement for GiStream token flow) ──────────────────
-const STREAMTEST_BASE = "https://streamtest.aslannarnia806.workers.dev";
+// ── GiStream token constants ──────────────────────────────────────────────────
+const PARTNER_KID    = "jkt48connect-v1";
+const PARTNER_SECRET = "gstream@jkt48connect@2108";
+const TOKEN_API_BASE = "https://v5.jkt48connect.com";
+const CTV_BASE       = "https://ctv.jkt48connect.com";
+const SIGNING_PATH   = "/api/token/generate?apikey=JKTCONNECT";
+
+// ── HMAC helpers (browser SubtleCrypto) ──────────────────────────────────────
+async function sha256Hex(str: string): Promise<string> {
+  const buf = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(str));
+  return Array.from(new Uint8Array(buf)).map(b => b.toString(16).padStart(2, "0")).join("");
+}
+
+async function hmacSHA256Hex(secret: string, message: string): Promise<string> {
+  const key = await crypto.subtle.importKey(
+    "raw", new TextEncoder().encode(secret),
+    { name: "HMAC", hash: "SHA-256" }, false, ["sign"]
+  );
+  const buf = await crypto.subtle.sign("HMAC", key, new TextEncoder().encode(message));
+  return Array.from(new Uint8Array(buf)).map(b => b.toString(16).padStart(2, "0")).join("");
+}
+
+async function buildHMACHeaders(): Promise<Record<string, string>> {
+  const timestamp  = Date.now().toString();
+  const nonce      = crypto.randomUUID().replace(/-/g, "");
+  const bodyHash   = await sha256Hex("{}");
+  const signingStr = `${timestamp}:${nonce}:POST:${SIGNING_PATH}:${bodyHash}`;
+  const signature  = await hmacSHA256Hex(PARTNER_SECRET, signingStr);
+  return {
+    "x-kid":       PARTNER_KID,
+    "x-timestamp": timestamp,
+    "x-nonce":     nonce,
+    "x-signature": signature,
+  };
+}
+
+// ── Generate JWT token dari GiStream ─────────────────────────────────────────
+async function generateStreamToken(slugOrId: string, isSlug: boolean): Promise<string> {
+  const hmacHeaders = await buildHMACHeaders();
+  const res = await fetch(`${TOKEN_API_BASE}${SIGNING_PATH}`, {
+    method: "POST",
+    headers: {
+      ...hmacHeaders,
+      ...(isSlug ? { "x-slug": slugOrId } : { "x-showid": slugOrId }),
+      "Content-Type": "application/json",
+    },
+    body: "{}",
+  });
+
+  const text = await res.text();
+  let data: any;
+  try {
+    data = JSON.parse(text);
+  } catch {
+    throw new Error("Token server returned non-JSON response");
+  }
+  if (!data.status) throw new Error("Generate token gagal: " + data.message);
+  return data.data.token;
+}
+
+// ── Get stream URL dari ctv.jkt48connect.com ──────────────────────────────────
+async function getStreamURL(
+  token: string,
+  slugOrId: string,
+  isSlug: boolean
+): Promise<{ url: string; qualities: QualityOption[] }> {
+  const param = isSlug ? `slug=${slugOrId}` : `showId=${slugOrId}`;
+  const res = await fetch(`${CTV_BASE}/stream?${param}`, {
+    headers: {
+      "x-api-token": token,
+      ...(isSlug ? { "x-slug": slugOrId } : { "x-showid": slugOrId }),
+    },
+  });
+  const data = await res.json();
+  if (!data.success) throw new Error(data.message || "Gagal mendapatkan stream URL");
+
+  const streams: any[] = data.streams || [];
+  const autoUrl = streams[0]?.url || "";
+
+  const qualities: QualityOption[] = streams.map((s: any, idx: number) => ({
+    index:           idx,
+    name:            s.NAME || `${s.RESOLUTION?.split("x")[1] || "?"}p`,
+    quality:         s.NAME || `q${idx}`,
+    bandwidth:       parseInt(s.BANDWIDTH) || 0,
+    bandwidth_label: s.BANDWIDTH
+      ? parseInt(s.BANDWIDTH) >= 1_000_000
+        ? (parseInt(s.BANDWIDTH) / 1_000_000).toFixed(1) + " Mbps"
+        : Math.round(parseInt(s.BANDWIDTH) / 1_000) + " Kbps"
+      : "",
+    resolution:  s.RESOLUTION || "",
+    fps:         s["FRAME-RATE"] || "",
+    manual_url:  s.url || "",
+    playlist_url: s.url || "",
+  }));
+
+  return { url: autoUrl, qualities };
+}
 
 const getSession = () => {
   try {
@@ -64,80 +159,6 @@ interface SRComment {
   created_at: number;
   class_level: number;
   user_id: number;
-}
-
-// ── Parse master m3u8 manifest into quality options ──────────────────────────
-function parseMasterManifest(text: string, baseUrl: string): { url: string; qualities: QualityOption[] } {
-  const lines = text.split("\n").map((l) => l.trim()).filter(Boolean);
-  const qualities: QualityOption[] = [];
-  let idx = 0;
-
-  for (let i = 0; i < lines.length; i++) {
-    const line = lines[i];
-    if (line.startsWith("#EXT-X-STREAM-INF:")) {
-      const attrs = line.substring("#EXT-X-STREAM-INF:".length);
-
-      const bandwidthMatch   = attrs.match(/BANDWIDTH=(\d+)/);
-      const resolutionMatch  = attrs.match(/RESOLUTION=(\d+x\d+)/);
-      const frameRateMatch   = attrs.match(/FRAME-RATE=([\d.]+)/);
-
-      const nextLine = lines[i + 1];
-      if (!nextLine || nextLine.startsWith("#")) continue;
-
-      let streamUrl = nextLine;
-      // Resolve relative URLs against the manifest's own URL
-      try {
-        streamUrl = new URL(nextLine, baseUrl).toString();
-      } catch {}
-
-      const bandwidth = bandwidthMatch ? parseInt(bandwidthMatch[1]) : 0;
-      const resolution = resolutionMatch ? resolutionMatch[1] : "";
-      const height = resolution.split("x")[1] || "";
-
-      qualities.push({
-        index: idx,
-        name: height ? `${height}p` : `Quality ${idx + 1}`,
-        quality: `q${idx}`,
-        bandwidth,
-        bandwidth_label: bandwidth
-          ? bandwidth >= 1_000_000
-            ? (bandwidth / 1_000_000).toFixed(1) + " Mbps"
-            : Math.round(bandwidth / 1_000) + " Kbps"
-          : "",
-        resolution,
-        fps: frameRateMatch ? frameRateMatch[1] : "",
-        manual_url: streamUrl,
-        playlist_url: streamUrl,
-      });
-
-      idx++;
-      i++; // skip the URL line we just consumed
-    }
-  }
-
-  // Auto/default url = first (highest quality entry usually listed first)
-  const autoUrl = qualities[0]?.manual_url || baseUrl;
-
-  return { url: autoUrl, qualities };
-}
-
-// ── Get stream URL + qualities from streamtest worker ────────────────────────
-async function getStreamURL(slugOrId: string): Promise<{ url: string; qualities: QualityOption[] }> {
-  const fetchUrl = `${STREAMTEST_BASE}/stream?slug=${encodeURIComponent(slugOrId)}`;
-  const res = await fetch(fetchUrl);
-  if (!res.ok) throw new Error("Gagal mendapatkan stream URL");
-  const text = await res.text();
-
-  if (!text.includes("#EXTM3U")) {
-    try {
-      const errJson = JSON.parse(text);
-      throw new Error(errJson?.message || errJson?.error || "Stream tidak tersedia");
-    } catch {
-      throw new Error("Stream tidak tersedia atau format tidak dikenali");
-    }
-  }
-
-  return parseMasterManifest(text, fetchUrl);
 }
 
 // ── Showroom comment polling hook ─────────────────────────────────────────────
@@ -196,7 +217,7 @@ function useShowroomComments(roomId: number | null) {
 
 // ── HLS Player ────────────────────────────────────────────────────────────────
 function HlsPlayer({
-  src, title, qualities, onQualityChange, currentQuality, qualityMode, onModeChange, isIdn,
+  src, title, qualities, onQualityChange, currentQuality, qualityMode, onModeChange, isIdn, token,
 }: {
   src: string;
   title: string;
@@ -206,6 +227,7 @@ function HlsPlayer({
   qualityMode: "auto" | "manual";
   onModeChange: (mode: "auto" | "manual") => void;
   isIdn: boolean;
+  token?: string;
 }) {
   const videoRef = useRef<HTMLVideoElement>(null);
   const hlsRef   = useRef<Hls | null>(null);
@@ -262,6 +284,18 @@ function HlsPlayer({
       abrEwmaSlowLive:        9.0,
       nudgeOffset:   0.3,
       nudgeMaxRetry: 5,
+      ...(token && {
+        xhrSetup: (xhr: XMLHttpRequest) => {
+          xhr.setRequestHeader("x-api-token", token);
+        },
+        fetchSetup: (context: any, initParams: any) => {
+          initParams.headers = {
+            ...initParams.headers,
+            "x-api-token": token,
+          };
+          return new Request(context.url, initParams);
+        },
+      }),
     });
 
     hlsRef.current = hls;
@@ -299,6 +333,15 @@ function HlsPlayer({
           const newHls = new Hls({
             lowLatencyMode: false,
             maxBufferLength: 30,
+            ...(token && {
+              xhrSetup: (xhr: XMLHttpRequest) => {
+                xhr.setRequestHeader("x-api-token", token);
+              },
+              fetchSetup: (context: any, initParams: any) => {
+                initParams.headers = { ...initParams.headers, "x-api-token": token };
+                return new Request(context.url, initParams);
+              },
+            }),
           });
           newHls.loadSource(src);
           newHls.attachMedia(v);
@@ -309,7 +352,7 @@ function HlsPlayer({
     });
 
     return destroyHls;
-  }, [src, destroyHls]); // eslint-disable-line
+  }, [src, token, destroyHls]); // eslint-disable-line
 
   return (
     <div className="relative w-full rounded-2xl overflow-hidden bg-black shadow-2xl">
@@ -605,6 +648,7 @@ function LiveStream() {
   const [qualityMode,       setQualityMode]       = useState<"auto" | "manual">("auto");
   const [currentQuality,    setCurrentQuality]    = useState<QualityOption | null>(null);
   const [hlsUrl,            setHlsUrl]            = useState("");
+  const [streamToken,       setStreamToken]       = useState("");
   const [memberShow,        setMemberShow]        = useState<any>(null);
   const [memberHlsUrl,      setMemberHlsUrl]      = useState("");
   const [memberRoomId,      setMemberRoomId]      = useState<number | null>(null);
@@ -644,6 +688,9 @@ function LiveStream() {
   };
 
   // ── Cek tiket via Tickets API ─────────────────────────────────────────────
+  // Menggunakan slug (playbackId) langsung sesuai URL pattern:
+  // /live/dream-bakudan-2026-05-21-260510221648  →  slug = dream-bakudan-2026-05-21-260510221648
+  // endpoint: GET /tickets/user/{userId}/show/{slug}
   const checkTicket = useCallback(async (): Promise<boolean> => {
     const session = getSession();
     if (!session) return false;
@@ -655,6 +702,7 @@ function LiveStream() {
       );
       if (!res.ok) return false;
       const data = await res.json();
+      // has_ticket = true berarti tiket sudah dibayar lunas
       if (data.has_ticket === true) {
         setAccessSource("ticket");
         return true;
@@ -758,7 +806,9 @@ function LiveStream() {
       if (!show) { setError("Show tidak ditemukan atau sudah berakhir"); setLoading(false); return; }
       setIdnShow(show);
 
-      const { url: streamUrl, qualities: streamQualities } = await getStreamURL(show.slug);
+      const token = await generateStreamToken(show.slug, true);
+      setStreamToken(token);
+      const { url: streamUrl, qualities: streamQualities } = await getStreamURL(token, show.slug, true);
       setQualities(streamQualities);
       setHlsUrl(streamUrl);
 
@@ -804,13 +854,26 @@ function LiveStream() {
       if (!show) { setError("Member tidak sedang live saat ini"); setLoading(false); return; }
       setMemberShow(show);
 
-      {
-        // streamtest worker expects the raw IDN slug (without the
-        // "jkt48-official-" / member prefix that "identifier" has).
-        const identifier = show.slug || show.identifier || show.url_key || String(show.showid || show.show_id || "");
-        if (identifier) {
+      if (show.is_group || show.url_key === "jkt48-official") {
+        const identifier = show.identifier || show.slug || show.url_key;
+        try {
+          const token = await generateStreamToken(identifier, true);
+          setStreamToken(token);
+          const { url: streamUrl, qualities: streamQualities } = await getStreamURL(token, identifier, true);
+          setQualities(streamQualities);
+          setMemberHlsUrl(streamUrl);
+        } catch {
+          const streamUrl = show.streaming_url_list?.[0]?.url || null;
+          if (!streamUrl) { setError("URL stream tidak tersedia"); setLoading(false); return; }
+          setMemberHlsUrl(streamUrl);
+        }
+      } else {
+        const showId = show.showid || show.show_id || null;
+        if (showId) {
           try {
-            const { url: streamUrl, qualities: streamQualities } = await getStreamURL(identifier);
+            const token = await generateStreamToken(String(showId), false);
+            setStreamToken(token);
+            const { url: streamUrl, qualities: streamQualities } = await getStreamURL(token, String(showId), false);
             setQualities(streamQualities);
             setMemberHlsUrl(streamUrl);
           } catch {
@@ -845,12 +908,22 @@ function LiveStream() {
     if (mode === "auto") {
       try {
         if (isIdn && idnShow?.slug) {
-          const { url: streamUrl } = await getStreamURL(idnShow.slug);
+          const token = await generateStreamToken(idnShow.slug, true);
+          setStreamToken(token);
+          const { url: streamUrl } = await getStreamURL(token, idnShow.slug, true);
           setHlsUrl(streamUrl);
         } else if (isMember && memberShow) {
-          const identifier = memberShow.slug || memberShow.identifier || memberShow.url_key || String(memberShow.showid || memberShow.show_id || "");
-          if (identifier) {
-            const { url: streamUrl } = await getStreamURL(identifier);
+          const identifier = memberShow.identifier || memberShow.slug || memberShow.url_key;
+          const showId = memberShow.showid || memberShow.show_id || null;
+          if (memberShow.is_group || memberShow.url_key === "jkt48-official") {
+            const token = await generateStreamToken(identifier, true);
+            setStreamToken(token);
+            const { url: streamUrl } = await getStreamURL(token, identifier, true);
+            setMemberHlsUrl(streamUrl);
+          } else if (showId) {
+            const token = await generateStreamToken(String(showId), false);
+            setStreamToken(token);
+            const { url: streamUrl } = await getStreamURL(token, String(showId), false);
             setMemberHlsUrl(streamUrl);
           }
         }
@@ -935,10 +1008,15 @@ function LiveStream() {
   // ── Main init effect ──────────────────────────────────────────────────────
   useEffect(() => {
     if (isMember) {
+      // Member stream tidak perlu gate akses
       loadMemberStream();
       return;
     }
 
+    // IDN show: cek akses dengan urutan prioritas:
+    // 1. Tiket (via Tickets API, butuh login + user_id)
+    // 2. Membership aktif (non-free)
+    // 3. Kode verifikasi (localStorage / input manual)
     const init = async () => {
       setMembershipLoading(true);
       await fetchClientIP();
@@ -946,6 +1024,7 @@ function LiveStream() {
       const session = getSession();
 
       if (session) {
+        // Gate 1: cek tiket terlebih dahulu
         const ticketOk = await checkTicket();
         if (ticketOk) {
           setIsVerified(true);
@@ -955,6 +1034,7 @@ function LiveStream() {
           return;
         }
 
+        // Gate 2: cek membership
         const membershipOk = await checkMembership();
         if (membershipOk) {
           setIsVerified(true);
@@ -965,6 +1045,7 @@ function LiveStream() {
         }
       }
 
+      // Gate 3: cek kode verifikasi yang tersimpan (berlaku meski tidak login)
       const verified = await checkExistingVerification();
       setMembershipLoading(false);
       if (verified) {
@@ -986,6 +1067,7 @@ function LiveStream() {
     setIdnShow(null);
     setHlsUrl("");
     setQualities([]);
+    setStreamToken("");
     setAccessSource(null);
     setVerifData({ email: "", code: "" });
   };
@@ -1016,8 +1098,10 @@ function LiveStream() {
       const uid = data.data.user?.user_id;
       const token = data.data.session?.access_token;
 
+      // Setelah login, cek tiket dulu baru membership
       const slug = playbackId || "";
 
+      // Gate 1: cek tiket
       try {
         const ticketRes = await fetch(
           `${TICKETS_API}/user/${uid}/show/${encodeURIComponent(slug)}?apikey=${API_KEY}`
@@ -1035,6 +1119,7 @@ function LiveStream() {
         }
       } catch {}
 
+      // Gate 2: cek membership
       const profileRes = await fetch(`${API_BASE}/profile/${uid}?apikey=${API_KEY}`, {
         headers: { Authorization: `Bearer ${token}` },
       });
@@ -1098,6 +1183,7 @@ function LiveStream() {
 
           {accessTab === "login" && (
             <div className="bg-gray-50 dark:bg-gray-800/50 rounded-2xl border border-gray-200 dark:border-gray-700 p-6 mb-4">
+              {/* Info badge: login akan cek tiket dulu */}
               <div className="flex items-start gap-2 px-3 py-2.5 rounded-xl bg-blue-50 dark:bg-blue-500/10 border border-blue-200 dark:border-blue-500/20 mb-4">
                 <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="#3b82f6" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="flex-shrink-0 mt-0.5">
                   <circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/>
@@ -1215,6 +1301,7 @@ function LiveStream() {
           </div>
           {isIdn && <span className="px-3 py-1.5 rounded-full bg-blue-50 dark:bg-blue-500/10 border border-blue-200 dark:border-blue-500/20 text-blue-600 dark:text-blue-400 text-[11px] font-bold">IDN Live+</span>}
           {isMember && <span className="px-3 py-1.5 rounded-full bg-emerald-50 dark:bg-emerald-500/10 border border-emerald-200 dark:border-emerald-500/20 text-emerald-600 dark:text-emerald-400 text-[11px] font-bold">Member Live</span>}
+          {/* Access source badge */}
           {isIdn && accessSource === "ticket" && (
             <span className="px-3 py-1.5 rounded-full bg-green-50 dark:bg-green-500/10 border border-green-200 dark:border-green-500/20 text-green-600 dark:text-green-400 text-[11px] font-bold flex items-center gap-1">
               <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><polyline points="20 6 9 17 4 12" /></svg>
@@ -1246,6 +1333,7 @@ function LiveStream() {
                 qualityMode={qualityMode}
                 onModeChange={handleModeChange}
                 isIdn={true}
+                token={streamToken}
               />
             ) : isMember && memberHlsUrl ? (
               <HlsPlayer
@@ -1257,6 +1345,7 @@ function LiveStream() {
                 qualityMode={qualityMode}
                 onModeChange={handleModeChange}
                 isIdn={!!(memberShow?.is_group || memberShow?.url_key === "jkt48-official")}
+                token={streamToken}
               />
             ) : (
               <div className="aspect-video bg-gray-100 dark:bg-gray-800/50 rounded-2xl flex items-center justify-center border border-gray-200 dark:border-gray-700">
