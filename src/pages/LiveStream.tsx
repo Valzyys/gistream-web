@@ -21,6 +21,9 @@ const TOKEN_API_BASE = "https://v5.jkt48connect.com";
 const CTV_BASE       = "https://ctv.jkt48connect.com";
 const SIGNING_PATH   = "/api/token/generate?apikey=JKTCONNECT";
 
+// ── IDN2 (v1) stream base ──────────────────────────────────────────────────────
+const V1_STREAM_BASE = "https://v1.jkt48connect.com";
+
 // ── HMAC helpers (browser SubtleCrypto) ──────────────────────────────────────
 async function sha256Hex(str: string): Promise<string> {
   const buf = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(str));
@@ -74,7 +77,7 @@ async function generateStreamToken(slugOrId: string, isSlug: boolean): Promise<s
   return data.data.token;
 }
 
-// ── Get stream URL dari ctv.jkt48connect.com ──────────────────────────────────
+// ── Get stream URL dari ctv.jkt48connect.com (IDN server) ─────────────────────
 async function getStreamURL(
   token: string,
   slugOrId: string,
@@ -112,6 +115,85 @@ async function getStreamURL(
   return { url: autoUrl, qualities };
 }
 
+// ── Get stream URL dari v1.jkt48connect.com (IDN2 server, pure M3U8) ──────────
+// NOTE: kombinasi query/header endpoint v1 ini belum 100% terverifikasi.
+// Saat ini pakai token-dari-slug + query ?slug= + header x-slug, konsisten
+// dengan pola endpoint CTV. Kalau server v1 ternyata butuh showId, ganti
+// `isSlug` jadi false dan param/header di bawah jadi showId.
+async function getIdn2StreamURL(
+  token: string,
+  slugOrId: string,
+  isSlug: boolean
+): Promise<{ url: string; qualities: QualityOption[] }> {
+  const param = isSlug ? `slug=${slugOrId}` : `showId=${slugOrId}`;
+  const res = await fetch(`${V1_STREAM_BASE}/stream?${param}`, {
+    headers: {
+      "x-api-token": token,
+      ...(isSlug ? { "x-slug": slugOrId } : { "x-showId": slugOrId }),
+    },
+  });
+
+  if (!res.ok) throw new Error(`v1 stream error: ${res.status}`);
+
+  const m3u8Text = await res.text();
+
+  // Parse M3U8 master playlist manually
+  const lines = m3u8Text.split("\n").map(l => l.trim()).filter(Boolean);
+  const qualities: QualityOption[] = [];
+  let idx = 0;
+
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+    if (!line.startsWith("#EXT-X-STREAM-INF:")) continue;
+
+    const attrs: Record<string, string> = {};
+    const attrStr = line.replace("#EXT-X-STREAM-INF:", "");
+    attrStr.replace(/([A-Z0-9_-]+)=("([^"]*?)"|([^,]*))/g, (_: string, key: string, _full: string, quoted: string, unquoted: string) => {
+      attrs[key] = quoted !== undefined ? quoted : unquoted;
+      return "";
+    });
+
+    const url = lines[i + 1] ?? "";
+    if (!url || url.startsWith("#")) continue;
+
+    const bandwidth  = parseInt(attrs["BANDWIDTH"] || "0") || 0;
+    const resolution = attrs["RESOLUTION"] || "";
+    const fps        = attrs["FRAME-RATE"] || "";
+    const height     = resolution ? resolution.split("x")[1] : "";
+
+    const fpsNum = parseFloat(fps);
+    const fpsSuffix = fpsNum >= 50 ? "60" : "30";
+    const name = height
+      ? `${height}p${fpsNum >= 50 ? fpsSuffix : ""}`
+      : `Q${idx}`;
+
+    const bandwidth_label = bandwidth >= 1_000_000
+      ? (bandwidth / 1_000_000).toFixed(1) + " Mbps"
+      : bandwidth > 0
+      ? Math.round(bandwidth / 1_000) + " Kbps"
+      : "";
+
+    qualities.push({
+      index: idx++,
+      name,
+      quality: name,
+      bandwidth,
+      bandwidth_label,
+      resolution,
+      fps,
+      manual_url: url,
+      playlist_url: url,
+    });
+  }
+
+  qualities.sort((a, b) => b.bandwidth - a.bandwidth);
+  qualities.forEach((q, i) => { q.index = i; });
+
+  const autoUrl = qualities[0]?.manual_url || "";
+
+  return { url: autoUrl, qualities };
+}
+
 const getSession = () => {
   try {
     const d = JSON.parse(
@@ -128,6 +210,8 @@ const isIdnSlug = (param: string) => {
   if (!param) return false;
   return /\d{4}-\d{2}-\d{2}/.test(param) && param.length > 15;
 };
+
+type ServerType = "idn" | "idn2" | "default";
 
 interface QualityOption {
   index:           number;
@@ -213,6 +297,57 @@ function useShowroomComments(roomId: number | null) {
   }, [roomId, fetchComments]);
 
   return { comments, loading, error, lastPoll, retry: fetchComments };
+}
+
+// ── Server Selector (di bawah player, bukan overlay) ──────────────────────────
+function ServerSelector({
+  activeServer,
+  onChange,
+  hasIdn2,
+  hasDefault,
+  loading,
+}: {
+  activeServer: ServerType;
+  onChange:     (s: ServerType) => void;
+  hasIdn2:      boolean;
+  hasDefault:   boolean;
+  loading:      boolean;
+}) {
+  const servers: { id: ServerType; label: string; available: boolean }[] = [
+    { id: "idn",     label: "IDN",     available: true },
+    { id: "idn2",    label: "IDN 2",   available: hasIdn2 },
+    { id: "default", label: "Default", available: hasDefault },
+  ];
+
+  // Kalau cuma 1 server tersedia (mis. member non-group), tidak perlu render selector
+  const availableCount = servers.filter(s => s.available).length;
+  if (availableCount <= 1) return null;
+
+  return (
+    <div className="flex items-center gap-2 flex-wrap px-1 py-1">
+      <span className="text-[10px] font-bold text-gray-400 dark:text-gray-500 uppercase tracking-widest mr-1">Server</span>
+      {servers.map(s => (
+        <button
+          key={s.id}
+          onClick={() => s.available && onChange(s.id)}
+          disabled={!s.available || loading}
+          title={!s.available ? `${s.label} tidak tersedia` : s.label}
+          className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[11px] font-bold border transition-all ${
+            activeServer === s.id
+              ? "bg-red-500 border-red-500 text-white shadow-md shadow-red-500/25"
+              : s.available
+              ? "bg-gray-100 dark:bg-gray-800 border-gray-200 dark:border-gray-700 text-gray-600 dark:text-gray-300 hover:bg-gray-200 dark:hover:bg-gray-700 cursor-pointer"
+              : "bg-gray-50 dark:bg-gray-900 border-gray-100 dark:border-gray-800 text-gray-300 dark:text-gray-700 cursor-not-allowed"
+          }`}
+        >
+          {loading && activeServer === s.id && (
+            <div className="w-2.5 h-2.5 border-2 border-current/30 border-t-current rounded-full animate-spin" />
+          )}
+          {s.label}
+        </button>
+      ))}
+    </div>
+  );
 }
 
 // ── HLS Player ────────────────────────────────────────────────────────────────
@@ -668,6 +803,12 @@ function LiveStream() {
   const [error,             setError]             = useState("");
   const [members,           setMembers]           = useState<any[]>([]);
 
+  // ── Server selector state ──────────────────────────────────────────────────
+  const [activeServer,    setActiveServer]    = useState<ServerType>("idn");
+  const [serverSwitching, setServerSwitching] = useState(false);
+  const [defaultHlsUrl,   setDefaultHlsUrl]   = useState(""); // fallback streaming_url_list (member non-group)
+  const idn2LoadedRef = useRef(false);
+
   const [chatMessages,      setChatMessages]      = useState<ChatMessage[]>([]);
   const [chatInput,         setChatInput]         = useState("");
   const [chatUser,          setChatUser]          = useState<any>(null);
@@ -793,7 +934,7 @@ function LiveStream() {
     } catch { setVerifyError("Terjadi kesalahan saat verifikasi. Silakan coba lagi."); setVerifying(false); }
   };
 
-  // ── loadIdnStream ─────────────────────────────────────────────────────────
+  // ── loadIdnStream (server: idn / GiStream CTV) ───────────────────────────────
   const loadIdnStream = useCallback(async () => {
     setLoading(true); setError("");
     try {
@@ -811,6 +952,8 @@ function LiveStream() {
       const { url: streamUrl, qualities: streamQualities } = await getStreamURL(token, show.slug, true);
       setQualities(streamQualities);
       setHlsUrl(streamUrl);
+      setActiveServer("idn");
+      idn2LoadedRef.current = false;
 
       try {
         const theaterRes = await fetch(`https://v5.jkt48connect.com/api/jkt48/theater?apikey=${API_KEY}`);
@@ -836,6 +979,30 @@ function LiveStream() {
     }
   }, [playbackId]);
 
+  // ── loadIdn2Stream (server: idn2 / v1 pure M3U8) ─────────────────────────────
+  const loadIdn2Stream = useCallback(async () => {
+    const slug = isIdn ? idnShow?.slug : (memberShow?.identifier || memberShow?.slug || memberShow?.url_key);
+    if (!slug) return;
+    setServerSwitching(true);
+    try {
+      const token = await generateStreamToken(slug, true);
+      const { url: streamUrl, qualities: streamQualities } = await getIdn2StreamURL(token, slug, true);
+      if (!streamUrl) throw new Error("Stream IDN 2 belum tersedia untuk show ini");
+      setStreamToken(token);
+      setQualities(streamQualities);
+      setCurrentQuality(null);
+      setQualityMode("auto");
+      if (isIdn) setHlsUrl(streamUrl);
+      else setMemberHlsUrl(streamUrl);
+      setActiveServer("idn2");
+    } catch (err: any) {
+      setError(err?.message || "Gagal memuat stream IDN 2");
+      // gagal pindah server -> tetap di server sebelumnya
+    } finally {
+      setServerSwitching(false);
+    }
+  }, [isIdn, idnShow, memberShow]);
+
   // ── loadMemberStream ──────────────────────────────────────────────────────
   const loadMemberStream = useCallback(async () => {
     setLoading(true); setError("");
@@ -853,6 +1020,11 @@ function LiveStream() {
 
       if (!show) { setError("Member tidak sedang live saat ini"); setLoading(false); return; }
       setMemberShow(show);
+      setActiveServer("idn");
+      idn2LoadedRef.current = false;
+
+      const fallbackStreamUrl = show.streaming_url_list?.[0]?.url || "";
+      setDefaultHlsUrl(fallbackStreamUrl);
 
       if (show.is_group || show.url_key === "jkt48-official") {
         const identifier = show.identifier || show.slug || show.url_key;
@@ -863,9 +1035,9 @@ function LiveStream() {
           setQualities(streamQualities);
           setMemberHlsUrl(streamUrl);
         } catch {
-          const streamUrl = show.streaming_url_list?.[0]?.url || null;
-          if (!streamUrl) { setError("URL stream tidak tersedia"); setLoading(false); return; }
-          setMemberHlsUrl(streamUrl);
+          if (!fallbackStreamUrl) { setError("URL stream tidak tersedia"); setLoading(false); return; }
+          setMemberHlsUrl(fallbackStreamUrl);
+          setActiveServer("default");
         }
       } else {
         const showId = show.showid || show.show_id || null;
@@ -877,14 +1049,14 @@ function LiveStream() {
             setQualities(streamQualities);
             setMemberHlsUrl(streamUrl);
           } catch {
-            const streamUrl = show.streaming_url_list?.[0]?.url || null;
-            if (!streamUrl) { setError("URL stream tidak tersedia"); setLoading(false); return; }
-            setMemberHlsUrl(streamUrl);
+            if (!fallbackStreamUrl) { setError("URL stream tidak tersedia"); setLoading(false); return; }
+            setMemberHlsUrl(fallbackStreamUrl);
+            setActiveServer("default");
           }
         } else {
-          const streamUrl = show.streaming_url_list?.[0]?.url || null;
-          if (!streamUrl) { setError("URL stream tidak tersedia"); setLoading(false); return; }
-          setMemberHlsUrl(streamUrl);
+          if (!fallbackStreamUrl) { setError("URL stream tidak tersedia"); setLoading(false); return; }
+          setMemberHlsUrl(fallbackStreamUrl);
+          setActiveServer("default");
         }
       }
 
@@ -907,6 +1079,16 @@ function LiveStream() {
     setQualityMode(mode);
     if (mode === "auto") {
       try {
+        if (activeServer === "idn2") {
+          await loadIdn2Stream();
+          return;
+        }
+        if (activeServer === "default") {
+          if (isIdn) setHlsUrl(defaultHlsUrl);
+          else setMemberHlsUrl(defaultHlsUrl);
+          setCurrentQuality(null);
+          return;
+        }
         if (isIdn && idnShow?.slug) {
           const token = await generateStreamToken(idnShow.slug, true);
           setStreamToken(token);
@@ -931,6 +1113,62 @@ function LiveStream() {
       setCurrentQuality(null);
     }
   };
+
+  // ── Pindah server (IDN / IDN2 / Default) ─────────────────────────────────────
+  const handleServerChange = useCallback(async (server: ServerType) => {
+    if (server === activeServer) return;
+    setCurrentQuality(null);
+    setQualityMode("auto");
+
+    if (server === "idn") {
+      setServerSwitching(true);
+      try {
+        if (isIdn && idnShow?.slug) {
+          const token = await generateStreamToken(idnShow.slug, true);
+          setStreamToken(token);
+          const { url: streamUrl, qualities: streamQualities } = await getStreamURL(token, idnShow.slug, true);
+          setQualities(streamQualities);
+          setHlsUrl(streamUrl);
+        } else if (isMember && memberShow) {
+          const identifier = memberShow.identifier || memberShow.slug || memberShow.url_key;
+          const showId = memberShow.showid || memberShow.show_id || null;
+          if (memberShow.is_group || memberShow.url_key === "jkt48-official") {
+            const token = await generateStreamToken(identifier, true);
+            setStreamToken(token);
+            const { url: streamUrl, qualities: streamQualities } = await getStreamURL(token, identifier, true);
+            setQualities(streamQualities);
+            setMemberHlsUrl(streamUrl);
+          } else if (showId) {
+            const token = await generateStreamToken(String(showId), false);
+            setStreamToken(token);
+            const { url: streamUrl, qualities: streamQualities } = await getStreamURL(token, String(showId), false);
+            setQualities(streamQualities);
+            setMemberHlsUrl(streamUrl);
+          }
+        }
+        setActiveServer("idn");
+      } catch (err: any) {
+        setError(err?.message || "Gagal memuat stream IDN");
+      } finally {
+        setServerSwitching(false);
+      }
+      return;
+    }
+
+    if (server === "idn2") {
+      await loadIdn2Stream();
+      return;
+    }
+
+    if (server === "default") {
+      if (!defaultHlsUrl) return;
+      if (isIdn) setHlsUrl(defaultHlsUrl);
+      else setMemberHlsUrl(defaultHlsUrl);
+      setQualities([]);
+      setStreamToken("");
+      setActiveServer("default");
+    }
+  }, [activeServer, isIdn, isMember, idnShow, memberShow, defaultHlsUrl, loadIdn2Stream]);
 
   const initChat = useCallback(async () => {
     setIsChatLoggingIn(true);
@@ -1140,6 +1378,14 @@ function LiveStream() {
   const showTitle = isIdn
     ? (idnShow?.title || "Live Stream JKT48")
     : (memberShow?.name || "Live Member JKT48");
+
+  // IDN2 selalu ditawarkan sebagai opsi (loadnya on-demand saat dipilih).
+  // Untuk member non-group tanpa showId/identifier yang valid, IDN2 tetap
+  // ditampilkan namun akan menampilkan error saat dipilih jika show tidak punya slug.
+  const hasIdn2Option = isIdn
+    ? !!idnShow?.slug
+    : !!(memberShow?.identifier || memberShow?.slug || memberShow?.url_key);
+  const hasDefaultOption = !!defaultHlsUrl;
 
   if (isIdn && membershipLoading) {
     return (
@@ -1352,6 +1598,15 @@ function LiveStream() {
                 <div className="w-10 h-10 border-[3px] border-gray-200 dark:border-gray-700 border-t-red-500 rounded-full animate-spin" />
               </div>
             )}
+
+            {/* ── Server selector (di bawah player) ── */}
+            <ServerSelector
+              activeServer={activeServer}
+              onChange={handleServerChange}
+              hasIdn2={hasIdn2Option}
+              hasDefault={hasDefaultOption}
+              loading={serverSwitching}
+            />
 
             {isIdn && idnShow && (
               <div className="rounded-2xl border border-gray-200 dark:border-gray-800 bg-gray-50 dark:bg-gray-800/30 p-5">
